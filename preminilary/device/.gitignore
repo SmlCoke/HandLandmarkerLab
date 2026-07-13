@@ -1,0 +1,6 @@
+# models
+app_assets/
+
+# temp ai prompt/auxiliary files
+*prompt*
+ref/*

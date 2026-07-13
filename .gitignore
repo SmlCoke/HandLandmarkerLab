@@ -1,0 +1,6 @@
+# model
+*.onnx
+*.m1model
+
+# example
+docs/annotation/example/
