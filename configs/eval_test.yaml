@@ -50,4 +50,4 @@ output:
 
 runtime:
   gpu_memory_growth: true
-  deterministic: true
+  deterministic: false

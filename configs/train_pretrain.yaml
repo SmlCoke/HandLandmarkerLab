@@ -155,5 +155,5 @@ outputs:
 
 runtime:
   gpu_memory_growth: true
-  deterministic: true
+  deterministic: false
   fail_on_nan: true
