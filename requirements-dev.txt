@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Optional local/CI verification tools. These are not needed for training.
+pytest==7.4.4
+pytest-cov==4.1.0
+ruff==0.1.15

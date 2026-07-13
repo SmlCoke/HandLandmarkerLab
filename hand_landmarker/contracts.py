@@ -1,0 +1,165 @@
+"""Stable model, annotation, and board-runtime contracts.
+
+Keep this module free of TensorFlow/OpenCV imports so configuration and dataset
+checks remain usable before the training environment is installed.
+"""
+
+from __future__ import annotations
+
+import math
+
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
+
+
+MODEL_IO: Dict[str, Any] = {
+    "input_name": "inputs",
+    "input_shape": [None, 1, 256, 256],
+    "input_layout": "NCHW",
+    "input_dtype": "float32",
+    "input_range": [0.0, 1.0],
+    "outputs": [
+        {
+            "semantic": "landmarks",
+            "keras_shape": [None, 1, 1, 42],
+            "deployed_onnx_shape": [1, 42, 1, 1],
+            "elements_per_sample": 42,
+        },
+        {"semantic": "hand_flag", "shape": [None, 1, 1, 1], "elements_per_sample": 1},
+        {"semantic": "handedness", "shape": [None, 1, 1, 1], "elements_per_sample": 1},
+    ],
+    "landmark_order": "x0,y0,x1,y1,...,x20,y20",
+    "handedness_encoding": {"Left": 0.0, "Right": 1.0},
+}
+
+BOARD_CONTRACT: Dict[str, Any] = {
+    "upright_image_width": 1280,
+    "upright_image_height": 720,
+    "image_channels": 1,
+    "palm_input_size": 224,
+    "palm_score_threshold": 0.50,
+    "palm_nms_iou_threshold": 0.30,
+    "palm_cross_head_suppress_iou": 0.35,
+    "palm_max_detections": 2,
+    "hand_input_width": 256,
+    "hand_input_height": 256,
+    "hand_roi_scale_x": 1.8,
+    "hand_roi_scale_y": 1.8,
+    "hand_roi_shift_x": 0.0,
+    "hand_roi_shift_y": -0.1,
+}
+
+HAND_CONNECTIONS: Tuple[Tuple[int, int], ...] = (
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16),
+    (13, 17), (17, 18), (18, 19), (19, 20),
+    (0, 17),
+)
+
+
+def ordered_landmarks(row: Mapping[str, Any], key: str = "landmarks_crop_norm") -> List[Tuple[float, float]]:
+    """Return 21 landmarks in MediaPipe order, rejecting malformed records."""
+
+    raw = list(row.get(key) or [])
+    if len(raw) != 21:
+        raise ValueError("{} must contain exactly 21 landmarks; got {}".format(key, len(raw)))
+    by_id: Dict[int, Tuple[float, float]] = {}
+    for index, point in enumerate(raw):
+        point_id = int(point.get("id", index))
+        if point_id in by_id:
+            raise ValueError("{} contains duplicate landmark id {}".format(key, point_id))
+        by_id[point_id] = (float(point["x"]), float(point["y"]))
+    if set(by_id) != set(range(21)):
+        raise ValueError("{} landmark ids must be exactly 0..20".format(key))
+    return [by_id[index] for index in range(21)]
+
+
+def validate_label_record(row: Mapping[str, Any], split: str = "train") -> List[str]:
+    """Validate the canonical HandLandmarkerFab JSONL schema for one row."""
+
+    errors: List[str] = []
+    record_id = row.get("global_crop_id") or row.get("crop_id")
+    if not record_id:
+        errors.append("missing crop_id/global_crop_id")
+    if not row.get("crop_path"):
+        errors.append("missing crop_path")
+    if int(row.get("width", 256)) != 256 or int(row.get("height", 256)) != 256:
+        errors.append("ROI size must be 256x256")
+
+    presence = row.get("hand_presence") or {}
+    if "present" not in presence:
+        errors.append("missing hand_presence.present")
+        present = False
+    else:
+        present = bool(presence.get("present"))
+
+    landmarks = list(row.get("landmarks_crop_norm") or [])
+    if present:
+        try:
+            normalized = ordered_landmarks(row)
+            if not all(math.isfinite(value) for point in normalized for value in point):
+                errors.append("landmarks_crop_norm contains NaN/Inf")
+            if split in {"val", "test"} and any(
+                value < 0.0 or value > 1.0 for point in normalized for value in point
+            ):
+                errors.append("Gold landmarks_crop_norm must be within [0,1]")
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(str(exc))
+        handedness = str((row.get("handedness") or {}).get("label", "unknown")).lower()
+        if handedness not in {"left", "right", "unknown"}:
+            errors.append("invalid handedness label: {}".format(handedness))
+        if split in {"val", "test"} and handedness not in {"left", "right"}:
+            errors.append("Gold positive must have Left/Right handedness")
+        for point_key in ("landmarks_crop_px", "landmarks_image_px"):
+            points = list(row.get(point_key) or [])
+            if len(points) != 21:
+                errors.append("{} must contain exactly 21 landmarks".format(point_key))
+    elif landmarks:
+        errors.append("negative sample must not contain landmarks")
+    elif any(row.get(key) for key in ("landmarks_crop_px", "landmarks_image_px")):
+        errors.append("negative sample must have empty landmark arrays")
+    if not present and str((row.get("handedness") or {}).get("label", "unknown")).lower() != "unknown":
+        errors.append("negative sample handedness must be unknown")
+
+    if row.get("ignore_for_training"):
+        errors.append("ignored record was included in canonical labels")
+    if split in {"val", "test"}:
+        if row.get("ground_truth_valid") is not True:
+            errors.append("evaluation record must have ground_truth_valid=true")
+        if row.get("palm_valid") is not True:
+            errors.append("evaluation record must be produced by a valid frozen Palm detection")
+        if str(row.get("split", "")).lower() != split:
+            errors.append("evaluation record split does not match {}".format(split))
+    return errors
+
+
+def effective_head_weights(row: Mapping[str, Any]) -> Tuple[float, float, float]:
+    """Return presence, landmark, handedness loss weights for a canonical row.
+
+    ``sampling_weight`` deliberately does not participate here; it belongs only
+    to the sampler, as required by the finalization contract.
+    """
+
+    supervision = float(row.get("supervision_loss_weight", 1.0))
+    presence = (
+        float(row.get("hand_presence_loss_weight", 1.0))
+        * supervision
+        * float(row.get("presence_quality_weight", 1.0))
+    )
+    landmark = (
+        float(row.get("landmark_loss_weight", 1.0))
+        * supervision
+        * float(row.get("landmark_quality_weight", 1.0))
+    )
+    handedness = (
+        float(row.get("handedness_loss_weight", 1.0))
+        * supervision
+        * float(row.get("handedness_quality_weight", 1.0))
+    )
+    if not bool((row.get("hand_presence") or {}).get("present", False)):
+        landmark = 0.0
+        handedness = 0.0
+    if str((row.get("handedness") or {}).get("label", "unknown")).lower() not in {"left", "right"}:
+        handedness = 0.0
+    return presence, landmark, handedness

@@ -1,0 +1,46 @@
+schema_version: 1
+task: export_onnx
+
+model:
+  version: v1
+  input_shape: [1, 256, 256]
+  input_layout: NCHW
+  input_dtype: float32
+  num_iterations: 8
+  output_order: [landmarks, hand_flag, handedness]
+  output_sizes:
+    landmarks: 42
+    hand_flag: 1
+    handedness: 1
+
+hand:
+  backend: keras
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/finetune/checkpoints/best.weights.h5"
+
+export:
+  model_path: &onnx_output "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/export/hand_landmarker_v1.onnx"
+  opset: 11
+  input_name: inputs
+  output_names: [landmarks, hand_flag, handedness]
+  dynamic_batch: false
+  overwrite: false
+  strict_a1_operators: true
+  a1_allowed_operators: [Conv, Add, LeakyRelu, MaxPool, Sigmoid, Identity]
+  metadata:
+    input_layout: NCHW
+    input_color: grayscale
+    input_scale: 0.00392156862745098
+    landmark_space: normalized_crop_xy
+    landmark_order: id_0_to_20_interleaved_xy
+    handedness_left: 0
+    handedness_right: 1
+  validate:
+    enabled: true
+    backend: onnxruntime_cpu
+    random_samples: 4
+    absolute_tolerance: 1.0e-5
+    relative_tolerance: 1.0e-4
+    require_output_order_match: true
+
+runtime:
+  device: cpu

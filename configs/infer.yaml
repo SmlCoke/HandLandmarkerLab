@@ -1,0 +1,66 @@
+schema_version: 1
+task: infer_folder
+
+input:
+  images_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/inference/input"
+  recursive: true
+  extensions: [.png, .jpg, .jpeg, .tif, .tiff, .bmp]
+  rotate_clockwise: false
+  source_orientation: as_stored_no_auto_rotate
+
+model:
+  version: v1
+  input_shape: [1, 256, 256]
+  input_layout: NCHW
+  input_dtype: float32
+  input_scale: 0.00392156862745098
+  input_offset: 0.0
+  num_iterations: 8
+  output_order: [landmarks, hand_flag, handedness]
+  output_sizes:
+    landmarks: 42
+    hand_flag: 1
+    handedness: 1
+
+hand:
+  backend: keras
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/finetune/checkpoints/best.weights.h5"
+
+palm:
+  model_path: preminilary/palm/model_opt.onnx
+  input_size: 224
+  input_layout: NCHW
+  color_mode: grayscale
+  score_threshold: 0.50
+  nms_iou_threshold: 0.30
+  cross_head_suppress_iou: 0.35
+  max_detections: 2
+  output_layout: auto
+  providers: [CPUExecutionProvider]
+
+hand_roi:
+  scale_x: 1.8
+  scale_y: 1.8
+  shift_x: 0.0
+  shift_y: -0.1
+  output_size: 256
+  rotation_convention: board_wrist_to_middle_mcp
+
+inference:
+  batch_size: 64
+  hand_flag_threshold: 0.50
+  fail_fast: false
+
+output:
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/inference/output"
+  write_annotated_images: true
+  write_jsonl: true
+  draw_palm_box: true
+  draw_roi: true
+  draw_landmarks: true
+  draw_scores: true
+  overwrite: false
+
+runtime:
+  gpu_memory_growth: true
+  deterministic: true

@@ -4,3 +4,17 @@
 
 # example
 docs/annotation/example/
+
+# Python/runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Training outputs
+runs/
+outputs/
+*.weights.h5
+*.keras
+events.out.tfevents.*

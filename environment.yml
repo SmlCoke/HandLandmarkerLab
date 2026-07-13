@@ -1,0 +1,21 @@
+name: hand-landmarker-tf29
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # TensorFlow 2.9 Linux wheels support Python 3.8. Keep the minor version
+  # fixed so an environment update cannot silently move to an unsupported ABI.
+  - python=3.8.18
+  - pip=23.3.1
+  - setuptools=68.2.2
+  - wheel=0.41.3
+  - pip:
+      # Run `conda env create` from the repository root so this relative path
+      # resolves predictably.
+      - -r requirements.txt
+
+# CUDA and cuDNN are intentionally not installed into this environment. The
+# target AutoDL image supplies CUDA 11.2 and cuDNN 8.x system libraries; adding
+# a second Conda copy can shadow those libraries and make TF GPU discovery fail.

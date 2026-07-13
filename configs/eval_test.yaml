@@ -1,0 +1,52 @@
+schema_version: 1
+task: evaluate
+split: test
+
+data:
+  data_root: "${HAND_DATA_ROOT:-/root/autodl-tmp}"
+  labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/test_merged/05_labels/hand_test_labels.jsonl"
+  ignored_labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/test_merged/05_labels/hand_test_ignored.jsonl"
+  crop_image_roots:
+    - "${HAND_DATA_ROOT:-/root/autodl-tmp}/eval_sources/peak_test/02_roi_crops/images"
+    - "${HAND_DATA_ROOT:-/root/autodl-tmp}/eval_sources/soar_test/02_roi_crops/images"
+  crop_path_key: crop_path
+  path_policy: canonical_crop_path_only
+  require_schema_version: evaluation_gold_v1
+  image_size: [256, 256]
+  channels: 1
+
+model:
+  version: v1
+  input_shape: [1, 256, 256]
+  input_layout: NCHW
+  input_dtype: float32
+  input_scale: 0.00392156862745098
+  input_offset: 0.0
+  num_iterations: 8
+  output_order: [landmarks, hand_flag, handedness]
+  output_sizes:
+    landmarks: 42
+    hand_flag: 1
+    handedness: 1
+
+hand:
+  backend: keras
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/finetune/checkpoints/best.weights.h5"
+
+evaluation:
+  # Canonical inputs are already 256x256 Hand ROIs. Evaluation loads only Hand.
+  mode: roi
+  hand_flag_threshold: 0.50
+  pck_thresholds: [0.05, 0.10, 0.15]
+  tune_thresholds: false
+
+inference:
+  batch_size: 128
+
+output:
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/eval/test"
+  overwrite: false
+
+runtime:
+  gpu_memory_growth: true
+  deterministic: true
