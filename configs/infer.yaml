@@ -2,7 +2,7 @@ schema_version: 1
 task: infer_folder
 
 input:
-  images_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/inference/input"
+  images_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_inference/input"
   recursive: true
   extensions: [.png, .jpg, .jpeg, .tif, .tiff, .bmp]
   rotate_clockwise: false
@@ -53,7 +53,7 @@ inference:
   fail_fast: false
 
 output:
-  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/inference/output/pretrain"
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_inference/output/pretrain"
   write_annotated_images: true
   write_jsonl: true
   draw_palm_box: true

@@ -52,7 +52,7 @@ targets:
     Right: 1
     unknown: null
 training:
-  epochs: 80
+  epochs: 120
   batch_size: 64
   steps_per_epoch: null
   initial_checkpoint: null
@@ -61,20 +61,20 @@ training:
   mixed_precision: false
   optimizer:
     name: adam
-    learning_rate: 0.001
+    learning_rate: 0.0003
     beta_1: 0.9
     beta_2: 0.999
     epsilon: 1.0e-7
   learning_rate_schedule:
     name: reduce_on_plateau
-    monitor: val_total_loss
+    monitor: val_landmark_mae
     factor: 0.5
-    patience: 4
+    patience: 20
     min_learning_rate: 1.0e-6
   early_stopping:
     enabled: true
-    monitor: val_total_loss
-    patience: 12
+    monitor: val_landmark_mae
+    patience: 20
     restore_best_weights: true
 
 sampling:
@@ -101,8 +101,8 @@ sampling:
 losses:
   landmarks:
     name: huber
-    delta: 0.01
-    coefficient: 1.0
+    delta: 0.05
+    coefficient: 20.0
   hand_flag:
     name: binary_crossentropy
     from_logits: false
@@ -150,7 +150,7 @@ inspection:
       channels: 1
 
 outputs:
-  run_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/pretrain"
+  run_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1-landmarks-enhanced/pretrain"
   overwrite: false
 
 runtime:
