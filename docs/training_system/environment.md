@@ -82,9 +82,9 @@ make inspect
 1. `make doctor` 使用 `configs/train_pretrain.yaml`，读取 `environment.tensorflow`、`environment.cuda`、`environment.cudnn_major` 与 `environment.require_gpu`，检查 Python/TensorFlow 版本、TensorFlow build info、GPU 可见性及关键依赖。配置要求 GPU，因此 TensorFlow 不支持 CUDA 或没有可见物理 GPU 都应视为失败，而不是静默回退 CPU。
 2. `make compile` 在内存中检查 `hand_landmarker/`、`models/`、`scripts/` 和 `tests/` 下的 Python 源码，不生成 `__pycache__`。
 3. `make test` 使用标准库 `unittest discover`，不要求安装 pytest。
-4. `make inspect` 依次运行 `inspect-pretrain`、`inspect-finetune`、`inspect-val` 和 `inspect-test`。两个训练检查都会自动加载其 Train、配置的 Val 与锁定 Test，计算图像 SHA-256 并做两两泄漏检查；ID、source group、解析路径或内容哈希任一精确重叠都会失败。独立的 Val/Test 检查再验证各自 schema、图片和标签。检查不会遍历图片目录来自动补样本，也不会启动训练。需要定位问题时才单独运行某个 `make inspect-*` 目标。
+4. `make inspect` 默认 `MODEL_STAGE=pretrain`，只运行 pretrain Train/Val/锁定 Test 审计，不访问 finetune JSONL。检查会计算图像 SHA-256 并做两两泄漏检查；ID、source group、解析路径或内容哈希任一精确重叠都会失败。检查不会遍历图片目录来自动补样本，也不会启动训练。finetune 数据就绪后可运行 `make MODEL_STAGE=finetune inspect` 或 `make inspect-finetune`；只有两个阶段数据都存在时才运行 `make inspect-all`。
 
-数据尚未放到默认路径时，先运行不带配置的 `python scripts/check_environment.py` 只检查解释器和依赖。`make doctor` 会同时检查默认训练 JSONL，因此此时应明确报告路径缺失；`make inspect` 同样应失败。不要为了让门禁通过而创建空 JSONL。
+pretrain 数据尚未放到默认路径时，先运行不带配置的 `python scripts/check_environment.py` 只检查解释器和依赖。`make doctor` 会同时检查默认 pretrain JSONL，因此此时应明确报告路径缺失；`make inspect` 同样应失败。finetune 数据缺失不会影响默认的 `doctor`、`inspect`、`train`、`eval-val`、`eval-test`、`infer` 或 `export`。不要为了让任一门禁通过而创建空 JSONL。
 
 `tf.sysconfig.get_build_info()` 给出的 `cuda_version`/`cudnn_version` 是 TensorFlow **构建目标**，不是当前进程实际加载的动态库版本。Doctor 会把两者分开报告：构建字段存在时与配置期望比较，构建版本不匹配会失败；字段缺失时 `build_status` 为 `unknown` 并给出 warning。CUDA/cuDNN 的精确运行时版本无法通过该跨版本诊断可靠读取，因此 `runtime_version` 和 `runtime_status` 明确保持 `unknown`，并给出 warning；不会用构建元数据伪造运行时通过。warning 本身不改变退出码，但 `require_gpu: true` 时，`built_with_cuda != true`、GPU 查询失败或物理 GPU 列表为空都会失败。
 
@@ -97,16 +97,20 @@ make inspect-finetune
 
 ## 5. 配置与服务器路径
 
-六个入口配置如下：
+14 份 YAML 分成两个训练配置、四个 pretrain-compatible 基线配置和八个阶段 wrapper：
 
-| 任务 | 配置 | 默认 canonical 数据/输入 |
+| 任务 | 基线/训练配置 | 阶段 wrapper |
 |---|---|---|
-| 第一阶段训练 | `configs/train_pretrain.yaml` | `/root/autodl-tmp/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl` |
-| 第二阶段微调 | `configs/train_finetune.yaml` | `/root/autodl-tmp/train_finetune_merged/05_labels/hand_training_labels_finetune.jsonl` |
-| Val | `configs/eval_val.yaml` | `/root/autodl-tmp/val_merged/05_labels/hand_validation_labels.jsonl` |
-| Test | `configs/eval_test.yaml` | `/root/autodl-tmp/test_merged/05_labels/hand_test_labels.jsonl` |
-| 文件夹推理 | `configs/infer.yaml` | `/root/autodl-tmp/inference/input` |
-| ONNX 导出 | `configs/export.yaml` | finetune 的 `best.weights.h5` |
+| pretrain | `configs/train_pretrain.yaml` | — |
+| 可选 finetune | `configs/train_finetune.yaml` | — |
+| Val | `configs/eval_val.yaml` | `configs/eval_val_pretrain.yaml`、`configs/eval_val_finetune.yaml` |
+| Test | `configs/eval_test.yaml` | `configs/eval_test_pretrain.yaml`、`configs/eval_test_finetune.yaml` |
+| 文件夹推理 | `configs/infer.yaml` | `configs/infer_pretrain.yaml`、`configs/infer_finetune.yaml` |
+| ONNX 导出 | `configs/export.yaml` | `configs/export_pretrain.yaml`、`configs/export_finetune.yaml` |
+
+wrapper 通过 `extends` 继承基线，并只覆盖阶段来源、checkpoint 和阶段输出目录。四个无后缀基线本身保持 pretrain-compatible，便于直接运行和向后兼容；Make 通用目标始终按 `MODEL_STAGE` 选择带阶段后缀的 wrapper。训练 canonical 默认分别位于 `/root/autodl-tmp/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl` 与 `/root/autodl-tmp/train_finetune_merged/05_labels/hand_training_labels_finetune.jsonl`；Val/Test Gold 与外部推理输入仍使用原有共享路径。
+
+评估、推理和导出配置都包含 `model.checkpoint_stage`。通用 Make 目标默认选择声明 `pretrain` 的 wrapper；设置 `MODEL_STAGE=finetune` 后才会选择 finetune wrapper 与 checkpoint。该字段会进入结果 provenance，但不会从 checkpoint 路径推断；使用 CLI 覆盖模型时必须自行选对阶段配置。
 
 Val/Test 的 canonical 行直接指向现成 `256×256` Hand ROI；这两个入口只运行 Hand Landmarker，不需要 Palm 模型或原图路径。只有“文件夹推理”入口对任意外部图片执行 Palm → ROI → Hand。
 
@@ -118,6 +122,8 @@ make doctor
 make inspect
 ```
 
+以上检查只要求 pretrain、Val 与 Test 数据。finetune canonical 数据尚未准备时，无需修改配置或创建占位文件；保持默认 `MODEL_STAGE=pretrain` 即可。
+
 该变量必须在同一个 shell 会话或作业脚本中导出；只修改 `data_root` 字段不会自动重写其他绝对路径。本机 PowerShell 烟测可使用 `$env:HAND_DATA_ROOT = 'D:\path\to\data'`。
 
 数据 loader 必须以配置指定的 canonical JSONL 为样本集合，并读取每行 `crop_path`；不得直接 glob `02_roi_crops/images`。`source_crop_path` 只用于溯源，不作为 canonical 路径的静默替代品。
@@ -125,17 +131,49 @@ make inspect
 ## 6. Make 任务
 
 ```bash
-make train-pretrain
-make train-finetune
+make inspect
+make train
 make eval-val
 make eval-test
 make infer
 make export
 ```
 
-也可以使用下划线别名 `train_pretrain`、`train_finetune`、`eval_val` 和 `eval_test`。`make train` 会先完整执行第一阶段，再执行第二阶段。Test 只能在 checkpoint、presence 阈值和量化/导出方案冻结后运行。
+`MODEL_STAGE` 默认是 `pretrain`，所以这组通用命令构成一个不依赖 finetune 数据的完整闭环。`make train` 只训练当前阶段，不再隐式顺序执行两个阶段。Val threshold 必须先为当前阶段独立选择并冻结，Test 才能运行；pretrain 与 finetune 的 threshold 不能互用。
 
-命令行始终只向脚本传入一个任务配置。需要确认入口参数时，以对应脚本的 `--help` 为准，不要假设训练或评估脚本支持未声明的附加参数。
+finetune 数据就绪后，通用目标可以逐项切换：
+
+```bash
+make MODEL_STAGE=finetune inspect
+make MODEL_STAGE=finetune train
+make MODEL_STAGE=finetune eval-val
+make MODEL_STAGE=finetune eval-test
+make MODEL_STAGE=finetune infer
+make MODEL_STAGE=finetune export
+```
+
+不受 `MODEL_STAGE` 影响的显式目标为：
+
+```text
+inspect-pretrain       inspect-finetune
+inspect-val-pretrain   inspect-val-finetune
+inspect-test-pretrain  inspect-test-finetune
+train-pretrain         train-finetune      # 训练短别名：pretrain / finetune
+eval-val-pretrain      eval-val-finetune
+eval-test-pretrain     eval-test-finetune
+infer-pretrain         infer-finetune
+export-pretrain        export-finetune
+```
+
+`inspect-all` 与 `train-all` 才会依次处理两个阶段，且仅应在 finetune canonical 数据真实存在时使用。默认产物按 stage 隔离：评估写入 `hand_landmarker_runs/v1/eval/<stage>/<split>`，外部推理写入 `inference/output/<stage>`，导出写入 `hand_landmarker_runs/v1/export/<stage>`。
+
+Make 仍只向脚本传入一个任务配置，但评估、推理和导出支持显式单次覆盖：
+
+- `evaluate.py`：`--model-path`、`--output-dir`、`--overwrite`；
+- `infer_folder.py`：`--model-path`、`--output-dir`、`--overwrite`；
+- `export_onnx.py`：`--weights-path`、`--output-path`、`--contract-path`、`--overwrite`。
+
+覆盖不会改写 YAML，也不会根据自定义权重路径自动改变 `model.checkpoint_stage`。完整参数以对应脚本的 `--help` 为准。
 
 ## 7. GPU 与旧版 TensorFlow 注意事项
 

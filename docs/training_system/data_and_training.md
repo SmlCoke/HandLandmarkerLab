@@ -1,4 +1,6 @@
-# 数据、权重与两阶段训练
+# 数据、权重与可选两阶段训练
+
+pretrain 是可独立训练、评估、推理和导出的完整交付阶段；finetune 是 Gold 数据就绪后的可选增强阶段，不是系统运行的前置条件。通用 Make 目标由 `MODEL_STAGE` 路由，默认 `MODEL_STAGE=pretrain`，因此没有 finetune canonical JSONL 时也能完成整个 pretrain 闭环。
 
 ## 1. Canonical JSONL
 
@@ -95,7 +97,7 @@ head_loss = sum(sample_weight × per_sample_loss) / sum(sample_weight)
 <run_dir>/training_report.json
 ```
 
-其中 `<run_dir>` 的默认值分别是 `${HAND_DATA_ROOT}/hand_landmarker_runs/v1/pretrain` 与 `${HAND_DATA_ROOT}/hand_landmarker_runs/v1/finetune`。另外还会写入：
+其中 `<run_dir>` 的默认值由当前阶段决定：pretrain 为 `${HAND_DATA_ROOT}/hand_landmarker_runs/v1/pretrain`，可选 finetune 为 `${HAND_DATA_ROOT}/hand_landmarker_runs/v1/finetune`。另外还会写入：
 
 ```text
 <run_dir>/checkpoints/best.weights.h5.state/
@@ -111,17 +113,41 @@ head_loss = sum(sample_weight × per_sample_loss) / sum(sample_weight)
 
 新训练默认拒绝写入非空 `outputs.run_dir`，避免静默覆盖已有实验。续训应设置 `training.resume_checkpoint`；确认需要重新使用同一路径时，才显式设置 `outputs.overwrite: true`。更稳妥的做法是为每次新实验使用独立 run 目录。
 
-## 5. Stage 2：Gold + pseudo replay
+pretrain 正常结束后，其 `best.weights.h5` 可以直接作为正式候选模型。使用 `make eval-val` 在 Val 上为 pretrain 独立选择并冻结 presence threshold，随后即可运行 `make eval-test`、`make infer` 与 `make export`；这些通用命令默认都不会寻找 finetune 数据或 checkpoint。
 
-输入为 `train_finetune_merged` canonical 文件，并从 Stage 1 最佳权重初始化。启动时必须确认至少存在一条 `supervision_tier=gold`。
+## 5. Stage 2：Gold + pseudo replay（可选）
+
+只有 finetune 数据准备完成后才进入本节。输入为 `train_finetune_merged` canonical 文件，并从 Stage 1 最佳权重初始化。启动时必须确认至少存在一条 `supervision_tier=gold`。缺少该文件或 Gold 记录时，不应创建空占位文件，也不应运行 `finetune`、`inspect-finetune`、`inspect-all` 或 `train-all`；继续使用默认 pretrain 路线即可。
 
 默认每个 batch 先用 half-up 得到约 40% Gold 和 60% pseudo replay 的整数行配额，同时用 largest-remainder 得到四类 sample type 的整数列配额，再构造满足两组边际总数的 `Gold/pseudo × sample_type` 交叉配额。默认 batch=32 时，Gold 为 13 条，四类总数依次为 `18/4/8/2`；Gold 四类为 `7/2/3/1`，pseudo 四类为 `11/2/5/1`。八个交叉单元均须存在。不要只用少量 Gold 长时间训练，否则容易遗忘第一阶段覆盖的姿态、背景和光照。
 
-Stage 2 使用更低学习率，在人工 Val 上 early stopping。Test 不允许参与学习率、epoch、presence threshold、增强或量化选择。
+Stage 2 使用更低学习率，在人工 Val 上 early stopping。finetune 训练完成后，必须重新在 Val 上选择并冻结属于 finetune 的 presence threshold；pretrain threshold 与 finetune threshold 是两个独立决策，不能跨阶段沿用。Test 不允许参与学习率、epoch、presence threshold、增强或量化选择。
 
 Keras `fit` 固定使用 `shuffle=False`：batch 内容和 epoch 随机流完全由 `CanonicalSequence` 管理，Keras 不再独立打乱 Sequence 的 batch 顺序。每个正常 epoch 结束时 Sequence 自增 epoch；从 `training.resume_checkpoint` 恢复时，训练入口先读取完成 epoch，并调用 `CanonicalSequence.set_epoch(initial_epoch)`。同一 labels、seed、配置、绝对 epoch 和 batch index 会复现相同采样与增强随机流；恢复不会重放 epoch 0。该契约只覆盖 epoch 边界恢复，不声明支持 batch 中途恢复。
 
 完整恢复依赖所选 best/last 权重旁的 `.state/` TensorFlow checkpoint；存在时会恢复 optimizer 和 epoch。若 `.state/` 缺失但 `.state.json` 仍在，只能恢复模型权重和记录的 epoch，报告会明确给出 optimizer 未恢复警告。`training.initial_checkpoint` 只加载初始权重（Stage 2 默认指向 Stage 1 的 `checkpoints/best.weights.h5`），不是续训语义；它与 `training.resume_checkpoint` 互斥。
+
+阶段命令关系如下：
+
+```bash
+# 默认完整闭环：只使用 pretrain
+make inspect
+make train
+make eval-val
+make eval-test
+make infer
+make export
+
+# finetune 数据就绪后，显式切换当前阶段
+make MODEL_STAGE=finetune inspect
+make MODEL_STAGE=finetune train
+make MODEL_STAGE=finetune eval-val
+make MODEL_STAGE=finetune eval-test
+make MODEL_STAGE=finetune infer
+make MODEL_STAGE=finetune export
+```
+
+显式训练目标为 `train-pretrain`/`train-finetune`，并提供短别名 `pretrain`/`finetune`。`train-all` 才会按 pretrain → finetune 顺序运行两阶段，且仅应在 finetune canonical 数据真实存在并通过审计后使用。`make train` 始终只训练 `MODEL_STAGE` 选中的一个阶段，默认只训练 pretrain。
 
 ## 6. 数据检查
 
@@ -129,6 +155,22 @@ Keras `fit` 固定使用 `shuffle=False`：batch 内容和 epoch 随机流完全
 make inspect
 ```
 
-检查内容包括 JSONL/schema、ID 重复、stage/split、权重、图片存在性/可读性/尺寸、分布和文件 SHA-256。`make inspect` 会分别以 pretrain 与 finetune 训练配置审计当前 Train、Val 和锁定 Test，并在每次审计内两两检查 `global_crop_id`、`source_group_id`、解析路径和内容哈希；任一精确跨集合重叠都会失败，文件名相同本身只告警。pretrain 与 finetune 训练集允许 pseudo replay，因此不把两个训练阶段彼此比较作为泄漏门禁。图片内容哈希只能发现完全相同文件，无法替代采集 session 元数据。
+检查内容包括 JSONL/schema、ID 重复、stage/split、权重、图片存在性/可读性/尺寸、分布和文件 SHA-256。`make inspect` 只审计 `MODEL_STAGE` 选中的当前 Train、Val 和锁定 Test；默认阶段是 pretrain，因此它不会读取缺失的 finetune JSONL。在一次阶段审计内，检查器两两比较 `global_crop_id`、`source_group_id`、解析路径和内容哈希；任一精确跨集合重叠都会失败，文件名相同本身只告警。图片内容哈希只能发现完全相同文件，无法替代采集 session 元数据。
+
+显式检查目标为 `inspect-pretrain` 与 `inspect-finetune`；只检查某个阶段的共享 Gold 时，还可使用 `inspect-val-pretrain`/`inspect-val-finetune` 和 `inspect-test-pretrain`/`inspect-test-finetune`。只有 finetune 数据真实存在时才运行 `inspect-all`；它会依次审计两个阶段及其 Val/Test 路由。pretrain 与 finetune 训练集允许 pseudo replay，因此即使执行 `inspect-all`，也不会把两个训练阶段彼此比较作为泄漏门禁。
 
 训练入口不会假定操作者已单独运行 `make inspect`：`create_sequences` 会再次对实际参加训练的 Train/Val 计算图像 SHA-256，并对 `global_crop_id`、`source_group_id`、解析后的 crop 路径和图像内容哈希做跨 split 检查；任一精确重叠都会在创建 Sequence 前拒绝训练。该检查结果嵌入 run 下的 `experiment_metadata.json` 与 `training_report.json`，不会伪造一个不存在的独立 `data_report.json`。
+
+## 7. 下游 checkpoint 阶段契约
+
+评估、外部图片推理和导出配置使用 `model.checkpoint_stage: pretrain|finetune` 声明 checkpoint 的训练阶段。通用 Make 目标会按 `MODEL_STAGE` 选择相应配置、默认 checkpoint 和独立输出目录；报告/contract provenance 把它记为 `model_checkpoint_stage`，并同时记录模型路径与 SHA-256。这个字段不会从 checkpoint 路径或 finetune 数据是否存在来推断，而是把操作者选择的路线显式暴露出来，使同一 Gold 集上的两条模型路线可审计比较。
+
+默认隔离布局为：
+
+```text
+评估    ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/eval/<stage>/{val,test}
+推理    ${HAND_DATA_ROOT}/inference/output/<stage>
+导出    ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>
+```
+
+`evaluate.py` 和 `infer_folder.py` 可用 `--model-path`、`--output-dir` 与 `--overwrite` 做单次覆盖；`export_onnx.py` 可用 `--weights-path`、`--output-path`、`--contract-path` 与 `--overwrite`。覆盖不会改写 YAML，也不会根据自定义权重路径自动改变 `model.checkpoint_stage`；必须选用与权重真实来源相符的阶段 wrapper，并建议把自定义输出放在该阶段的命名空间中。

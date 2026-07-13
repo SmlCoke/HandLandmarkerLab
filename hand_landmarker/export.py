@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
 from .config import resolve_path
-from .contracts import BOARD_CONTRACT, MODEL_IO
+from .contracts import (
+    BOARD_CONTRACT,
+    MODEL_IO,
+    validate_checkpoint_path_stage,
+    validate_model_checkpoint_stage,
+)
 from .io_utils import sha256_file, write_json
 
 
@@ -223,6 +228,20 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     runtime_device = str(config.get("runtime", {}).get("device", "cpu")).strip().lower()
     if runtime_device != "cpu":
         raise ValueError("ONNX export runtime.device must remain cpu")
+    model_checkpoint_stage = validate_model_checkpoint_stage(config)
+    preflight_hand = config.get("hand", {})
+    preflight_export = config.get("export", {})
+    preflight_model = config.get("model", {})
+    preflight_weights = (
+        preflight_hand.get("model_path")
+        or preflight_export.get("weights_path")
+        or preflight_model.get("checkpoint")
+    )
+    if preflight_weights:
+        validate_checkpoint_path_stage(
+            config,
+            resolve_path(str(preflight_weights), config),
+        )
     # Must be set before importing TensorFlow; this script is a CPU-side
     # serialization/parity job and must not reserve the training GPU.
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -276,6 +295,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         raise KeyError("Export config requires hand.model_path (weights) and export.model_path")
     weights_path = resolve_path(str(weights_value), config)
     output_path = resolve_path(str(output_value), config)
+    validate_checkpoint_path_stage(config, weights_path)
     if not weights_path.is_file():
         raise FileNotFoundError("Weights not found: {}".format(weights_path))
     if output_path.suffix.lower() != ".onnx":
@@ -368,6 +388,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             temporary.unlink()
 
     report = {
+        "model_checkpoint_stage": model_checkpoint_stage,
         "model_path": str(output_path),
         "model_sha256": sha256_file(output_path),
         "weights_path": str(weights_path),

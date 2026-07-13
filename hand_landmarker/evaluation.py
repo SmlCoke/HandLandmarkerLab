@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .config import resolve_path
-from .contracts import ordered_landmarks, validate_label_record
+from .contracts import (
+    ordered_landmarks,
+    validate_checkpoint_path_stage,
+    validate_label_record,
+    validate_model_checkpoint_stage,
+)
 from .io_utils import read_image, sha256_file, write_json, write_jsonl
 from .inspect import audit_canonical_dataset
 from .metrics import EvaluationMetrics, threshold_sweep
@@ -182,9 +187,18 @@ def _update_aggregate(
     )
 
 
-def evaluate_hand_rois(config: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+def evaluate_hand_rois(
+    config: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    model_checkpoint_stage: Optional[str] = None,
+) -> Dict[str, Any]:
     """Run only Hand Landmarker on each canonical ``crop_path`` ROI."""
 
+    if model_checkpoint_stage is None:
+        # Keep this lower-level helper usable in isolated metric tests while
+        # making any supplied provenance fail closed.  The public config entry
+        # point below always requires the field.
+        model_checkpoint_stage = validate_model_checkpoint_stage(config, required=False)
     predictor = create_hand_predictor(_runtime_config(config))
     batch_size = int(config.get("inference", {}).get("batch_size", 64))
     if batch_size <= 0:
@@ -268,11 +282,13 @@ def evaluate_hand_rois(config: Mapping[str, Any], rows: Sequence[Mapping[str, An
             _update_aggregate(metrics, row, hand, threshold, predicted_points)
             detail = _row_metrics(row, hand, threshold, predicted_points)
             detail["evaluation_scope"] = "provided_hand_roi"
+            detail["model_checkpoint_stage"] = model_checkpoint_stage
             details.append(detail)
             scores.append((bool((row.get("hand_presence") or {}).get("present", False)), hand.hand_flag_score))
 
     evaluation_config = config.get("evaluation", {})
     report = {
+        "model_checkpoint_stage": model_checkpoint_stage,
         "scope": "hand_landmarker_on_provided_hand_roi",
         "protocol": "Val/Test crop_path is the model input; Palm Detector is not loaded or run.",
         "metrics": metrics.report(),
@@ -345,6 +361,12 @@ def evaluate_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
                     existing
                 )
             )
+    model_checkpoint_stage = validate_model_checkpoint_stage(config)
+    runtime_config = _runtime_config(config)
+    validate_checkpoint_path_stage(
+        config,
+        runtime_config.get("hand", {}).get("model_path", ""),
+    )
     labels_path = _labels_path(config)
     data_config = config.get("data") or config.get("dataset", {})
     rows, data_contract_report = audit_canonical_dataset(
@@ -356,10 +378,13 @@ def evaluate_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         raise_on_error=True,
     )
     _validate_rows(rows, split)
-    result = evaluate_hand_rois(config, rows)
+    result = evaluate_hand_rois(
+        config,
+        rows,
+        model_checkpoint_stage=model_checkpoint_stage,
+    )
 
     details = result.pop("details")
-    runtime_config = _runtime_config(config)
     hand_config = runtime_config.get("hand", {})
     model_path = Path(str(hand_config.get("model_path", "")))
     if not model_path.is_file():
@@ -375,6 +400,7 @@ def evaluate_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "backend": str(hand_config.get("backend", "keras")),
             "path": str(model_path),
             "sha256": model_sha256,
+            "checkpoint_stage": model_checkpoint_stage,
         },
         "config_path": str(config_path) if config_path else None,
         "config_sha256": (

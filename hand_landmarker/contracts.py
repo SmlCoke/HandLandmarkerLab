@@ -7,8 +7,12 @@ checks remain usable before the training environment is installed.
 from __future__ import annotations
 
 import math
+import re
 
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+
+MODEL_CHECKPOINT_STAGES: Tuple[str, str] = ("pretrain", "finetune")
 
 
 MODEL_IO: Dict[str, Any] = {
@@ -56,6 +60,70 @@ HAND_CONNECTIONS: Tuple[Tuple[int, int], ...] = (
     (13, 17), (17, 18), (18, 19), (19, 20),
     (0, 17),
 )
+
+
+def validate_model_checkpoint_stage(
+    config: Mapping[str, Any],
+    required: bool = True,
+) -> Optional[str]:
+    """Return the declared model provenance after strict schema validation.
+
+    Evaluation, export, and folder inference all consume an already-trained
+    Hand Landmarker.  The checkpoint stage is therefore explicit provenance,
+    not something inferred from a path or from the presence of a finetune
+    dataset.
+    """
+
+    model = config.get("model", {})
+    if not isinstance(model, Mapping):
+        raise ValueError("model must be a mapping")
+    stage = model.get("checkpoint_stage")
+    if stage in (None, "") and not required:
+        return None
+    if not isinstance(stage, str) or stage not in MODEL_CHECKPOINT_STAGES:
+        raise ValueError(
+            "model.checkpoint_stage must be exactly one of {}; got {!r}".format(
+                list(MODEL_CHECKPOINT_STAGES), stage
+            )
+        )
+    return stage
+
+
+def validate_checkpoint_path_stage(
+    config: Mapping[str, Any],
+    checkpoint_path: Any,
+) -> str:
+    """Reject an explicit checkpoint path that names the opposite stage.
+
+    Stage-less custom paths are intentionally valid.  A marker is considered
+    explicit when ``pretrain`` or ``finetune`` is a standalone token within a
+    slash-delimited path component, including common ``_``/``-`` filename
+    separators.
+    """
+
+    declared_stage = validate_model_checkpoint_stage(config)
+    components = [
+        component.lower()
+        for component in re.split(r"[\\/]+", str(checkpoint_path))
+        if component
+    ]
+    markers = set()
+    for component in components:
+        for candidate in MODEL_CHECKPOINT_STAGES:
+            if re.search(
+                r"(^|[^a-z0-9]){}([^a-z0-9]|$)".format(re.escape(candidate)),
+                component,
+            ):
+                markers.add(candidate)
+    conflicting = sorted(markers - {declared_stage})
+    if conflicting:
+        raise ValueError(
+            "Checkpoint path {!r} explicitly names stage(s) {} but "
+            "model.checkpoint_stage is {!r}".format(
+                str(checkpoint_path), conflicting, declared_stage
+            )
+        )
+    return declared_stage
 
 
 def ordered_landmarks(row: Mapping[str, Any], key: str = "landmarks_crop_norm") -> List[Tuple[float, float]]:

@@ -59,6 +59,8 @@ P_image = TL + x_roi × (TR-TL) + y_roi × (BL-TL)
 make export
 ```
 
+通用目标默认 `MODEL_STAGE=pretrain`：它直接导出 pretrain checkpoint，不要求 finetune 数据或权重。finetune 完成后可运行 `make MODEL_STAGE=finetune export`。显式目标 `export-pretrain` 与 `export-finetune` 不受 `MODEL_STAGE` 影响，适合在脚本中锁定路线。
+
 导出器执行以下门禁：
 
 - 加载版本化 Keras 结构及指定权重；
@@ -69,7 +71,7 @@ make export
 - 输出元素数、语义顺序和 shape 检查；
 - A1 算子白名单及属性检查；
 - zeros/ones/random 输入的 Keras↔ONNX 数值比对；
-- 输出 `.contract.json`，包含权重/ONNX SHA-256、operators、属性审计、I/O、数值误差和输出范围。
+- 输出 `.contract.json`，把配置的 `model.checkpoint_stage` 记为 `model_checkpoint_stage`，并包含权重/ONNX SHA-256、operators、属性审计、I/O、数值误差和输出范围。
 
 属性门禁来自当前 A1 project-9 约束，不只检查算子名称：
 
@@ -83,13 +85,26 @@ make export
 
 默认 parity 探针是 1 个全零、1 个全一和 4 个固定随机种子的 `[0,1]` 输入。契约报告对每个探针、每个输出 head 分别记录最大绝对/相对误差，并同时记录 Keras 与 ONNX 的 minimum、maximum、max-abs；landmark 输出还记录按板端规则推导的 scale divisor。验收使用配置中的 `atol=1e-5`、`rtol=1e-4` 做逐元素 `allclose`，任一 case/head 失败即中止导出。这里验证的是 Keras 与 ONNX 的数值等价及合成输入下的输出健康度，不是数据集精度，也不是 `.m1model` 板端实测。
 
-默认产物为：
+默认产物按 checkpoint 阶段隔离：
 
 ```text
-${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/hand_landmarker_v1.onnx
-${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/hand_landmarker_v1.contract.json
+${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/hand_landmarker_v1_<stage>.onnx
+${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/hand_landmarker_v1_<stage>.contract.json
 ```
 
+其中 `<stage>` 为 `pretrain` 或 `finetune`，实际文件名为 `hand_landmarker_v1_<stage>.onnx` 与 `hand_landmarker_v1_<stage>.contract.json`。配置中的 `model.checkpoint_stage` 显式声明权重来源并写入 contract provenance；它不会从路径推断 checkpoint 内容。Make 的阶段 wrapper 会让默认权重、声明和产物目录保持一致。pretrain ONNX 是完整受支持的交付产物，不以 finetune ONNX 是否存在为前提。
+
 `export.overwrite: false` 同时保护 ONNX 与 `.contract.json`；任一产物已存在都会中止。只有确认两个文件都可以替换时才启用覆盖。
+
+单次导出可以在不改 YAML 的情况下覆盖三个路径：
+
+```bash
+python scripts/export_onnx.py --config configs/export.yaml \
+  --weights-path /path/to/checkpoint.weights.h5 \
+  --output-path /path/to/hand_landmarker.onnx \
+  --contract-path /path/to/hand_landmarker.contract.json
+```
+
+确认可替换产物时再追加 `--overwrite`。这些 CLI 参数不会改写 YAML，也不会根据自定义权重路径自动改变 `model.checkpoint_stage`；应使用与权重真实来源一致的 `export_<stage>.yaml` wrapper。
 
 ONNX 生成后仍需使用 A1 官方工具转为 `.m1model`。该厂商转换步骤不在本仓库中自动执行；转换时必须再次核对 `/255` 输入归一化、三个 FLOAT32 输出、输出顺序和板端实测精度。

@@ -1,0 +1,13 @@
+extends: eval_val.yaml
+
+model:
+  checkpoint_stage: finetune
+
+hand:
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/finetune/checkpoints/best.weights.h5"
+
+evaluation:
+  hand_flag_threshold: 0.50
+
+output:
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/eval/finetune/val"

@@ -7,7 +7,11 @@ import math
 from typing import Any, Dict, List, Mapping
 
 from .config import resolve_path
-from .contracts import HAND_CONNECTIONS
+from .contracts import (
+    HAND_CONNECTIONS,
+    validate_checkpoint_path_stage,
+    validate_model_checkpoint_stage,
+)
 from .evaluation import _runtime_config
 from .io_utils import (
     ensure_bgr,
@@ -90,6 +94,7 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         raise ValueError("Unsupported configuration schema_version")
     if str(config.get("task", "infer_folder")).lower() != "infer_folder":
         raise ValueError("Folder inference entry point requires task: infer_folder")
+    model_checkpoint_stage = validate_model_checkpoint_stage(config)
     input_value = config.get("input", {}).get("images_dir") or config.get("paths", {}).get("input_dir")
     output_value = (
         config.get("output", {}).get("dir")
@@ -155,6 +160,10 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     if not overwrite and (predictions_path.exists() or summary_path.exists()):
         raise FileExistsError("Inference output already exists; set output.overwrite=true to replace it")
     runtime_config = _runtime_config(config)
+    validate_checkpoint_path_stage(
+        config,
+        runtime_config.get("hand", {}).get("model_path", ""),
+    )
     runner = CascadeRunner(runtime_config)
     rows: List[Dict[str, Any]] = []
     failed = 0
@@ -184,6 +193,7 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             row = {
                 "image": str(path),
                 "rendered": str(output_path) if write_annotated else None,
+                "model_checkpoint_stage": model_checkpoint_stage,
                 "width": int(image.shape[1]),
                 "height": int(image.shape[0]),
                 "detections": [],
@@ -210,11 +220,19 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             rows.append(row)
         except Exception as exc:
             failed += 1
-            rows.append({"image": str(path), "error": str(exc), "detections": []})
+            rows.append(
+                {
+                    "image": str(path),
+                    "error": str(exc),
+                    "model_checkpoint_stage": model_checkpoint_stage,
+                    "detections": [],
+                }
+            )
             if fail_fast:
                 raise
     summary = {
         "status": "failed" if failed else "ok",
+        "model_checkpoint_stage": model_checkpoint_stage,
         "input_dir": str(input_dir),
         "output_dir": str(output_dir),
         "image_count": len(paths),
@@ -259,6 +277,8 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "path": str(model_path),
             "sha256": sha256_file(model_path),
         }
+        if name == "hand":
+            summary["models"][name]["checkpoint_stage"] = model_checkpoint_stage
     config_path_value = config.get("_meta", {}).get("config_path")
     config_path = Path(str(config_path_value)) if config_path_value else None
     summary["config_path"] = str(config_path) if config_path else None

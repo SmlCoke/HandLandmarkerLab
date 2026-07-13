@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .config import resolve_path
+from .contracts import validate_model_checkpoint_stage
 from .io_utils import sha256_file, write_json
 
 
@@ -793,6 +794,13 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     stage = str(config.get("stage", "")).strip().lower()
     if stage not in {"pretrain", "finetune"}:
         raise ValueError("Training stage must be pretrain or finetune; got {!r}".format(stage))
+    model_checkpoint_stage = validate_model_checkpoint_stage(config)
+    if model_checkpoint_stage != stage:
+        raise ValueError(
+            "Training stage and model.checkpoint_stage conflict: {} != {}".format(
+                stage, model_checkpoint_stage
+            )
+        )
     data_value = config.get("data")
     dataset_value = config.get("dataset")
     if isinstance(data_value, Mapping) and isinstance(dataset_value, Mapping):

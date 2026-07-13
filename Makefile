@@ -3,13 +3,24 @@
 PYTHON ?= python
 CONDA ?= conda
 ENV_FILE ?= environment.yml
+MODEL_STAGE ?= pretrain
 
 TRAIN_PRETRAIN_CONFIG ?= configs/train_pretrain.yaml
 TRAIN_FINETUNE_CONFIG ?= configs/train_finetune.yaml
-EVAL_VAL_CONFIG ?= configs/eval_val.yaml
-EVAL_TEST_CONFIG ?= configs/eval_test.yaml
-INFER_CONFIG ?= configs/infer.yaml
-EXPORT_CONFIG ?= configs/export.yaml
+EVAL_VAL_PRETRAIN_CONFIG ?= configs/eval_val_pretrain.yaml
+EVAL_VAL_FINETUNE_CONFIG ?= configs/eval_val_finetune.yaml
+EVAL_TEST_PRETRAIN_CONFIG ?= configs/eval_test_pretrain.yaml
+EVAL_TEST_FINETUNE_CONFIG ?= configs/eval_test_finetune.yaml
+INFER_PRETRAIN_CONFIG ?= configs/infer_pretrain.yaml
+INFER_FINETUNE_CONFIG ?= configs/infer_finetune.yaml
+EXPORT_PRETRAIN_CONFIG ?= configs/export_pretrain.yaml
+EXPORT_FINETUNE_CONFIG ?= configs/export_finetune.yaml
+
+TRAIN_CONFIG ?= $(if $(filter pretrain,$(MODEL_STAGE)),$(TRAIN_PRETRAIN_CONFIG),$(TRAIN_FINETUNE_CONFIG))
+EVAL_VAL_CONFIG ?= $(if $(filter pretrain,$(MODEL_STAGE)),$(EVAL_VAL_PRETRAIN_CONFIG),$(EVAL_VAL_FINETUNE_CONFIG))
+EVAL_TEST_CONFIG ?= $(if $(filter pretrain,$(MODEL_STAGE)),$(EVAL_TEST_PRETRAIN_CONFIG),$(EVAL_TEST_FINETUNE_CONFIG))
+INFER_CONFIG ?= $(if $(filter pretrain,$(MODEL_STAGE)),$(INFER_PRETRAIN_CONFIG),$(INFER_FINETUNE_CONFIG))
+EXPORT_CONFIG ?= $(if $(filter pretrain,$(MODEL_STAGE)),$(EXPORT_PRETRAIN_CONFIG),$(EXPORT_FINETUNE_CONFIG))
 DOCTOR_CONFIG ?= $(TRAIN_PRETRAIN_CONFIG)
 
 TRAIN_ARGS ?=
@@ -18,28 +29,39 @@ INFER_ARGS ?=
 EXPORT_ARGS ?=
 TEST_ARGS ?=
 
-.PHONY: help env env-update doctor inspect inspect-pretrain inspect-finetune \
-	inspect-val inspect-test train train-pretrain train-finetune \
-	train_pretrain train_finetune eval-val eval-test eval_val eval_test \
-	infer export test compile
+.PHONY: help env env-update doctor inspect inspect-all inspect-pretrain inspect-finetune \
+	inspect-val inspect-test inspect-val-pretrain inspect-val-finetune \
+	inspect-test-pretrain inspect-test-finetune train train-all \
+	pretrain finetune train-pretrain train-finetune train_pretrain train_finetune \
+	eval-val eval-test eval-val-pretrain eval-val-finetune \
+	eval-test-pretrain eval-test-finetune eval_val eval_test \
+	infer infer-pretrain infer-finetune export export-pretrain export-finetune \
+	test compile
+
+define require_model_stage
+$(if $(word 2,$(strip $(MODEL_STAGE))),$(error MODEL_STAGE must be exactly pretrain or finetune; got '$(MODEL_STAGE)'),$(if $(filter $(strip $(MODEL_STAGE)),pretrain finetune),,$(error MODEL_STAGE must be pretrain or finetune; got '$(MODEL_STAGE)')))
+endef
 
 help:
 	@echo Hand Landmarker training system
 	@echo   make env             Create the documented Conda environment
 	@echo   make env-update      Reconcile and prune the documented environment
 	@echo   make doctor          Verify Python, TensorFlow and GPU compatibility
-	@echo   make inspect         Validate all canonical Train/Val/Test datasets
+	@echo   make inspect         Validate MODEL_STAGE Train/Val/Test datasets [default: pretrain]
+	@echo   make inspect-all     Validate both pretrain and finetune routes
 	@echo   make inspect-pretrain Validate stage-1 Train/Val/Test and leakage
 	@echo   make inspect-finetune Validate stage-2 Train/Val/Test and leakage
-	@echo   make inspect-val     Validate the canonical Val ROI set
-	@echo   make inspect-test    Validate the canonical Test ROI set
+	@echo   make inspect-val     Validate MODEL_STAGE canonical Val ROI set
+	@echo   make inspect-test    Validate MODEL_STAGE canonical Test ROI set
 	@echo   make train-pretrain  Run stage-1 pseudo-label training
 	@echo   make train-finetune  Run stage-2 gold/pseudo fine-tuning
-	@echo   make train           Run both training stages sequentially
-	@echo   make eval-val        Evaluate and tune only on the validation set
-	@echo   make eval-test       Evaluate the frozen checkpoint on the test set
-	@echo   make infer           Run Palm + Hand inference on an image folder
-	@echo   make export          Export and validate the ONNX model
+	@echo   make train           Train only MODEL_STAGE [default: pretrain]
+	@echo   make train-all       Run both training stages sequentially
+	@echo   make eval-val        Evaluate MODEL_STAGE on validation
+	@echo   make eval-test       Evaluate MODEL_STAGE on locked test
+	@echo   make infer           Run Palm + MODEL_STAGE Hand inference
+	@echo   make export          Export and validate MODEL_STAGE ONNX
+	@echo   Set MODEL_STAGE=finetune to route generic targets to stage 2
 	@echo   make test            Run unit tests
 	@echo   make compile         Compile-check project Python sources
 
@@ -53,10 +75,16 @@ doctor:
 	$(PYTHON) -B scripts/check_environment.py --config "$(DOCTOR_CONFIG)"
 
 inspect:
+	$(call require_model_stage)
+	$(PYTHON) -B scripts/inspect_dataset.py --config "$(TRAIN_CONFIG)"
+
+inspect-all:
 	$(MAKE) inspect-pretrain
 	$(MAKE) inspect-finetune
-	$(MAKE) inspect-val
-	$(MAKE) inspect-test
+	$(MAKE) inspect-val-pretrain
+	$(MAKE) inspect-test-pretrain
+	$(MAKE) inspect-val-finetune
+	$(MAKE) inspect-test-finetune
 
 inspect-pretrain:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(TRAIN_PRETRAIN_CONFIG)"
@@ -65,10 +93,24 @@ inspect-finetune:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(TRAIN_FINETUNE_CONFIG)"
 
 inspect-val:
+	$(call require_model_stage)
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(EVAL_VAL_CONFIG)"
 
 inspect-test:
+	$(call require_model_stage)
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(EVAL_TEST_CONFIG)"
+
+inspect-val-pretrain:
+	$(PYTHON) -B scripts/inspect_dataset.py --config "$(EVAL_VAL_PRETRAIN_CONFIG)"
+
+inspect-val-finetune:
+	$(PYTHON) -B scripts/inspect_dataset.py --config "$(EVAL_VAL_FINETUNE_CONFIG)"
+
+inspect-test-pretrain:
+	$(PYTHON) -B scripts/inspect_dataset.py --config "$(EVAL_TEST_PRETRAIN_CONFIG)"
+
+inspect-test-finetune:
+	$(PYTHON) -B scripts/inspect_dataset.py --config "$(EVAL_TEST_FINETUNE_CONFIG)"
 
 train-pretrain:
 	$(PYTHON) -B scripts/train.py --config "$(TRAIN_PRETRAIN_CONFIG)" $(TRAIN_ARGS)
@@ -76,9 +118,17 @@ train-pretrain:
 train-finetune:
 	$(PYTHON) -B scripts/train.py --config "$(TRAIN_FINETUNE_CONFIG)" $(TRAIN_ARGS)
 
+pretrain: train-pretrain
+
+finetune: train-finetune
+
+train:
+	$(call require_model_stage)
+	$(PYTHON) -B scripts/train.py --config "$(TRAIN_CONFIG)" $(TRAIN_ARGS)
+
 # Keep the two dependent stages sequential even when the caller normally uses
 # parallel Make jobs.
-train:
+train-all:
 	$(MAKE) train-pretrain
 	$(MAKE) train-finetune
 
@@ -87,20 +137,48 @@ train_pretrain: train-pretrain
 train_finetune: train-finetune
 
 eval-val:
+	$(call require_model_stage)
 	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_VAL_CONFIG)" $(EVAL_ARGS)
 
 eval-test:
+	$(call require_model_stage)
 	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_TEST_CONFIG)" $(EVAL_ARGS)
+
+eval-val-pretrain:
+	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_VAL_PRETRAIN_CONFIG)" $(EVAL_ARGS)
+
+eval-val-finetune:
+	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_VAL_FINETUNE_CONFIG)" $(EVAL_ARGS)
+
+eval-test-pretrain:
+	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_TEST_PRETRAIN_CONFIG)" $(EVAL_ARGS)
+
+eval-test-finetune:
+	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_TEST_FINETUNE_CONFIG)" $(EVAL_ARGS)
 
 eval_val: eval-val
 
 eval_test: eval-test
 
 infer:
+	$(call require_model_stage)
 	$(PYTHON) -B scripts/infer_folder.py --config "$(INFER_CONFIG)" $(INFER_ARGS)
 
+infer-pretrain:
+	$(PYTHON) -B scripts/infer_folder.py --config "$(INFER_PRETRAIN_CONFIG)" $(INFER_ARGS)
+
+infer-finetune:
+	$(PYTHON) -B scripts/infer_folder.py --config "$(INFER_FINETUNE_CONFIG)" $(INFER_ARGS)
+
 export:
+	$(call require_model_stage)
 	$(PYTHON) -B scripts/export_onnx.py --config "$(EXPORT_CONFIG)" $(EXPORT_ARGS)
+
+export-pretrain:
+	$(PYTHON) -B scripts/export_onnx.py --config "$(EXPORT_PRETRAIN_CONFIG)" $(EXPORT_ARGS)
+
+export-finetune:
+	$(PYTHON) -B scripts/export_onnx.py --config "$(EXPORT_FINETUNE_CONFIG)" $(EXPORT_ARGS)
 
 test:
 	$(PYTHON) -B -m unittest discover -s tests -p "test_*.py" $(TEST_ARGS)

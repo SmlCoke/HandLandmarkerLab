@@ -1,0 +1,10 @@
+extends: export.yaml
+
+model:
+  checkpoint_stage: pretrain
+
+hand:
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/pretrain/checkpoints/best.weights.h5"
+
+export:
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/export/pretrain/hand_landmarker_v1_pretrain.onnx"

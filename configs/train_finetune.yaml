@@ -30,6 +30,7 @@ data:
 
 model:
   version: v1
+  checkpoint_stage: finetune
   input_shape: [1, 256, 256]
   input_layout: NCHW
   num_iterations: 8
