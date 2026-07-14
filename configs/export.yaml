@@ -42,6 +42,36 @@ export:
     absolute_tolerance: 1.0e-5
     relative_tolerance: 1.0e-4
     require_output_order_match: true
+  # Generated only as independent export artifacts. Canonical JSONL/ROI files
+  # are opened read-only and are never copied back into Train/Val/Test roots.
+  conversion_datasets:
+    enabled: true
+    output_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/export/pretrain/model_conversion"
+    selection_salt: hand_landmarker_v1_conversion_inputs_v1
+    input:
+      shape: [1, 1, 256, 256]
+      layout: NCHW
+      dtype: float32
+      normalization: uint8_div_255
+    sets:
+      calibrate_datasets:
+        minimum_count: 20
+        sources:
+          train:
+            config_path: configs/train_pretrain.yaml
+            count: 100
+            stratify_by: [sample_type, dataset_id]
+      evaluate_datasets:
+        minimum_count: 10
+        sources:
+          val:
+            config_path: configs/eval_val_pretrain.yaml
+            count: 25
+            stratify_by: [dataset_id, hand_presence.present, handedness.label]
+          test:
+            config_path: configs/eval_test_pretrain.yaml
+            count: 25
+            stratify_by: [dataset_id, hand_presence.present, handedness.label]
 
 runtime:
   device: cpu

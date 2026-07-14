@@ -128,3 +128,47 @@ datasets/
 | evaluate_datasets	 | 至少 10 |
 
 注意：数量不足会导致校准或评测流程失败，在打包前请务必检查。
+
+## 3. 当前训练系统的自动生成方式
+
+本仓库已把上述输入数据制作集成到 Hand Landmarker 的 ONNX `export` 步骤。默认执行：
+
+```bash
+make export
+```
+
+会在 ONNX 通过接口、算子和数值一致性校验后，从当前阶段的 canonical 数据中只读抽样并同时生成：
+
+- `calibrate_datasets`：从当前阶段 Train 抽取 100 个样本；
+- `evaluate_datasets`：从 Val、Test 各抽取 25 个样本，共 50 个；
+- 每个文件均为可直接送入 Hand Landmarker 的 `float32 (1,1,256,256)` NCHW tensor，像素值为灰度 `uint8/255`；
+- 不运行 Palm Detector、不读取原图、不重新裁切 ROI，也不保存模型输出。
+
+抽样不是运行时随机抽样，而是先按配置字段分层，再按 canonical record ID 的稳定 SHA-256 排序，因而源数据与配置不变时结果可复现。校准只使用 Train；Val/Test 仅进入转换工具的评测输入集。源 JSONL 和源 ROI 始终只读，生成文件与 Train/Val/Test 目录完全隔离。
+
+默认产物位于：
+
+```text
+${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/model_conversion/
+├── datasets/
+│   ├── calibrate_datasets/
+│   │   └── img_*.npy
+│   └── evaluate_datasets/
+│       └── img_*.npy
+├── datasets.zip
+├── datasets_manifest.json
+└── datasets_report.json
+```
+
+`datasets/` 内严格只有两级规定目录和 `.npy` 文件；来源追踪清单与报告放在它的外部。`datasets.zip` 内也只包含以 `datasets/` 为根的规定树，可直接交给转换流程。`manifest` 记录源配置、record ID、源 ROI 与 NPY 的 SHA-256，不包含模型输出。
+
+若只想重建数据包而不运行 TensorFlow/ONNX 导出，可执行：
+
+```bash
+make conversion-datasets
+# 或显式阶段：
+make conversion-datasets-pretrain
+make conversion-datasets-finetune
+```
+
+通用命令默认是 `pretrain`，只读取 pretrain Train、Val、Test，不要求 finetune 数据存在。finetune 命令才会读取 finetune Train。目标目录已存在时命令会失败；确认可替换后显式传入 `CONVERSION_ARGS=--overwrite`，或在 export 时使用 `EXPORT_ARGS=--overwrite`。

@@ -90,11 +90,14 @@ make export
 ```text
 ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/hand_landmarker_v1_<stage>.onnx
 ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/hand_landmarker_v1_<stage>.contract.json
+${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/model_conversion/datasets.zip
 ```
 
 其中 `<stage>` 为 `pretrain` 或 `finetune`，实际文件名为 `hand_landmarker_v1_<stage>.onnx` 与 `hand_landmarker_v1_<stage>.contract.json`。配置中的 `model.checkpoint_stage` 显式声明权重来源并写入 contract provenance；它不会从路径推断 checkpoint 内容。Make 的阶段 wrapper 会让默认权重、声明和产物目录保持一致。pretrain ONNX 是完整受支持的交付产物，不以 finetune ONNX 是否存在为前提。
 
-`export.overwrite: false` 同时保护 ONNX 与 `.contract.json`；任一产物已存在都会中止。只有确认两个文件都可以替换时才启用覆盖。
+`export` 还会自动制作模型转换输入：从当前阶段 Train 以稳定 SHA-256 分层抽取 100 个校准 ROI，从 Val/Test 各抽取 25 个评测 ROI。所有文件都是经 `uint8/255` 得到的 `float32 (1,1,256,256)` NCHW Hand ROI；不会运行 Palm、读取原图或写入模型输出。严格的 `datasets/` 树、可直接交付的 `datasets.zip` 以及树外的来源 manifest/report 位于同阶段 `model_conversion/`。详细格式见[模型转换数据制作说明](../model_conversion/conversion_method.md)。
+
+`export.overwrite: false` 同时保护 ONNX、`.contract.json` 与 `model_conversion/`；任一产物已存在都会中止。只有确认这些产物都可以替换时才启用覆盖。
 
 单次导出可以在不改 YAML 的情况下覆盖三个路径：
 
@@ -102,7 +105,8 @@ ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/hand_landmarker_v1_<sta
 python scripts/export_onnx.py --config configs/export.yaml \
   --weights-path /path/to/checkpoint.weights.h5 \
   --output-path /path/to/hand_landmarker.onnx \
-  --contract-path /path/to/hand_landmarker.contract.json
+  --contract-path /path/to/hand_landmarker.contract.json \
+  --conversion-output-dir /path/to/model_conversion
 ```
 
 确认可替换产物时再追加 `--overwrite`。这些 CLI 参数不会改写 YAML，也不会根据自定义权重路径自动改变 `model.checkpoint_stage`；应使用与权重真实来源一致的 `export_<stage>.yaml` wrapper。

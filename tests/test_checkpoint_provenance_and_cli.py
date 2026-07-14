@@ -311,18 +311,30 @@ class CheckpointStageContractTests(unittest.TestCase):
                         "hand_landmarker.export._shape_from_onnx",
                         side_effect=lambda item: item.expected_shape,
                     ):
-                        report = export_from_config(
-                            {
-                                "model": {"checkpoint_stage": "pretrain"},
-                                "hand": {"model_path": str(weights)},
-                                "export": {"model_path": str(output)},
-                            }
-                        )
+                        with mock.patch(
+                            "hand_landmarker.export.generate_conversion_datasets",
+                            return_value={"status": "ok", "counts": {"calibrate_datasets": 20}},
+                        ) as generate_conversion:
+                            report = export_from_config(
+                                {
+                                    "model": {"checkpoint_stage": "pretrain"},
+                                    "hand": {"model_path": str(weights)},
+                                    "export": {
+                                        "model_path": str(output),
+                                        "conversion_datasets": {
+                                            "enabled": True,
+                                            "output_dir": str(root / "model_conversion"),
+                                        },
+                                    },
+                                }
+                            )
+                            generate_conversion.assert_called_once()
             contract = json.loads(
                 output.with_suffix(".contract.json").read_text(encoding="utf-8")
             )
         self.assertEqual("pretrain", report["model_checkpoint_stage"])
         self.assertEqual("pretrain", contract["model_checkpoint_stage"])
+        self.assertEqual("ok", contract["conversion_datasets"]["status"])
 
 
 class CliOverrideTests(unittest.TestCase):
@@ -362,6 +374,7 @@ class CliOverrideTests(unittest.TestCase):
                 weights_path="new.weights.h5",
                 output_path="new.onnx",
                 contract_path="new.contract.json",
+                conversion_output_dir="new-conversion-output",
                 overwrite=True,
             ),
         )
@@ -369,6 +382,10 @@ class CliOverrideTests(unittest.TestCase):
         self.assertEqual("new.weights.h5", config["model"]["checkpoint"])
         self.assertEqual("new.onnx", config["export"]["model_path"])
         self.assertEqual("new.contract.json", config["export"]["contract_path"])
+        self.assertEqual(
+            "new-conversion-output",
+            config["export"]["conversion_datasets"]["output_dir"],
+        )
         self.assertTrue(config["export"]["overwrite"])
 
     def test_infer_cli_output_override_rehomes_jsonl(self):

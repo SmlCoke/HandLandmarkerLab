@@ -67,7 +67,9 @@ make MODEL_STAGE=finetune export
 - `eval-val`：直接读取 canonical `256×256` Hand ROI，只运行当前阶段 Hand；可做 presence threshold sweep，结果只用于该阶段的 Val 选型。
 - `eval-test`：直接读取 canonical `256×256` Hand ROI，只运行当前阶段 Hand；使用该阶段已冻结的阈值，不做 threshold tuning。
 - `infer`：对外部图片实际执行 Palm → rotated ROI → 当前阶段 Hand，并输出叠加骨架图和 `predictions.jsonl`。
-- `export`：导出当前阶段静态 batch=1 ONNX，检查输入/输出顺序、shape、FLOAT32 类型、A1 算子及属性约束，并用 zeros、ones 和随机输入做 Keras/ONNX 数值一致性验证。
+- `export`：导出当前阶段静态 batch=1 ONNX，检查输入/输出顺序、shape、FLOAT32 类型、A1 算子及属性约束，并用 zeros、ones 和随机输入做 Keras/ONNX 数值一致性验证；验证通过后，从当前阶段 Train 与公共 Val/Test 只读抽样，生成转换工具需要的 `datasets.zip`（100 个 Train 校准输入、25 个 Val + 25 个 Test 评测输入）。
+
+转换数据中的每个 `.npy` 都是已经完成灰度化与 `/255` 的 `float32 (1,1,256,256)` Hand ROI，不经过 Palm，也不包含模型输出。只生成转换数据而不导出 ONNX 时可运行 `make conversion-datasets`；pretrain 默认路线不读取 finetune 数据。完整目录和覆盖规则见[模型转换数据制作说明](docs/model_conversion/conversion_method.md)。
 
 pretrain 与 finetune 必须各自在 Val 上选择并冻结 threshold；不得把一个阶段的 threshold 直接用于另一个阶段。Val/Test 的阶段 wrapper 各自显式保存 `evaluation.hand_flag_threshold`：完成 `eval-val-<stage>` 后，把选定值写入对应的 `eval_test_<stage>.yaml`，再运行 Test。配置中的 `model.checkpoint_stage` 显式声明 checkpoint 来源，运行时会把它写入 provenance；该值不会根据文件路径或 finetune 数据是否存在来猜测。Make 的默认路由会让阶段、checkpoint 和输出目录保持一致，评估、推理、ONNX 和 contract 默认输出目录也都包含阶段名，两个阶段不会静默覆盖彼此的产物。
 

@@ -27,6 +27,7 @@ TRAIN_ARGS ?=
 EVAL_ARGS ?=
 INFER_ARGS ?=
 EXPORT_ARGS ?=
+CONVERSION_ARGS ?=
 TEST_ARGS ?=
 
 .PHONY: help env env-update doctor inspect inspect-all inspect-pretrain inspect-finetune \
@@ -36,6 +37,7 @@ TEST_ARGS ?=
 	eval-val eval-test eval-val-pretrain eval-val-finetune \
 	eval-test-pretrain eval-test-finetune eval_val eval_test \
 	infer infer-pretrain infer-finetune export export-pretrain export-finetune \
+	conversion-datasets conversion-datasets-pretrain conversion-datasets-finetune \
 	test compile
 
 define require_model_stage
@@ -61,6 +63,7 @@ help:
 	@echo   make eval-test       Evaluate MODEL_STAGE on locked test
 	@echo   make infer           Run Palm + MODEL_STAGE Hand inference
 	@echo   make export          Export and validate MODEL_STAGE ONNX
+	@echo   make conversion-datasets Build MODEL_STAGE conversion NPY inputs only
 	@echo   Set MODEL_STAGE=finetune to route generic targets to stage 2
 	@echo   make test            Run unit tests
 	@echo   make compile         Compile-check project Python sources
@@ -179,6 +182,16 @@ export-pretrain:
 
 export-finetune:
 	$(PYTHON) -B scripts/export_onnx.py --config "$(EXPORT_FINETUNE_CONFIG)" $(EXPORT_ARGS)
+
+conversion-datasets:
+	$(call require_model_stage)
+	$(PYTHON) -B scripts/build_conversion_datasets.py --config "$(EXPORT_CONFIG)" $(CONVERSION_ARGS)
+
+conversion-datasets-pretrain:
+	$(PYTHON) -B scripts/build_conversion_datasets.py --config "$(EXPORT_PRETRAIN_CONFIG)" $(CONVERSION_ARGS)
+
+conversion-datasets-finetune:
+	$(PYTHON) -B scripts/build_conversion_datasets.py --config "$(EXPORT_FINETUNE_CONFIG)" $(CONVERSION_ARGS)
 
 test:
 	$(PYTHON) -B -m unittest discover -s tests -p "test_*.py" $(TEST_ARGS)

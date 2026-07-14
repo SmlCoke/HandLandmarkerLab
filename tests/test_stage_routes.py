@@ -42,7 +42,7 @@ class StageConfigRouteTests(unittest.TestCase):
         )
         self.assertTrue(
             _normalized(load_config(CONFIGS / "infer.yaml")["output"]["dir"]).endswith(
-                "/inference/output/pretrain"
+                "/output/pretrain"
             )
         )
 
@@ -60,6 +60,30 @@ class StageConfigRouteTests(unittest.TestCase):
         serialized = json.dumps(config, ensure_ascii=False).replace("\\", "/").lower()
         self.assertNotIn("train_finetune_merged", serialized)
         self.assertNotIn("/v1/finetune/checkpoints/", serialized)
+
+    def test_conversion_dataset_sources_follow_export_stage(self):
+        for stage in ("pretrain", "finetune"):
+            with self.subTest(stage=stage):
+                config = load_config(CONFIGS / "export_{}.yaml".format(stage))
+                conversion = config["export"]["conversion_datasets"]
+                self.assertTrue(conversion["enabled"])
+                self.assertIn(
+                    "/export/{}/model_conversion".format(stage),
+                    _normalized(conversion["output_dir"]),
+                )
+                sources = conversion["sets"]
+                self.assertEqual(
+                    "configs/train_{}.yaml".format(stage),
+                    sources["calibrate_datasets"]["sources"]["train"]["config_path"],
+                )
+                self.assertEqual(
+                    "configs/eval_val_{}.yaml".format(stage),
+                    sources["evaluate_datasets"]["sources"]["val"]["config_path"],
+                )
+                self.assertEqual(
+                    "configs/eval_test_{}.yaml".format(stage),
+                    sources["evaluate_datasets"]["sources"]["test"]["config_path"],
+                )
 
     def test_stage_wrappers_extend_defaults_and_isolate_artifacts(self):
         outputs = {}
@@ -131,6 +155,7 @@ class MakeStageRouteTests(unittest.TestCase):
             "eval-test": "configs/eval_test_pretrain.yaml",
             "infer": "configs/infer_pretrain.yaml",
             "export": "configs/export_pretrain.yaml",
+            "conversion-datasets": "configs/export_pretrain.yaml",
         }
         for target, config_path in expected.items():
             with self.subTest(target=target):
@@ -147,6 +172,7 @@ class MakeStageRouteTests(unittest.TestCase):
             "eval-test": "configs/eval_test_finetune.yaml",
             "infer": "configs/infer_finetune.yaml",
             "export": "configs/export_finetune.yaml",
+            "conversion-datasets": "configs/export_finetune.yaml",
         }
         for target, config_path in expected.items():
             with self.subTest(target=target):

@@ -8,3 +8,16 @@ hand:
 
 export:
   model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/export/finetune/hand_landmarker_v1_finetune.onnx"
+  conversion_datasets:
+    output_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/export/finetune/model_conversion"
+    sets:
+      calibrate_datasets:
+        sources:
+          train:
+            config_path: configs/train_finetune.yaml
+      evaluate_datasets:
+        sources:
+          val:
+            config_path: configs/eval_val_finetune.yaml
+          test:
+            config_path: configs/eval_test_finetune.yaml

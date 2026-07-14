@@ -137,6 +137,8 @@ make eval-val
 make eval-test
 make infer
 make export
+# 仅重建模型转换校准/评测输入时：
+make conversion-datasets
 ```
 
 `MODEL_STAGE` 默认是 `pretrain`，所以这组通用命令构成一个不依赖 finetune 数据的完整闭环。`make train` 只训练当前阶段，不再隐式顺序执行两个阶段。Val threshold 必须先为当前阶段独立选择并冻结，Test 才能运行；pretrain 与 finetune 的 threshold 不能互用。
@@ -163,15 +165,17 @@ eval-val-pretrain      eval-val-finetune
 eval-test-pretrain     eval-test-finetune
 infer-pretrain         infer-finetune
 export-pretrain        export-finetune
+conversion-datasets-pretrain  conversion-datasets-finetune
 ```
 
-`inspect-all` 与 `train-all` 才会依次处理两个阶段，且仅应在 finetune canonical 数据真实存在时使用。默认产物按 stage 隔离：评估写入 `hand_landmarker_runs/v1/eval/<stage>/<split>`，外部推理写入 `inference/output/<stage>`，导出写入 `hand_landmarker_runs/v1/export/<stage>`。
+`inspect-all` 与 `train-all` 才会依次处理两个阶段，且仅应在 finetune canonical 数据真实存在时使用。默认产物按 stage 隔离：评估写入 `hand_landmarker_runs/v1/eval/<stage>/<split>`，外部推理写入 `inference/output/<stage>`，导出写入 `hand_landmarker_runs/v1/export/<stage>`。`make export` 会自动在同阶段 `model_conversion/` 中制作严格的 `datasets.zip`；`make conversion-datasets` 只执行这一步，不加载 TensorFlow 或 ONNX。
 
 Make 仍只向脚本传入一个任务配置，但评估、推理和导出支持显式单次覆盖：
 
 - `evaluate.py`：`--model-path`、`--output-dir`、`--overwrite`；
 - `infer_folder.py`：`--model-path`、`--output-dir`、`--overwrite`；
-- `export_onnx.py`：`--weights-path`、`--output-path`、`--contract-path`、`--overwrite`。
+- `export_onnx.py`：`--weights-path`、`--output-path`、`--contract-path`、`--conversion-output-dir`、`--overwrite`；
+- `build_conversion_datasets.py`：`--output-dir`、`--overwrite`。
 
 覆盖不会改写 YAML，也不会根据自定义权重路径自动改变 `model.checkpoint_stage`。完整参数以对应脚本的 `--help` 为准。
 

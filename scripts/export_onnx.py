@@ -30,6 +30,10 @@ def _apply_cli_overrides(config, args):
             output.pop("model_path", None)
     if args.contract_path:
         export["contract_path"] = args.contract_path
+    if getattr(args, "conversion_output_dir", None):
+        export.setdefault("conversion_datasets", {})[
+            "output_dir"
+        ] = args.conversion_output_dir
     if args.overwrite:
         export["overwrite"] = True
     return config
@@ -42,9 +46,13 @@ def main() -> None:
     parser.add_argument("--output-path", help="Override export.model_path")
     parser.add_argument("--contract-path", help="Override export.contract_path")
     parser.add_argument(
+        "--conversion-output-dir",
+        help="Override export.conversion_datasets.output_dir",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Authorize replacement of existing ONNX and contract outputs",
+        help="Authorize replacement of existing ONNX, contract, and conversion dataset outputs",
     )
     args = parser.parse_args()
     config = _apply_cli_overrides(load_config(args.config), args)

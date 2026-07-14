@@ -14,6 +14,10 @@ from .contracts import (
     validate_checkpoint_path_stage,
     validate_model_checkpoint_stage,
 )
+from .conversion_datasets import (
+    generate_conversion_datasets,
+    guard_conversion_dataset_output,
+)
 from .io_utils import sha256_file, write_json
 
 
@@ -242,9 +246,14 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             config,
             resolve_path(str(preflight_weights), config),
         )
+    guard_conversion_dataset_output(
+        config,
+        overwrite=bool(preflight_export.get("overwrite", False)),
+    )
     # Must be set before importing TensorFlow; this script is a CPU-side
     # serialization/parity job and must not reserve the training GPU.
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    conversion_datasets = None
     try:
         import onnx
         import onnxruntime as ort
@@ -382,6 +391,10 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
                     attribute_audit["violations"]
                 )
             )
+        # Build conversion inputs only after the temporary ONNX has passed all
+        # interface, operator, and parity checks.  A dataset failure therefore
+        # cannot replace the final ONNX artifact.
+        conversion_datasets = generate_conversion_datasets(config)
         os.replace(str(temporary), str(output_path))
     finally:
         if temporary.exists():
@@ -410,6 +423,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "normalization": {"dtype": "float32", "range": [0.0, 1.0], "board_source": "uint8 gray / 255"},
         "contract": MODEL_IO,
         "board_runtime_contract": BOARD_CONTRACT,
+        "conversion_datasets": conversion_datasets,
     }
     write_json(contract_path, report)
     report["contract_path"] = str(contract_path)
