@@ -70,19 +70,6 @@ make paths
         └── val_merged/
 ```
 
-同时自动创建可供文件管理器直接浏览的审查工作区：
-
-```text
-hand_landmarker_reviews/<HAND_PRETRAIN_ID>/
-├── negative_candidates/              # 删除有手/不确定图片，只保留明确无手图片
-│   ├── NEG_RUNTIME_CANDIDATE/<dataset_id>/*.png
-│   └── NEG_LOW_PALM_CANDIDATE/<dataset_id>/*.png
-├── review_manifest.jsonl              # 程序生成；禁止手工修改
-├── review_report.json
-├── REVIEW_INSTRUCTIONS.md
-└── negative_review_decisions.jsonl    # 完成复核后由程序自动生成
-```
-
 新的数据提纯或训练不得复用已有 ID。建议按 `v2-pretrain-r1`、`v2-pretrain-r2` 递增；系统默认拒绝覆盖非空训练目录。
 
 ## 3. 持久化提纯产物
@@ -118,6 +105,19 @@ train_pretrain_curated/<HAND_PRETRAIN_ID>/
 `landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。`train_pretrain_curated/.../review_images` 是冻结的内部审计副本，`hand_landmarker_reviews/.../negative_candidates` 才是人工删除式复核工作区。人工完成后，程序仅把工作区中仍存在、manifest 匹配且 SHA-256 未改变的图片写成 `CONFIRMED_NEGATIVE`；自动重叠门禁仍可拒绝其中存在冲突的样本。
 
 训练入口会验证 labels、materialized ROI 和 manifest 的 SHA-256。提纯不是训练时的内存过滤，因此训练结束后仍能复核当时真正使用的 JSONL 和图片。
+
+执行命令 `make pretrain-curate` 还会自动创建负样本人工复核工作区：
+
+```text
+hand_landmarker_reviews/<HAND_PRETRAIN_ID>/
+├── negative_candidates/              # 删除有手/不确定图片，只保留明确无手图片
+│   ├── NEG_RUNTIME_CANDIDATE/<dataset_id>/*.png
+│   └── NEG_LOW_PALM_CANDIDATE/<dataset_id>/*.png
+├── review_manifest.jsonl              # 程序生成；禁止手工修改
+├── review_report.json
+├── REVIEW_INSTRUCTIONS.md
+└── negative_review_decisions.jsonl    # 完成复核后由程序自动生成
+```
 
 ## 4. 人工完整操作流程
 
