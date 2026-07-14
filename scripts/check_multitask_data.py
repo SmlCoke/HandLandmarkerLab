@@ -35,6 +35,7 @@ def check_multitask_data(config: Mapping[str, Any]) -> Dict[str, Any]:
         for key, value in dict(gate.get("minimum_confirmed_by_sample_type") or {}).items()
     }
     required_review_fields = [str(value) for value in gate.get("require_review_fields", [])]
+    required_review_method = str(gate.get("require_review_method") or "")
     positives = 0
     confirmed = []
     violations = []
@@ -60,6 +61,13 @@ def check_multitask_data(config: Mapping[str, Any]) -> Dict[str, Any]:
                 "{}: confirmed negative lacks review fields {}".format(row.get("crop_id"), missing)
             )
             continue
+        if required_review_method and str(review.get("review_method") or "") != required_review_method:
+            violations.append(
+                "{}: confirmed negative has review_method {!r}; expected {!r}".format(
+                    row.get("crop_id"), review.get("review_method"), required_review_method
+                )
+            )
+            continue
         confirmed.append(row)
 
     counts = Counter(str(row.get("sample_type")) for row in confirmed)
@@ -83,6 +91,7 @@ def check_multitask_data(config: Mapping[str, Any]) -> Dict[str, Any]:
         "requirements": {
             "minimum_confirmed_negatives": minimum_total,
             "minimum_confirmed_by_sample_type": minimum_by_type,
+            "require_review_method": required_review_method,
             "require_review_fields": required_review_fields,
         },
         "checks": checks,

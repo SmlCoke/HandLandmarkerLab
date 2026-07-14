@@ -9,7 +9,6 @@ ENV_FILE := environment.yml
 # from the separate DatasetFab repository under /root/autodl-tmp.
 HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
 HAND_PRETRAIN_ID := v2-pretrain-r1
-HAND_PRETRAIN_REVIEW_FILE := $(HAND_TRAIN_ROOT)/hand_landmarker_reviews/$(HAND_PRETRAIN_ID)/negative_review_decisions.jsonl
 export HAND_TRAIN_ROOT HAND_PRETRAIN_ID
 
 CURATE_CONFIG := configs/curate_pretrain.yaml
@@ -48,8 +47,8 @@ help:
 	@echo   make env-create                  Create the documented Conda environment
 	@echo   make env-update                  Reconcile the documented Conda environment
 	@echo   make doctor                      Verify Python, TensorFlow and GPU
-	@echo   make pretrain-curate             Persist geometry data and the negative review pack
-	@echo   make pretrain-curate-reviewed    Rebuild curation with human review decisions
+	@echo   make pretrain-curate             Persist geometry data and create the visual review folder
+	@echo   make pretrain-curate-reviewed    Confirm retained review images and rebuild multitask data
 	@echo   make inspect-geometry            Audit geometry Train, Val and locked Test
 	@echo   make inspect-geometry-smoke      Audit the fixed 128-ROI smoke set
 	@echo   make pretrain-geometry-smoke     Train and verify the geometry smoke gate
@@ -74,7 +73,6 @@ help:
 paths:
 	@echo HAND_TRAIN_ROOT=$(HAND_TRAIN_ROOT)
 	@echo HAND_PRETRAIN_ID=$(HAND_PRETRAIN_ID)
-	@echo HAND_PRETRAIN_REVIEW_FILE=$(HAND_PRETRAIN_REVIEW_FILE)
 	@echo CURATED_ROOT=$(HAND_TRAIN_ROOT)/train_pretrain_curated/$(HAND_PRETRAIN_ID)
 	@echo RUN_ROOT=$(HAND_TRAIN_ROOT)/hand_landmarker_runs/$(HAND_PRETRAIN_ID)
 
@@ -91,7 +89,7 @@ pretrain-curate:
 	$(PYTHON) -B scripts/curate_pretrain.py --config "$(CURATE_CONFIG)" $(CURATE_ARGS)
 
 pretrain-curate-reviewed:
-	$(PYTHON) -B scripts/curate_pretrain.py --config "$(CURATE_CONFIG)" --review-decisions "$(HAND_PRETRAIN_REVIEW_FILE)" --overwrite $(CURATE_ARGS)
+	$(PYTHON) -B scripts/curate_pretrain.py --config "$(CURATE_CONFIG)" --finalize-retained-review --overwrite $(CURATE_ARGS)
 
 inspect-geometry:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(GEOMETRY_CONFIG)"

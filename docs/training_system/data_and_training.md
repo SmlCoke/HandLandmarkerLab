@@ -45,7 +45,7 @@ HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
 HAND_PRETRAIN_ID := v2-pretrain-r1
 ```
 
-`HAND_TRAIN_ROOT` 是当前训练系统版本的唯一数据盘根；`HAND_PRETRAIN_ID` 同时标识提纯快照、geometry/multitask run、评估、推理和导出。review 文件路径由这两个值派生，不再维护 curated ID、run ID、phase 三套外部变量。每次正式实验前直接修改并提交这两行。不要只在 shell 中临时 `export` 一个新值，否则后续难以仅凭仓库版本复核训练使用了哪套数据与输出目录。执行以下命令可核对本次 Make 实际使用的值：
+`HAND_TRAIN_ROOT` 是当前训练系统版本的唯一数据盘根；`HAND_PRETRAIN_ID` 同时标识提纯快照、geometry/multitask run、评估、推理和导出。review decisions 路径写在 `configs/curate_pretrain.yaml`，由程序生成，不是 Makefile 变量，也不需要人工创建目录或编写 JSONL。不再维护 curated ID、run ID、phase 三套外部变量。每次正式实验前直接修改并提交这两行。不要只在 shell 中临时 `export` 一个新值，否则后续难以仅凭仓库版本复核训练使用了哪套数据与输出目录。执行以下命令可核对本次 Make 实际使用的值：
 
 ```bash
 make paths
@@ -61,13 +61,26 @@ make paths
         ├── eval_sources/
         ├── hand_landmarker_inference/
         ├── hand_landmarker_runs/
-        ├── hand_landmarker_reviews/
+        ├── hand_landmarker_reviews/       # curate 自动创建的可视化审查工作区
         ├── peak_train_data/
         ├── soar_train_data/
         ├── test_merged/
         ├── train_pretrain_merged/
         ├── train_pretrain_curated/
         └── val_merged/
+```
+
+同时自动创建可供文件管理器直接浏览的审查工作区：
+
+```text
+hand_landmarker_reviews/<HAND_PRETRAIN_ID>/
+├── negative_candidates/              # 删除有手/不确定图片，只保留明确无手图片
+│   ├── NEG_RUNTIME_CANDIDATE/<dataset_id>/*.png
+│   └── NEG_LOW_PALM_CANDIDATE/<dataset_id>/*.png
+├── review_manifest.jsonl              # 程序生成；禁止手工修改
+├── review_report.json
+├── REVIEW_INSTRUCTIONS.md
+└── negative_review_decisions.jsonl    # 完成复核后由程序自动生成
 ```
 
 新的数据提纯或训练不得复用已有 ID。建议按 `v2-pretrain-r1`、`v2-pretrain-r2` 递增；系统默认拒绝覆盖非空训练目录。
@@ -102,7 +115,7 @@ train_pretrain_curated/<HAND_PRETRAIN_ID>/
     └── sha256_manifest.json
 ```
 
-`landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。待审负例及其图片写入磁盘，但绝不会因为文件存在就自动进入训练。人工确认后重新提纯，只有 `INCLUDE_CONFIRMED_NEGATIVE` 才会进入 `multitask.jsonl` 和正式 `images/`。
+`landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。`train_pretrain_curated/.../review_images` 是冻结的内部审计副本，`hand_landmarker_reviews/.../negative_candidates` 才是人工删除式复核工作区。人工完成后，程序仅把工作区中仍存在、manifest 匹配且 SHA-256 未改变的图片写成 `CONFIRMED_NEGATIVE`；自动重叠门禁仍可拒绝其中存在冲突的样本。
 
 训练入口会验证 labels、materialized ROI 和 manifest 的 SHA-256。提纯不是训练时的内存过滤，因此训练结束后仍能复核当时真正使用的 JSONL 和图片。
 
@@ -135,6 +148,8 @@ make pretrain-curate
 <curated_root>/audit/negative_review_queue.jsonl
 <curated_root>/audit/review_image_manifest.jsonl
 <curated_root>/review_images/
+${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/
+${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json
 ```
 
 `curation_report.json` 中至少需要核对：
@@ -147,51 +162,23 @@ make pretrain-curate
 
 ### 4.3 人工复核负例
 
-逐行读取 `audit/negative_review_queue.jsonl`。每一行的：
+直接递归打开 `hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/`：
 
-- `crop_id` 是写回决策文件的唯一键；
-- `review_crop_path` 指向本次快照冻结的 256×256 待审 ROI；
-- `sample_type` 区分 runtime 与 low-Palm 候选；
-- `pretrain_curation.reasons` 给出进入 HOLD 的原因；
-- `pretrain_curation.review_image_sha256` 可与 manifest 交叉核验。
+- 图片中只要存在手、手指、手腕或疑似手部区域，就删除该图片；
+- 遮挡、模糊、过暗、过曝、边缘局部或无法确定的图片也删除；
+- 只有明确无手的背景 ROI 才保留；
+- 不要增加、改名、移动或编辑图片，否则 manifest/哈希门禁会拒绝；
+- `NEG_RUNTIME_CANDIDATE`、`NEG_LOW_PALM_CANDIDATE` 和各 `dataset_id` 已分目录，可由三人直接按目录分工；无需记录逐图 reviewer，也无需手写 JSONL。
 
-判定标准必须保守：
+配置中的 `review.reviewer: hlml-visual-review-team` 表示这是一批由三人团队共同完成的可视化复核。`make pretrain-curate-reviewed` 会为所有保留图片统一生成 `reviewer`、`reviewed_at`、`review_method` 和图片 SHA-256。运行该命令本身就是“全部目录已审完”的显式确认，因此未完成前不要运行。
 
-- ROI 中完全没有手、手指、手腕或足以构成手部特征的局部区域，才标记 `CONFIRMED_NEGATIVE`；
-- 只要能看到手，即使 MediaPipe 没检出、手很小、模糊、遮挡或在 ROI 边缘，也标记 `FALSE_NEGATIVE_HAND_VISIBLE`；
-- 无法确定、曝光严重、裁剪含糊或需要第二人复核，标记 `HOLD`；
-- 不要因为 Palm score 低或 teacher 无输出就判负；
-- 同一个人最好分两轮复核，或由第二名 reviewer 抽检全部 confirmed negative 的至少 10%。
-
-决策文件固定放在 Makefile 打印的 `HAND_PRETRAIN_REVIEW_FILE`，默认是：
-
-```text
-${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<PRETRAIN_ID>/negative_review_decisions.jsonl
-```
-
-先创建目录：
-
-```bash
-mkdir -p /root/autodl-tmp/TrainFab/HLML-2.0/hand_landmarker_reviews/v2-pretrain-r1
-```
-
-每行格式如下；JSONL 不能带数组外壳，`reviewer` 与 `reviewed_at` 必填：
-
-```json
-{"crop_id":"peak:000001","decision":"CONFIRMED_NEGATIVE","reviewer":"alice","reviewed_at":"2026-07-14T21:00:00+08:00","notes":"two-pass review; empty ROI"}
-{"crop_id":"peak:000002","decision":"FALSE_NEGATIVE_HAND_VISIBLE","reviewer":"alice","reviewed_at":"2026-07-14T21:01:00+08:00","notes":"visible fingers at right edge"}
-{"crop_id":"soar:000003","decision":"HOLD","reviewer":"alice","reviewed_at":"2026-07-14T21:02:00+08:00","notes":"motion blur; needs second review"}
-```
-
-决策文件可以只覆盖已经看完的子集；未出现的 crop 继续保持 HOLD。不得批量把剩余记录自动填成 `CONFIRMED_NEGATIVE`。
-
-### 4.4 用人工决策重建提纯快照
+### 4.4 从保留图片自动生成决策并重建快照
 
 ```bash
 make pretrain-curate-reviewed
 ```
 
-该命令读取 Makefile 固定的 review 文件并显式重建同一个 curated ID。重建后检查：
+该命令扫描 `negative_candidates/` 中仍存在的图片，对照 `review_manifest.jsonl` 检查身份和 SHA-256，自动生成 YAML 所指定的 `negative_review_decisions.jsonl`，再显式重建同一个 curated ID。被删除的图片继续保持 HOLD，不会进入训练；自动检测到与已确认手重叠的候选即使被保留，也仍不会进入 multitask。重建后检查：
 
 ```bash
 make check-multitask-data
@@ -202,12 +189,12 @@ make check-multitask-data
 - confirmed negative 总数不少于 500；
 - `NEG_RUNTIME_CANDIDATE` 不少于 100；
 - `NEG_LOW_PALM_CANDIDATE` 不少于 100；
-- 每个进入 multitask 的 negative 都带 `CONFIRMED_NEGATIVE`、`reviewer`、`reviewed_at`；
+- 每个进入 multitask 的 negative 都带 `CONFIRMED_NEGATIVE`、团队 reviewer、时间、review method 和审查图片 SHA-256；
 - 不允许任何未复核 negative 混入。
 
 门槛写在 `configs/train_multitask.yaml`，变更门槛必须作为一次明确的配置变更提交，不能通过删掉 gate 绕过。数量不足时仍可训练 geometry，但不可启动 multitask。
 
-`qc/sha256_manifest.json` 和 `qc/curation_report.json` 会记录 review 文件路径、SHA-256 与决策数。确认后的 multitask JSONL 和图片全部保留在磁盘。
+`hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json` 记录原候选数、保留确认数和删除数；`qc/sha256_manifest.json` 与 `qc/curation_report.json` 记录自动生成 decisions 文件的路径、SHA-256 和决策数。确认后的 multitask JSONL 和图片全部保留在磁盘。
 
 ### 4.5 Geometry 阶段
 
@@ -375,7 +362,7 @@ model_summary.txt
 
 - 训练所用 Git commit 与 dirty 状态；
 - Makefile 中的 `HAND_TRAIN_ROOT`、`HAND_PRETRAIN_ID` 和所执行的显式阶段目标；
-- curation manifest、review decision SHA-256、训练 labels SHA-256、逐图 SHA-256；
+- curation manifest、review manifest/report、自动 decision SHA-256、训练 labels SHA-256、逐图 SHA-256；
 - best checkpoint SHA-256 与 best epoch；
 - Val 选择的 threshold；
 - Test、infer 与 export 的模型 SHA-256；
@@ -399,7 +386,7 @@ make infer-geometry
 人工负例与 multitask：
 
 ```bash
-# 人工填写 Makefile 所示 HAND_PRETRAIN_REVIEW_FILE 后
+# 删除 negative_candidates 中所有有手或不确定图片后
 make pretrain-curate-reviewed
 make check-multitask-data
 make pretrain-multitask

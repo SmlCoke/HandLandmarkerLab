@@ -46,4 +46,5 @@ multitask_gate:
   minimum_confirmed_by_sample_type:
     NEG_RUNTIME_CANDIDATE: 100
     NEG_LOW_PALM_CANDIDATE: 100
-  require_review_fields: [reviewer, reviewed_at]
+  require_review_method: retained_after_visual_deletion_review
+  require_review_fields: [reviewer, reviewed_at, review_method, review_image_sha256]

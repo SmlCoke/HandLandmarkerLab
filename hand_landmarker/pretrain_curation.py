@@ -15,11 +15,12 @@ import os
 import shutil
 import tempfile
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .config import load_config, resolve_path
-from .io_utils import read_jsonl, sha256_file, write_json, write_jsonl
+from .io_utils import image_files, read_jsonl, sha256_file, write_json, write_jsonl
 
 
 CURATION_SCHEMA = "pretrain_curation_v1"
@@ -331,6 +332,244 @@ def _load_review_decisions(
     return decisions
 
 
+def _safe_path_component(value: Any) -> str:
+    text = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in str(value or "unknown")
+    ).strip("_")
+    return text or "unknown"
+
+
+def _negative_review_paths(
+    config: Mapping[str, Any], review: Mapping[str, Any]
+) -> Dict[str, Path]:
+    decisions_value = review.get("decisions_file")
+    if not str(decisions_value or "").strip():
+        raise ValueError("review.decisions_file is required")
+    decisions_file = resolve_path(str(decisions_value), config)
+    workspace_dir = decisions_file.parent
+    subdir = Path(str(review.get("candidates_subdir") or "negative_candidates"))
+    if subdir.is_absolute() or not subdir.parts or any(part in {"", ".", ".."} for part in subdir.parts):
+        raise ValueError("review.candidates_subdir must be a safe relative path")
+    return {
+        "workspace_dir": workspace_dir,
+        "candidates_dir": workspace_dir / subdir,
+        "decisions_file": decisions_file,
+        "manifest_file": workspace_dir / "review_manifest.jsonl",
+        "report_file": workspace_dir / "review_report.json",
+        "instructions_file": workspace_dir / "REVIEW_INSTRUCTIONS.md",
+    }
+
+
+def _materialize_review_candidate(source: Path, destination: Path, mode: str) -> str:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    used_mode = mode
+    if mode in {"hardlink", "hardlink_or_copy"}:
+        try:
+            os.link(str(source), str(destination))
+            return "hardlink"
+        except OSError:
+            if mode == "hardlink":
+                raise
+            used_mode = "copy"
+    if used_mode == "copy":
+        shutil.copy2(str(source), str(destination))
+        return "copy"
+    raise ValueError("review.materialize_images must be copy, hardlink, or hardlink_or_copy")
+
+
+def _prepare_negative_review_workspace(
+    config: Mapping[str, Any],
+    review: Mapping[str, Any],
+    snapshot_root: Path,
+    final_output_root: Path,
+    source_labels_sha256: str,
+) -> Dict[str, Any]:
+    paths = _negative_review_paths(config, review)
+    workspace = paths["workspace_dir"]
+    if workspace.exists():
+        raise FileExistsError(
+            "Negative review workspace already exists; use a new HAND_PRETRAIN_ID or finish its review: {}".format(
+                workspace
+            )
+        )
+    workspace.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Optional[Path] = Path(
+        tempfile.mkdtemp(prefix=workspace.name + ".tmp.", dir=str(workspace.parent))
+    )
+    try:
+        assert temporary is not None
+        candidates_subdir = paths["candidates_dir"].relative_to(workspace)
+        queue = read_jsonl(snapshot_root / "audit" / "negative_review_queue.jsonl")
+        manifest_rows: List[Dict[str, Any]] = []
+        mode = str(review.get("materialize_images") or "hardlink_or_copy")
+        seen_relative = set()
+        for row in queue:
+            final_review_path = Path(str(row.get("review_crop_path") or ""))
+            try:
+                snapshot_relative = final_review_path.relative_to(final_output_root)
+            except ValueError as exc:
+                raise ValueError(
+                    "Review crop is outside the configured curation output: {}".format(
+                        final_review_path
+                    )
+                ) from exc
+            source = snapshot_root / snapshot_relative
+            if not source.is_file():
+                raise FileNotFoundError("Materialized review crop is missing: {}".format(source))
+            sample_type = _safe_path_component(row.get("sample_type"))
+            dataset_id = _safe_path_component(row.get("dataset_id"))
+            candidate_relative = Path(sample_type) / dataset_id / source.name
+            if candidate_relative.as_posix() in seen_relative:
+                raise ValueError("Duplicate review candidate path: {}".format(candidate_relative))
+            seen_relative.add(candidate_relative.as_posix())
+            destination = temporary / candidates_subdir / candidate_relative
+            used_mode = _materialize_review_candidate(source, destination, mode)
+            expected_hash = str(
+                ((row.get("pretrain_curation") or {}).get("review_image_sha256") or "")
+            )
+            actual_hash = sha256_file(destination)
+            if expected_hash and actual_hash != expected_hash:
+                raise RuntimeError(
+                    "Review candidate hash mismatch for {}".format(row.get("crop_id"))
+                )
+            manifest_rows.append(
+                {
+                    "crop_id": str(row.get("crop_id")),
+                    "dataset_id": str(row.get("dataset_id")),
+                    "sample_type": str(row.get("sample_type")),
+                    "candidate_relative_path": candidate_relative.as_posix(),
+                    "candidate_path": str(paths["candidates_dir"] / candidate_relative),
+                    "sha256": actual_hash,
+                    "source_labels_sha256": source_labels_sha256,
+                    "automatic_reasons": list(
+                        (row.get("pretrain_curation") or {}).get("reasons") or []
+                    ),
+                    "materialization_method": used_mode,
+                }
+            )
+        manifest_rows.sort(key=lambda row: str(row["crop_id"]))
+        write_jsonl(temporary / paths["manifest_file"].name, manifest_rows)
+        instructions = (
+            "# Negative candidate visual review\n\n"
+            "Open `negative_candidates/` recursively. Delete every image that contains "
+            "a hand, fingers, wrist, or uncertain hand-like content. Retain only clear "
+            "background. Do not add, rename, move, or edit images. When all reviewers "
+            "finish, run `make pretrain-curate-reviewed`.\n"
+        )
+        with (temporary / paths["instructions_file"].name).open(
+            "w", encoding="utf-8", newline="\n"
+        ) as handle:
+            handle.write(instructions)
+        report = {
+            "status": "awaiting_visual_review",
+            "review_method": "delete_hand_images_retain_background",
+            "workspace_dir": str(workspace),
+            "candidates_dir": str(paths["candidates_dir"]),
+            "manifest_file": str(paths["manifest_file"]),
+            "decisions_file": str(paths["decisions_file"]),
+            "candidate_count": len(manifest_rows),
+            "source_labels_sha256": source_labels_sha256,
+        }
+        write_json(temporary / paths["report_file"].name, report)
+        os.replace(str(temporary), str(workspace))
+        temporary = None
+        return report
+    finally:
+        if temporary is not None and temporary.exists():
+            shutil.rmtree(str(temporary), ignore_errors=True)
+
+
+def _finalize_retained_negative_review(
+    config: Mapping[str, Any],
+    review: Mapping[str, Any],
+    source_labels_sha256: str,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    paths = _negative_review_paths(config, review)
+    if not paths["workspace_dir"].is_dir():
+        raise FileNotFoundError(
+            "Negative review workspace does not exist: {}".format(paths["workspace_dir"])
+        )
+    if not paths["candidates_dir"].is_dir():
+        raise FileNotFoundError(
+            "Negative review candidates directory does not exist: {}".format(
+                paths["candidates_dir"]
+            )
+        )
+    if not paths["manifest_file"].is_file():
+        raise FileNotFoundError(
+            "Negative review manifest does not exist: {}".format(paths["manifest_file"])
+        )
+    manifest_rows = [_clean_row(row) for row in read_jsonl(paths["manifest_file"])]
+    expected: Dict[str, Dict[str, Any]] = {}
+    for row in manifest_rows:
+        relative = str(row.get("candidate_relative_path") or "")
+        if not relative:
+            raise ValueError("Every negative review manifest row requires candidate_relative_path")
+        if relative in expected:
+            raise ValueError("Duplicate negative review candidate path: {}".format(relative))
+        if str(row.get("source_labels_sha256") or "") != source_labels_sha256:
+            raise ValueError(
+                "Negative review workspace belongs to a different source-label snapshot"
+            )
+        expected[relative] = row
+
+    actual: Dict[str, Path] = {}
+    for path in image_files(paths["candidates_dir"], recursive=True):
+        relative = path.relative_to(paths["candidates_dir"]).as_posix()
+        if relative in actual:
+            raise ValueError("Duplicate retained negative path: {}".format(relative))
+        actual[relative] = path
+    unknown = sorted(set(actual) - set(expected))
+    if unknown:
+        raise ValueError(
+            "Review folder contains images not present in review_manifest.jsonl: {}".format(
+                unknown[:10]
+            )
+        )
+    reviewer = str(review.get("reviewer") or "").strip()
+    if not reviewer:
+        raise ValueError("review.reviewer is required")
+    reviewed_at = datetime.now(timezone.utc).astimezone().isoformat()
+    decisions_rows: List[Dict[str, Any]] = []
+    for relative in sorted(actual):
+        row = expected[relative]
+        actual_hash = sha256_file(actual[relative])
+        if actual_hash != str(row.get("sha256") or ""):
+            raise ValueError(
+                "Retained review image was modified: {}".format(actual[relative])
+            )
+        decisions_rows.append(
+            {
+                "crop_id": str(row.get("crop_id")),
+                "decision": "CONFIRMED_NEGATIVE",
+                "reviewer": reviewer,
+                "reviewed_at": reviewed_at,
+                "review_method": "retained_after_visual_deletion_review",
+                "review_image_path": str(actual[relative].resolve()),
+                "review_image_sha256": actual_hash,
+            }
+        )
+    write_jsonl(paths["decisions_file"], decisions_rows)
+    report = {
+        "status": "visual_review_finalized",
+        "review_method": "delete_hand_images_retain_background",
+        "reviewer": reviewer,
+        "reviewed_at": reviewed_at,
+        "workspace_dir": str(paths["workspace_dir"]),
+        "candidates_dir": str(paths["candidates_dir"]),
+        "manifest_file": str(paths["manifest_file"]),
+        "decisions_file": str(paths["decisions_file"]),
+        "original_candidate_count": len(expected),
+        "retained_confirmed_count": len(decisions_rows),
+        "deleted_or_rejected_count": len(expected) - len(decisions_rows),
+        "decisions_sha256": sha256_file(paths["decisions_file"]),
+        "source_labels_sha256": source_labels_sha256,
+    }
+    write_json(paths["report_file"], report)
+    return _load_review_decisions(paths["decisions_file"], config), report
+
+
 def _decision_metadata(
     action: str,
     reasons: Sequence[str],
@@ -496,7 +735,9 @@ def _counter_dict(values: Iterable[Any]) -> Dict[str, int]:
 
 
 def curate_pretrain_from_config(
-    config: Union[Mapping[str, Any], str, Path], overwrite: Optional[bool] = None
+    config: Union[Mapping[str, Any], str, Path],
+    overwrite: Optional[bool] = None,
+    finalize_review: bool = False,
 ) -> Dict[str, Any]:
     """Create an immutable-on-success curated pretrain snapshot on disk."""
 
@@ -506,6 +747,7 @@ def curate_pretrain_from_config(
     source_cfg = dict(cfg.get("source", {}))
     output_cfg = dict(cfg.get("output", {}))
     rules = dict(cfg.get("curation", {}))
+    review_cfg = dict(cfg.get("review", {}))
     source_labels = resolve_path(source_cfg.get("labels", ""), cfg)
     if not source_labels.is_file():
         raise FileNotFoundError("Source pretrain labels not found: {}".format(source_labels))
@@ -513,6 +755,15 @@ def curate_pretrain_from_config(
     if not str(output_cfg.get("dir", "")):
         raise ValueError("output.dir is required")
     allow_overwrite = bool(output_cfg.get("overwrite", False) if overwrite is None else overwrite)
+    review_paths = _negative_review_paths(cfg, review_cfg)
+    if finalize_review and not allow_overwrite:
+        raise ValueError("Finalizing retained negative review requires overwrite=true")
+    if not finalize_review and review_paths["workspace_dir"].exists():
+        raise FileExistsError(
+            "Negative review workspace already exists; use a new HAND_PRETRAIN_ID or finish its review: {}".format(
+                review_paths["workspace_dir"]
+            )
+        )
 
     source_hash = sha256_file(source_labels)
     records = [_clean_row(row) for row in read_jsonl(source_labels)]
@@ -530,13 +781,20 @@ def curate_pretrain_from_config(
         output_dir, source_labels, source_crops, allow_overwrite
     )
 
-    review_path_value = rules.get("negative_review_decisions")
-    decisions = _load_review_decisions(review_path_value, cfg)
-    review_path = resolve_path(str(review_path_value), cfg) if review_path_value else None
+    review_finalize_report: Optional[Dict[str, Any]] = None
+    if finalize_review:
+        decisions, review_finalize_report = _finalize_retained_negative_review(
+            cfg, review_cfg, source_hash
+        )
+        review_path = review_paths["decisions_file"]
+    else:
+        decisions = {}
+        review_path = None
     review_source = {
-        "path": str(review_path) if review_path else None,
+        "path": str(review_paths["decisions_file"]),
         "sha256": sha256_file(review_path) if review_path else None,
         "decision_count": len(decisions),
+        "method": "retained_after_visual_deletion_review" if finalize_review else None,
     }
     unknown_decisions = sorted(set(decisions) - set(crop_ids))
     if unknown_decisions:
@@ -758,6 +1016,12 @@ def curate_pretrain_from_config(
                 "record_count": len(records),
             },
             "negative_review_decisions": review_source,
+            "negative_review_workspace": {
+                "workspace_dir": str(review_paths["workspace_dir"]),
+                "candidates_dir": str(review_paths["candidates_dir"]),
+                "manifest_file": str(review_paths["manifest_file"]),
+                "decisions_file": str(review_paths["decisions_file"]),
+            },
             "config_path": str(config_path_value) if config_path_value else None,
             "config_sha256": config_hash,
             "output_dir": str(output_dir),
@@ -786,6 +1050,7 @@ def curate_pretrain_from_config(
             "source_labels": str(source_labels),
             "source_labels_sha256": source_hash,
             "negative_review_decisions": review_source,
+            "negative_review_workspace": None,
             "output_dir": str(output_dir),
             "counts": {
                 "source_records": len(records),
@@ -817,6 +1082,17 @@ def curate_pretrain_from_config(
             },
         }
         report_path = qc_dir / "curation_report.json"
+
+        if finalize_review:
+            report["negative_review_workspace"] = review_finalize_report
+        else:
+            report["negative_review_workspace"] = _prepare_negative_review_workspace(
+                cfg,
+                review_cfg,
+                temporary_dir,
+                output_dir,
+                source_hash,
+            )
         write_json(report_path, report)
 
         if output_dir.exists():

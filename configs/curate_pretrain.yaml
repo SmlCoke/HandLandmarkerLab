@@ -11,15 +11,21 @@ curation:
   normalized_coordinate_range: [0.0, 1.0]
 
   # A teacher abstention is never treated as verified background by default.
-  # `make pretrain-curate` leaves this empty and writes the review queue. Then
-  # `make pretrain-curate-reviewed` supplies the versioned decision JSONL.
-  negative_review_decisions: null
   overlap_core_landmark_ids: [0, 1, 5, 9, 13, 17]
   overlap_minimum_core_points: 3
 
   # This subset is persisted for the mandatory overfit gate before full train.
   smoke_subset_size: 128
   smoke_selection_salt: pretrain_landmark_smoke_v2
+
+review:
+  # The first curation run creates this directory. Reviewers delete every ROI
+  # containing a hand (or any uncertain hand-like content) and retain only
+  # visually confirmed background. The second run creates decisions_file.
+  decisions_file: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_reviews/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/negative_review_decisions.jsonl"
+  candidates_subdir: negative_candidates
+  reviewer: hlml-visual-review-team
+  materialize_images: hardlink_or_copy
 
 output:
   dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}"

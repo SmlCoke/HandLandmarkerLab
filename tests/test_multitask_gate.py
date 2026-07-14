@@ -28,6 +28,8 @@ def _negative(confirmed=True):
                 "decision": "CONFIRMED_NEGATIVE" if confirmed else "HOLD",
                 "reviewer": "tester",
                 "reviewed_at": "2026-07-14T12:00:00+08:00",
+                "review_method": "retained_after_visual_deletion_review",
+                "review_image_sha256": "a" * 64,
             },
         },
     }
@@ -42,7 +44,13 @@ class MultitaskGateTests(unittest.TestCase):
             "multitask_gate": {
                 "minimum_confirmed_negatives": 1,
                 "minimum_confirmed_by_sample_type": {"NEG_RUNTIME_CANDIDATE": 1},
-                "require_review_fields": ["reviewer", "reviewed_at"],
+                "require_review_method": "retained_after_visual_deletion_review",
+                "require_review_fields": [
+                    "reviewer",
+                    "reviewed_at",
+                    "review_method",
+                    "review_image_sha256",
+                ],
             },
         }
 
@@ -73,4 +81,3 @@ class MultitaskGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

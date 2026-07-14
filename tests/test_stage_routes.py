@@ -125,6 +125,16 @@ class MakePretrainRouteTests(unittest.TestCase):
         self.assertNotIn("HAND_DATA_ROOT", text)
         self.assertNotIn("HAND_PRETRAIN_CURATED_ID", text)
         self.assertNotIn("HAND_PRETRAIN_RUN_ID", text)
+        self.assertNotIn("HAND_PRETRAIN_REVIEW_FILE", text)
+
+    def test_review_path_and_visual_finalize_mode_live_in_curation_config(self):
+        config = load_config(CONFIGS / "curate_pretrain.yaml")
+        self.assertIn("/hand_landmarker_reviews/", _normalized(config["review"]["decisions_file"]))
+        self.assertEqual("negative_candidates", config["review"]["candidates_subdir"])
+        result = self._dry_run("pretrain-curate-reviewed")
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("--finalize-retained-review", result.stdout)
+        self.assertNotIn("--review-decisions", result.stdout)
 
     def test_explicit_targets_route_to_compact_configs(self):
         expected = {

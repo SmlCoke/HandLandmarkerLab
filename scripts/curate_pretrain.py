@@ -24,17 +24,16 @@ def main() -> None:
         help="Replace exactly the configured snapshot directory",
     )
     parser.add_argument(
-        "--review-decisions",
-        default=None,
-        help="Human negative-review JSONL; overrides curation.negative_review_decisions",
+        "--finalize-retained-review",
+        action="store_true",
+        help="Treat every retained, manifest-matched review image as a confirmed negative",
     )
     args = parser.parse_args()
     config = load_config(args.config)
-    if args.review_decisions:
-        config.setdefault("curation", {})["negative_review_decisions"] = args.review_decisions
     report = curate_pretrain_from_config(
         config,
         overwrite=True if args.overwrite else None,
+        finalize_review=args.finalize_retained_review,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
 

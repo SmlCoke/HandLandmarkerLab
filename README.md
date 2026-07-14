@@ -9,7 +9,7 @@ pretrain 分为两个显式阶段：
 
 未经人工复核的 `NEG_*_CANDIDATE` 是 teacher abstention，不是可信无手样本。系统会把它们及其 ROI 持久化到审查包，但 `make pretrain-multitask` 会 fail-closed，绝不会自动把它们作为负例训练。
 
-详细的分阶段原理、人工负例判定、JSONL 格式和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)。
+详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)。
 
 ## 固定接口
 
@@ -57,7 +57,7 @@ make eval-test-geometry
 make infer-geometry
 ```
 
-完成负例人工审查后：
+`make pretrain-curate` 会自动创建 `hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/`。三人分工浏览其中图片，删除所有“有手或不确定”的 ROI，只保留明确无手背景；不要新增、改名、移动或编辑图片。完成后执行：
 
 ```bash
 make pretrain-curate-reviewed
