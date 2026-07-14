@@ -89,6 +89,14 @@ python scripts/export_onnx.py --config configs/export.yaml \
 
 三个入口都支持 `--overwrite`，但只有在确认目标产物可以替换时才使用。CLI 覆盖只改变本次运行，不会改写 YAML，也不会根据自定义路径自动改变 `model.checkpoint_stage`；因此必须选用与权重真实来源一致的阶段配置。完整参数以各脚本 `--help` 为准。
 
+如果 ONNX 已通过格式、固定接口和数值一致性校验，但仅因项目维护的 A1 算子/属性清单不完整而被拦截，可以单次强制导出：
+
+```bash
+make export EXPORT_ARGS=--force
+```
+
+`--force` 只绕过 A1 算子名称与属性门禁，不会关闭其他导出校验，也不授权覆盖已有产物（需要覆盖时仍须另加 `--overwrite`）。生成的 contract 仍会记录完整算子清单、未列入白名单的算子、属性违规，以及 `forced: true`、`enforced: false`，便于继续交给官方工具链验证。默认 `make export` 行为不变，仍执行严格门禁。
+
 ## 数据入口
 
 正式 loader 只读取以下 canonical 文件，不读取 manifest，也不会把图片目录中的旧文件 glob 成训练样本：

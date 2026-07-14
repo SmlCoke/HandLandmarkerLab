@@ -18,3 +18,7 @@ outputs/
 *.weights.h5
 *.keras
 events.out.tfevents.*
+
+# temp
+tmp/
+temp/

@@ -382,10 +382,14 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         )
         unsupported = sorted(set(operators) - allowed_operators)
         strict_a1 = bool(export_config.get("strict_a1_operators", True))
-        if unsupported and strict_a1:
+        force_a1_operator_export = bool(
+            export_config.get("force_a1_operator_export", False)
+        )
+        enforce_a1_operator_contract = strict_a1 and not force_a1_operator_export
+        if unsupported and enforce_a1_operator_contract:
             raise ValueError("ONNX contains operators outside the A1 deployment contract: {}".format(unsupported))
         attribute_audit = _a1_attribute_audit(graph, onnx)
-        if attribute_audit["violations"] and strict_a1:
+        if attribute_audit["violations"] and enforce_a1_operator_contract:
             raise ValueError(
                 "ONNX violates A1 operator attribute constraints: {}".format(
                     attribute_audit["violations"]
@@ -416,6 +420,8 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "allowed": sorted(allowed_operators),
             "unsupported": unsupported,
             "strict": strict_a1,
+            "forced": force_a1_operator_export,
+            "enforced": enforce_a1_operator_contract,
             "attributes": attribute_audit,
         },
         "numeric_parity": parity,

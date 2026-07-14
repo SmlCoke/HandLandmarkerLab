@@ -81,6 +81,14 @@ make export
 
 `strict_a1_operators: true` 时，白名单外算子或任一属性违规都会让导出失败；失败的临时模型不会替换最终 ONNX。
 
+当项目内维护的清单尚未覆盖已经由 A1 官方工具链验证过的算子时，可以只对本次运行追加 `--force`：
+
+```bash
+make export EXPORT_ARGS=--force
+```
+
+该参数只绕过 A1 算子名称与属性门禁。`onnx.checker`、固定 I/O/类型/shape、静态 batch、opset 11、Keras↔ONNX 数值比对、转换数据检查和覆盖保护仍然执行。contract 的 `a1_operator_audit` 会保留 `unsupported` 与属性违规，并记录 `strict: true`、`forced: true`、`enforced: false`。若目标产物已存在，仍需单独、显式追加 `--overwrite`。
+
 目标优化图应只包含 `Conv/Add/LeakyRelu/MaxPool/Sigmoid`（允许无语义的 Identity）。Keras 源码中的 Permute 应由 tf2onnx 优化消除；若最终 ONNX 仍出现 Transpose、动态 shape、Div、Softmax 等，严格导出会失败，不应继续送入 A1 工具链。
 
 默认 parity 探针是 1 个全零、1 个全一和 4 个固定随机种子的 `[0,1]` 输入。契约报告对每个探针、每个输出 head 分别记录最大绝对/相对误差，并同时记录 Keras 与 ONNX 的 minimum、maximum、max-abs；landmark 输出还记录按板端规则推导的 scale divisor。验收使用配置中的 `atol=1e-5`、`rtol=1e-4` 做逐元素 `allclose`，任一 case/head 失败即中止导出。这里验证的是 Keras 与 ONNX 的数值等价及合成输入下的输出健康度，不是数据集精度，也不是 `.m1model` 板端实测。

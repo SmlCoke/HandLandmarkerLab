@@ -328,13 +328,55 @@ class CheckpointStageContractTests(unittest.TestCase):
                                     },
                                 }
                             )
-                            generate_conversion.assert_called_once()
+                            graph.graph.node = [
+                                SimpleNamespace(
+                                    name="runtime_reshape",
+                                    op_type="Reshape",
+                                    input=[],
+                                    attribute=[],
+                                )
+                            ]
+                            strict_output = root / "strict-reshape.onnx"
+                            with self.assertRaisesRegex(ValueError, "Reshape"):
+                                export_from_config(
+                                    {
+                                        "model": {"checkpoint_stage": "pretrain"},
+                                        "hand": {"model_path": str(weights)},
+                                        "export": {"model_path": str(strict_output)},
+                                    }
+                                )
+                            self.assertFalse(strict_output.exists())
+
+                            forced_output = root / "forced-reshape.onnx"
+                            forced_report = export_from_config(
+                                {
+                                    "model": {"checkpoint_stage": "pretrain"},
+                                    "hand": {"model_path": str(weights)},
+                                    "export": {
+                                        "model_path": str(forced_output),
+                                        "force_a1_operator_export": True,
+                                    },
+                                }
+                            )
+                            self.assertEqual(2, generate_conversion.call_count)
             contract = json.loads(
                 output.with_suffix(".contract.json").read_text(encoding="utf-8")
+            )
+            forced_contract = json.loads(
+                forced_output.with_suffix(".contract.json").read_text(
+                    encoding="utf-8"
+                )
             )
         self.assertEqual("pretrain", report["model_checkpoint_stage"])
         self.assertEqual("pretrain", contract["model_checkpoint_stage"])
         self.assertEqual("ok", contract["conversion_datasets"]["status"])
+        self.assertFalse(contract["a1_operator_audit"]["forced"])
+        self.assertTrue(contract["a1_operator_audit"]["enforced"])
+        self.assertEqual(
+            ["Reshape"], forced_report["a1_operator_audit"]["unsupported"]
+        )
+        self.assertTrue(forced_contract["a1_operator_audit"]["forced"])
+        self.assertFalse(forced_contract["a1_operator_audit"]["enforced"])
 
 
 class CliOverrideTests(unittest.TestCase):
@@ -376,6 +418,7 @@ class CliOverrideTests(unittest.TestCase):
                 contract_path="new.contract.json",
                 conversion_output_dir="new-conversion-output",
                 overwrite=True,
+                force=False,
             ),
         )
         self.assertEqual("new.weights.h5", config["hand"]["model_path"])
@@ -387,6 +430,31 @@ class CliOverrideTests(unittest.TestCase):
             config["export"]["conversion_datasets"]["output_dir"],
         )
         self.assertTrue(config["export"]["overwrite"])
+        self.assertNotIn("force_a1_operator_export", config["export"])
+
+    def test_export_cli_force_only_enables_a1_operator_bypass(self):
+        config = {
+            "export": {
+                "strict_a1_operators": True,
+                "overwrite": False,
+                "validate": {"enabled": True},
+            }
+        }
+        export_script._apply_cli_overrides(
+            config,
+            SimpleNamespace(
+                weights_path=None,
+                output_path=None,
+                contract_path=None,
+                conversion_output_dir=None,
+                overwrite=False,
+                force=True,
+            ),
+        )
+        self.assertTrue(config["export"]["strict_a1_operators"])
+        self.assertTrue(config["export"]["force_a1_operator_export"])
+        self.assertFalse(config["export"]["overwrite"])
+        self.assertEqual({"enabled": True}, config["export"]["validate"])
 
     def test_infer_cli_output_override_rehomes_jsonl(self):
         config = {

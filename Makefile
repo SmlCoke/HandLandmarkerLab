@@ -63,6 +63,7 @@ help:
 	@echo   make eval-test       Evaluate MODEL_STAGE on locked test
 	@echo   make infer           Run Palm + MODEL_STAGE Hand inference
 	@echo   make export          Export and validate MODEL_STAGE ONNX
+	@echo   make export EXPORT_ARGS=--force  Bypass only the A1 operator gate for one export
 	@echo   make conversion-datasets Build MODEL_STAGE conversion NPY inputs only
 	@echo   Set MODEL_STAGE=finetune to route generic targets to stage 2
 	@echo   make test            Run unit tests

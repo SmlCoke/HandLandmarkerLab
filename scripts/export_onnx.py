@@ -36,6 +36,8 @@ def _apply_cli_overrides(config, args):
         ] = args.conversion_output_dir
     if args.overwrite:
         export["overwrite"] = True
+    if getattr(args, "force", False):
+        export["force_a1_operator_export"] = True
     return config
 
 
@@ -53,6 +55,14 @@ def main() -> None:
         "--overwrite",
         action="store_true",
         help="Authorize replacement of existing ONNX, contract, and conversion dataset outputs",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Force export past only the A1 operator name/attribute gate; "
+            "all other export validation and overwrite protection remain enabled"
+        ),
     )
     args = parser.parse_args()
     config = _apply_cli_overrides(load_config(args.config), args)
