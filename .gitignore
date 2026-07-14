@@ -23,3 +23,4 @@ events.out.tfevents.*
 tmp/
 temp/
 *.ipynb_checkpoints/
+bak
