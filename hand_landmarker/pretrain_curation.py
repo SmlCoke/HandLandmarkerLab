@@ -1,0 +1,737 @@
+"""Persistent, auditable curation for pseudo-labelled pretrain data.
+
+Teacher abstentions are candidates, not verified background.  This module
+materializes a positive landmark snapshot and keeps every rejected or
+unverified row in an on-disk audit catalog instead of filtering at training
+time.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import shutil
+import tempfile
+from collections import Counter, defaultdict
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+
+from .config import load_config, resolve_path
+from .io_utils import read_jsonl, sha256_file, write_json, write_jsonl
+
+
+CURATION_SCHEMA = "pretrain_curation_v1"
+POSITIVE_SAMPLE_TYPES = {"POS_RUNTIME", "POS_LOW_PALM"}
+NEGATIVE_SAMPLE_TYPES = {"NEG_RUNTIME_CANDIDATE", "NEG_LOW_PALM_CANDIDATE"}
+REVIEW_DECISIONS = {"CONFIRMED_NEGATIVE", "FALSE_NEGATIVE_HAND_VISIBLE", "HOLD"}
+
+
+def _config_mapping(config: Union[Mapping[str, Any], str, Path]) -> Dict[str, Any]:
+    return load_config(config) if isinstance(config, (str, Path)) else dict(config)
+
+
+def verify_curation_manifest(
+    config: Mapping[str, Any],
+    dataset: Mapping[str, Any],
+    error_type=ValueError,
+) -> Optional[Dict[str, Any]]:
+    """Authenticate a configured curated label snapshot before it is consumed."""
+
+    manifest_value = dataset.get("curation_manifest")
+    if not manifest_value:
+        return None
+    manifest_path = resolve_path(str(manifest_value), config)
+    if not manifest_path.is_file():
+        raise error_type("Configured curation manifest does not exist: {}".format(manifest_path))
+    try:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise error_type(
+            "Could not read curation manifest {}: {}".format(manifest_path, exc)
+        ) from exc
+    if not isinstance(manifest, Mapping):
+        raise error_type("Curation manifest root must be an object: {}".format(manifest_path))
+    required_schema = dataset.get("require_curation_schema")
+    if required_schema and str(manifest.get("schema_version")) != str(required_schema):
+        raise error_type(
+            "Curation manifest schema mismatch: expected {}, got {}".format(
+                required_schema, manifest.get("schema_version")
+            )
+        )
+    labels_path = resolve_path(str(dataset.get("labels", "")), config)
+    output_dir_value = manifest.get("output_dir")
+    if not output_dir_value:
+        raise error_type("Curation manifest has no output_dir: {}".format(manifest_path))
+    output_root = Path(str(output_dir_value)).resolve()
+    try:
+        relative_labels = labels_path.resolve().relative_to(output_root).as_posix()
+    except (ValueError, OSError) as exc:
+        raise error_type(
+            "Training labels {} are outside curation snapshot {}".format(
+                labels_path, output_root
+            )
+        ) from exc
+    artifact = (manifest.get("artifacts") or {}).get(relative_labels)
+    if not isinstance(artifact, Mapping) or not artifact.get("sha256"):
+        raise error_type(
+            "Curation manifest does not authenticate training labels {}".format(relative_labels)
+        )
+    actual_hash = sha256_file(labels_path)
+    if actual_hash != str(artifact["sha256"]):
+        raise error_type(
+            "Curated training labels hash mismatch for {}: expected {}, got {}".format(
+                labels_path, artifact["sha256"], actual_hash
+            )
+        )
+    return {
+        "path": str(manifest_path),
+        "sha256": sha256_file(manifest_path),
+        "schema_version": manifest.get("schema_version"),
+        "source_labels_sha256": (manifest.get("source") or {}).get("labels_sha256"),
+        "training_labels_relative_path": relative_labels,
+        "training_labels_sha256": actual_hash,
+        "image_count": (manifest.get("images") or {}).get("count"),
+        "image_aggregate_sha256": (manifest.get("images") or {}).get(
+            "aggregate_sha256"
+        ),
+    }
+
+
+def _is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _guard_curation_output(
+    output_dir: Path,
+    source_labels: Path,
+    source_crops: Sequence[Path],
+    allow_overwrite: bool,
+) -> None:
+    """Refuse dangerous recursive replacement targets and unknown directories."""
+
+    resolved = output_dir.resolve()
+    filesystem_root = Path(resolved.anchor).resolve()
+    home = Path.home().resolve()
+    if resolved in {filesystem_root, home}:
+        raise ValueError("Refusing dangerous curation output directory: {}".format(resolved))
+    protected_sources = [source_labels, *source_crops]
+    conflict = next(
+        (source for source in protected_sources if _is_within(source, resolved)),
+        None,
+    )
+    if conflict is not None:
+        raise ValueError(
+            "Refusing curation output directory {} because it contains source data {}".format(
+                resolved, conflict.resolve()
+            )
+        )
+    if not output_dir.exists():
+        return
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise ValueError("Refusing to replace non-directory or symlink output: {}".format(output_dir))
+    if not allow_overwrite:
+        raise FileExistsError(
+            "Curated pretrain snapshot already exists; choose a new version or pass --overwrite: {}".format(
+                output_dir
+            )
+        )
+    sentinel_path = output_dir / "qc" / "sha256_manifest.json"
+    if not sentinel_path.is_file():
+        raise ValueError(
+            "Refusing to overwrite a directory without a curation manifest: {}".format(output_dir)
+        )
+    try:
+        with sentinel_path.open("r", encoding="utf-8") as handle:
+            sentinel = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            "Refusing to overwrite a directory with an unreadable curation manifest: {}".format(
+                sentinel_path
+            )
+        ) from exc
+    sentinel_output = sentinel.get("output_dir") if isinstance(sentinel, Mapping) else None
+    if (
+        not isinstance(sentinel, Mapping)
+        or sentinel.get("schema_version") != CURATION_SCHEMA
+        or not sentinel_output
+        or Path(str(sentinel_output)).resolve() != resolved
+    ):
+        raise ValueError(
+            "Refusing to overwrite a directory whose curation manifest does not identify it: {}".format(
+                output_dir
+            )
+        )
+
+
+def _clean_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    return {str(key): value for key, value in row.items() if not str(key).startswith("_")}
+
+
+def _source_group_key(row: Mapping[str, Any]) -> Tuple[str, str]:
+    return str(row.get("dataset_id") or ""), str(row.get("source_group_id") or "")
+
+
+def _ordered_points(row: Mapping[str, Any], field: str) -> List[Tuple[float, float]]:
+    raw = row.get(field)
+    if not isinstance(raw, list) or len(raw) != 21:
+        raise ValueError("{} must contain exactly 21 points".format(field))
+    by_id: Dict[int, Tuple[float, float]] = {}
+    for offset, point in enumerate(raw):
+        if not isinstance(point, Mapping):
+            raise ValueError("{} point {} is not an object".format(field, offset))
+        point_id = int(point.get("id"))
+        x_value, y_value = float(point["x"]), float(point["y"])
+        if point_id in by_id:
+            raise ValueError("{} has duplicate landmark id {}".format(field, point_id))
+        if not math.isfinite(x_value) or not math.isfinite(y_value):
+            raise ValueError("{} has a non-finite coordinate".format(field))
+        by_id[point_id] = (x_value, y_value)
+    if set(by_id) != set(range(21)):
+        raise ValueError("{} ids must be exactly 0..20".format(field))
+    return [by_id[index] for index in range(21)]
+
+
+def _positive_reasons(
+    row: Mapping[str, Any],
+    allowed_quality_tiers: Sequence[str],
+    minimum_coordinate: float,
+    maximum_coordinate: float,
+) -> List[str]:
+    reasons: List[str] = []
+    if str(row.get("sample_type")) not in POSITIVE_SAMPLE_TYPES:
+        reasons.append("INVALID_POSITIVE_SAMPLE_TYPE")
+    if allowed_quality_tiers and str(row.get("quality_tier")) not in set(allowed_quality_tiers):
+        reasons.append("DISALLOWED_QUALITY_TIER")
+    if row.get("needs_review") is True:
+        reasons.append("SOURCE_MARKED_NEEDS_REVIEW")
+    try:
+        normalized = _ordered_points(row, "landmarks_crop_norm")
+        _ordered_points(row, "landmarks_crop_px")
+        _ordered_points(row, "landmarks_image_px")
+    except (KeyError, TypeError, ValueError) as exc:
+        normalized = []
+        reasons.append("INVALID_LANDMARKS:{}".format(str(exc)))
+    if normalized and any(
+        x < minimum_coordinate
+        or x > maximum_coordinate
+        or y < minimum_coordinate
+        or y > maximum_coordinate
+        for x, y in normalized
+    ):
+        reasons.append("LANDMARK_OUT_OF_ALLOWED_RANGE")
+    crop_path = Path(str(row.get("crop_path") or ""))
+    if not crop_path.is_file():
+        reasons.append("MISSING_CROP_IMAGE")
+    return sorted(set(reasons))
+
+
+def _point_on_segment(
+    point: Tuple[float, float],
+    start: Tuple[float, float],
+    end: Tuple[float, float],
+    epsilon: float = 1.0e-6,
+) -> bool:
+    px, py = point
+    ax, ay = start
+    bx, by = end
+    cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+    if abs(cross) > epsilon:
+        return False
+    dot = (px - ax) * (px - bx) + (py - ay) * (py - by)
+    return dot <= epsilon
+
+
+def _point_in_polygon(point: Tuple[float, float], polygon: Sequence[Tuple[float, float]]) -> bool:
+    if len(polygon) < 3:
+        return False
+    inside = False
+    px, py = point
+    previous = polygon[-1]
+    for current in polygon:
+        if _point_on_segment(point, previous, current):
+            return True
+        ax, ay = previous
+        bx, by = current
+        if (ay > py) != (by > py):
+            intersection_x = (bx - ax) * (py - ay) / (by - ay) + ax
+            if px < intersection_x:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _negative_overlap_count(
+    row: Mapping[str, Any],
+    positives: Sequence[Mapping[str, Any]],
+    core_landmark_ids: Sequence[int],
+) -> int:
+    raw_polygon = row.get("roi_corners_px")
+    if not isinstance(raw_polygon, list) or len(raw_polygon) != 4:
+        return 0
+    try:
+        polygon = [(float(point[0]), float(point[1])) for point in raw_polygon]
+    except (TypeError, ValueError, IndexError):
+        return 0
+    wanted = set(int(value) for value in core_landmark_ids)
+    maximum = 0
+    for positive in positives:
+        try:
+            points = _ordered_points(positive, "landmarks_image_px")
+        except (KeyError, TypeError, ValueError):
+            continue
+        maximum = max(
+            maximum,
+            sum(
+                _point_in_polygon(points[point_id], polygon)
+                for point_id in wanted
+                if 0 <= point_id < len(points)
+            ),
+        )
+    return maximum
+
+
+def _load_review_decisions(
+    path_value: Optional[Any], config: Mapping[str, Any]
+) -> Dict[str, Dict[str, Any]]:
+    if not path_value:
+        return {}
+    path = resolve_path(str(path_value), config)
+    if not path.is_file():
+        raise FileNotFoundError("Negative review decisions file not found: {}".format(path))
+    decisions: Dict[str, Dict[str, Any]] = {}
+    for raw in read_jsonl(path):
+        row = _clean_row(raw)
+        crop_id = str(row.get("crop_id") or "")
+        decision = str(row.get("decision") or "")
+        if not crop_id:
+            raise ValueError("Every review decision must provide crop_id")
+        if crop_id in decisions:
+            raise ValueError("Duplicate review decision for {}".format(crop_id))
+        if decision not in REVIEW_DECISIONS:
+            raise ValueError(
+                "Unsupported review decision {!r} for {}; expected one of {}".format(
+                    decision, crop_id, sorted(REVIEW_DECISIONS)
+                )
+            )
+        if decision == "CONFIRMED_NEGATIVE" and not str(row.get("reviewer") or "").strip():
+            raise ValueError("CONFIRMED_NEGATIVE requires a non-empty reviewer for {}".format(crop_id))
+        decisions[crop_id] = row
+    return decisions
+
+
+def _decision_metadata(
+    action: str,
+    reasons: Sequence[str],
+    source_labels_sha256: str,
+    overlap_core_points: int = 0,
+    review: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "schema_version": CURATION_SCHEMA,
+        "action": str(action),
+        "reasons": sorted(set(str(value) for value in reasons)),
+        "source_labels_sha256": source_labels_sha256,
+        "overlap_confirmed_hand_core_points": int(overlap_core_points),
+        "negative_evidence": "human_confirmed" if action == "INCLUDE_CONFIRMED_NEGATIVE" else None,
+        "review": dict(review) if review else None,
+    }
+
+
+def _stable_smoke_subset(
+    rows: Sequence[Mapping[str, Any]], count: int, salt: str
+) -> List[Dict[str, Any]]:
+    if count <= 0:
+        return []
+    groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        groups[(str(row.get("dataset_id")), str(row.get("sample_type")))].append(dict(row))
+    for key in groups:
+        groups[key].sort(
+            key=lambda row: hashlib.sha256(
+                (salt + "\0" + str(row.get("crop_id"))).encode("utf-8")
+            ).hexdigest()
+        )
+    selected: List[Dict[str, Any]] = []
+    keys = sorted(groups)
+    offset = 0
+    while len(selected) < min(int(count), len(rows)):
+        progressed = False
+        for key in keys:
+            if offset < len(groups[key]) and len(selected) < int(count):
+                selected.append(groups[key][offset])
+                progressed = True
+        if not progressed:
+            break
+        offset += 1
+    return selected
+
+
+def _materialize_crop(
+    row: Mapping[str, Any],
+    temporary_root: Path,
+    final_root: Path,
+    mode: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    source = Path(str(row.get("crop_path") or ""))
+    if not source.is_file():
+        raise FileNotFoundError("Canonical crop does not exist: {}".format(source))
+    digest = hashlib.sha256(str(row.get("crop_id")).encode("utf-8")).hexdigest()[:20]
+    dataset_id = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in str(row.get("dataset_id") or "unknown")
+    )
+    suffix = source.suffix.lower() or ".png"
+    relative = Path("images") / dataset_id / (digest + "__" + source.stem + suffix)
+    temporary = temporary_root / relative
+    final = final_root / relative
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    used_mode = mode
+    if mode in {"hardlink", "hardlink_or_copy"}:
+        try:
+            os.link(str(source), str(temporary))
+            used_mode = "hardlink"
+        except OSError:
+            if mode == "hardlink":
+                raise
+            shutil.copy2(str(source), str(temporary))
+            used_mode = "copy"
+    elif mode == "copy":
+        shutil.copy2(str(source), str(temporary))
+    else:
+        raise ValueError("materialize_images must be copy, hardlink, or hardlink_or_copy")
+    image_sha256 = sha256_file(temporary)
+    value = dict(row)
+    value["crop_path"] = str(final)
+    value["pretrain_curation"] = dict(value["pretrain_curation"])
+    value["pretrain_curation"].update(
+        {
+            "original_crop_path": str(source.resolve()),
+            "materialized_crop_path": str(final),
+            "materialization_method": used_mode,
+            "image_sha256": image_sha256,
+        }
+    )
+    manifest = {
+        "crop_id": str(row.get("crop_id")),
+        "relative_path": relative.as_posix(),
+        "source_path": str(source.resolve()),
+        "sha256": image_sha256,
+        "size_bytes": int(temporary.stat().st_size),
+        "materialization_method": used_mode,
+    }
+    return value, manifest
+
+
+def _counter_dict(values: Iterable[Any]) -> Dict[str, int]:
+    return dict(sorted(Counter(str(value) for value in values).items()))
+
+
+def curate_pretrain_from_config(
+    config: Union[Mapping[str, Any], str, Path], overwrite: Optional[bool] = None
+) -> Dict[str, Any]:
+    """Create an immutable-on-success curated pretrain snapshot on disk."""
+
+    cfg = _config_mapping(config)
+    if str(cfg.get("task")) != "curate_pretrain":
+        raise ValueError("Curation config task must be curate_pretrain")
+    source_cfg = dict(cfg.get("source", {}))
+    output_cfg = dict(cfg.get("output", {}))
+    rules = dict(cfg.get("curation", {}))
+    source_labels = resolve_path(source_cfg.get("labels", ""), cfg)
+    if not source_labels.is_file():
+        raise FileNotFoundError("Source pretrain labels not found: {}".format(source_labels))
+    output_dir = resolve_path(output_cfg.get("dir", ""), cfg)
+    if not str(output_cfg.get("dir", "")):
+        raise ValueError("output.dir is required")
+    allow_overwrite = bool(output_cfg.get("overwrite", False) if overwrite is None else overwrite)
+
+    source_hash = sha256_file(source_labels)
+    records = [_clean_row(row) for row in read_jsonl(source_labels)]
+    if not records:
+        raise ValueError("Source pretrain labels are empty")
+    records.sort(key=lambda row: str(row.get("crop_id") or ""))
+    crop_ids = [str(row.get("crop_id") or "") for row in records]
+    if any(not value for value in crop_ids):
+        raise ValueError("Every source record must have crop_id")
+    duplicates = [value for value, count in Counter(crop_ids).items() if count > 1]
+    if duplicates:
+        raise ValueError("Duplicate crop_id values in source labels: {}".format(duplicates[:10]))
+    source_crops = [Path(str(row.get("crop_path") or "")) for row in records]
+    _guard_curation_output(
+        output_dir, source_labels, source_crops, allow_overwrite
+    )
+
+    decisions = _load_review_decisions(rules.get("negative_review_decisions"), cfg)
+    unknown_decisions = sorted(set(decisions) - set(crop_ids))
+    if unknown_decisions:
+        raise ValueError("Review decisions reference unknown crop_id values: {}".format(unknown_decisions[:10]))
+    rows_by_id = {str(row["crop_id"]): row for row in records}
+    invalid_decision_targets = sorted(
+        crop_id
+        for crop_id in decisions
+        if bool((rows_by_id[crop_id].get("hand_presence") or {}).get("present", False))
+        or str(rows_by_id[crop_id].get("sample_type")) not in NEGATIVE_SAMPLE_TYPES
+    )
+    if invalid_decision_targets:
+        raise ValueError(
+            "Negative review decisions may reference only negative candidates: {}".format(
+                invalid_decision_targets[:10]
+            )
+        )
+    allowed_tiers = [str(value) for value in rules.get("allowed_positive_quality_tiers", ["HIGH", "MEDIUM"])]
+    coordinate_range = list(rules.get("normalized_coordinate_range", [0.0, 1.0]))
+    if len(coordinate_range) != 2 or float(coordinate_range[0]) > float(coordinate_range[1]):
+        raise ValueError("curation.normalized_coordinate_range must be [minimum, maximum]")
+    minimum_coordinate, maximum_coordinate = float(coordinate_range[0]), float(coordinate_range[1])
+    core_ids = [int(value) for value in rules.get("overlap_core_landmark_ids", [0, 1, 5, 9, 13, 17])]
+    overlap_minimum = int(rules.get("overlap_minimum_core_points", 3))
+    if overlap_minimum < 1 or overlap_minimum > len(set(core_ids)):
+        raise ValueError("curation.overlap_minimum_core_points is invalid")
+
+    positives_by_group: Dict[Tuple[str, str], List[Mapping[str, Any]]] = defaultdict(list)
+    for row in records:
+        if bool((row.get("hand_presence") or {}).get("present", False)):
+            positives_by_group[_source_group_key(row)].append(row)
+
+    catalog: List[Dict[str, Any]] = []
+    included_positive_source: List[Dict[str, Any]] = []
+    confirmed_negative_source: List[Dict[str, Any]] = []
+    excluded: List[Dict[str, Any]] = []
+    negative_review_queue: List[Dict[str, Any]] = []
+    reason_counts: Counter = Counter()
+    overlap_count = 0
+    for row in records:
+        present = bool((row.get("hand_presence") or {}).get("present", False))
+        crop_id = str(row["crop_id"])
+        if present:
+            reasons = _positive_reasons(
+                row, allowed_tiers, minimum_coordinate, maximum_coordinate
+            )
+            action = "INCLUDE_LANDMARKS" if not reasons else "QUARANTINE_POSITIVE"
+            metadata = _decision_metadata(action, reasons, source_hash)
+            value = dict(row)
+            value["pretrain_curation"] = metadata
+            if reasons:
+                excluded.append(value)
+                reason_counts.update(reasons)
+            else:
+                included_positive_source.append(value)
+            catalog.append(value)
+            continue
+
+        sample_type = str(row.get("sample_type"))
+        if sample_type not in NEGATIVE_SAMPLE_TYPES:
+            reasons = ["INVALID_NEGATIVE_SAMPLE_TYPE"]
+            overlap = 0
+        else:
+            overlap = _negative_overlap_count(
+                row,
+                positives_by_group.get(_source_group_key(row), []),
+                core_ids,
+            )
+            reasons = []
+            if overlap >= overlap_minimum:
+                reasons.append("NEGATIVE_OVERLAPS_CONFIRMED_HAND")
+                overlap_count += 1
+        review = decisions.get(crop_id)
+        review_decision = str((review or {}).get("decision") or "")
+        if review_decision == "CONFIRMED_NEGATIVE" and not reasons:
+            action = "INCLUDE_CONFIRMED_NEGATIVE"
+            evidence_reasons = ["HUMAN_CONFIRMED_NEGATIVE"]
+            value = dict(row)
+            value["pretrain_curation"] = _decision_metadata(
+                action, evidence_reasons, source_hash, overlap, review
+            )
+            confirmed_negative_source.append(value)
+        else:
+            action = "HOLD_NEGATIVE_CANDIDATE"
+            if review_decision == "CONFIRMED_NEGATIVE" and reasons:
+                reasons.append("REVIEW_CONFLICTS_CONFIRMED_HAND_OVERLAP")
+            elif review_decision == "FALSE_NEGATIVE_HAND_VISIBLE":
+                reasons.append("HUMAN_CONFIRMED_FALSE_NEGATIVE")
+            elif review_decision == "HOLD":
+                reasons.append("HUMAN_REQUESTED_HOLD")
+            else:
+                reasons.append("UNVERIFIED_TEACHER_NEGATIVE")
+            value = dict(row)
+            value["pretrain_curation"] = _decision_metadata(
+                action, reasons, source_hash, overlap, review
+            )
+            excluded.append(value)
+            negative_review_queue.append(value)
+            reason_counts.update(reasons)
+        catalog.append(value)
+
+    if not included_positive_source:
+        raise ValueError("Curation produced no valid positive landmark records")
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary_dir: Optional[Path] = Path(
+        tempfile.mkdtemp(prefix=output_dir.name + ".tmp.", dir=str(output_dir.parent))
+    )
+    try:
+        assert temporary_dir is not None
+        materialization_mode = str(output_cfg.get("materialize_images", "hardlink_or_copy"))
+        materialized_by_id: Dict[str, Dict[str, Any]] = {}
+        image_manifest: List[Dict[str, Any]] = []
+        for row in included_positive_source + confirmed_negative_source:
+            value, image_entry = _materialize_crop(
+                row, temporary_dir, output_dir, materialization_mode
+            )
+            materialized_by_id[str(row["crop_id"])] = value
+            image_manifest.append(image_entry)
+        ending_source_hash = sha256_file(source_labels)
+        if ending_source_hash != source_hash:
+            raise RuntimeError(
+                "Source labels changed while the curation snapshot was being built"
+            )
+        included_landmarks = [
+            materialized_by_id[str(row["crop_id"])] for row in included_positive_source
+        ]
+        multitask = included_landmarks + [
+            materialized_by_id[str(row["crop_id"])] for row in confirmed_negative_source
+        ]
+        included_landmarks.sort(key=lambda row: str(row["crop_id"]))
+        multitask.sort(key=lambda row: str(row["crop_id"]))
+        image_manifest.sort(key=lambda row: str(row["crop_id"]))
+        smoke_count = int(rules.get("smoke_subset_size", 128))
+        smoke = _stable_smoke_subset(
+            included_landmarks,
+            smoke_count,
+            str(rules.get("smoke_selection_salt", "pretrain_landmark_smoke_v1")),
+        )
+        for row in smoke:
+            original_sampling_weight = row.get("sampling_weight")
+            row["sampling_weight"] = 1.0
+            row["pretrain_curation"] = dict(row["pretrain_curation"])
+            row["pretrain_curation"][
+                "smoke_original_sampling_weight"
+            ] = original_sampling_weight
+            row["pretrain_curation"]["smoke_sampling_weight"] = 1.0
+
+        labels_dir = temporary_dir / "05_labels"
+        audit_dir = temporary_dir / "audit"
+        qc_dir = temporary_dir / "qc"
+        labels_dir.mkdir(parents=True, exist_ok=True)
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        qc_dir.mkdir(parents=True, exist_ok=True)
+        landmarks_path = labels_dir / "hand_training_labels_pretrain_landmarks.jsonl"
+        multitask_path = labels_dir / "hand_training_labels_pretrain_multitask.jsonl"
+        smoke_path = labels_dir / "hand_training_labels_pretrain_smoke.jsonl"
+        catalog_path = audit_dir / "pretrain_curation_catalog.jsonl"
+        included_path = audit_dir / "included_landmarks.jsonl"
+        excluded_path = audit_dir / "excluded_and_held.jsonl"
+        review_queue_path = audit_dir / "negative_review_queue.jsonl"
+        image_manifest_path = audit_dir / "image_manifest.jsonl"
+        write_jsonl(landmarks_path, included_landmarks)
+        write_jsonl(multitask_path, multitask)
+        write_jsonl(smoke_path, smoke)
+        write_jsonl(catalog_path, catalog)
+        write_jsonl(included_path, included_landmarks)
+        write_jsonl(excluded_path, excluded)
+        write_jsonl(review_queue_path, negative_review_queue)
+        write_jsonl(image_manifest_path, image_manifest)
+
+        artifact_paths = [
+            landmarks_path,
+            multitask_path,
+            smoke_path,
+            catalog_path,
+            included_path,
+            excluded_path,
+            review_queue_path,
+            image_manifest_path,
+        ]
+        artifacts = {
+            path.relative_to(temporary_dir).as_posix(): {
+                "sha256": sha256_file(path),
+                "size_bytes": int(path.stat().st_size),
+            }
+            for path in artifact_paths
+        }
+        image_aggregate = hashlib.sha256(
+            "".join(
+                "{}:{}\n".format(row["relative_path"], row["sha256"])
+                for row in image_manifest
+            ).encode("utf-8")
+        ).hexdigest()
+        config_path_value = cfg.get("_meta", {}).get("config_path")
+        config_hash = (
+            sha256_file(config_path_value)
+            if config_path_value and Path(str(config_path_value)).is_file()
+            else None
+        )
+        manifest = {
+            "schema_version": CURATION_SCHEMA,
+            "source": {
+                "labels": str(source_labels),
+                "labels_sha256": source_hash,
+                "record_count": len(records),
+            },
+            "config_path": str(config_path_value) if config_path_value else None,
+            "config_sha256": config_hash,
+            "output_dir": str(output_dir),
+            "artifacts": artifacts,
+            "images": {
+                "count": len(image_manifest),
+                "aggregate_sha256": image_aggregate,
+                "manifest": "audit/image_manifest.jsonl",
+            },
+        }
+        manifest_path = qc_dir / "sha256_manifest.json"
+        write_json(manifest_path, manifest)
+        report = {
+            "status": "ok",
+            "schema_version": CURATION_SCHEMA,
+            "source_labels": str(source_labels),
+            "source_labels_sha256": source_hash,
+            "output_dir": str(output_dir),
+            "counts": {
+                "source_records": len(records),
+                "included_landmark_positives": len(included_landmarks),
+                "included_confirmed_negatives": len(confirmed_negative_source),
+                "multitask_records": len(multitask),
+                "excluded_or_held": len(excluded),
+                "negative_review_queue": len(negative_review_queue),
+                "negative_overlap_confirmed_hand": overlap_count,
+                "smoke_records": len(smoke),
+            },
+            "included_by_dataset": _counter_dict(
+                row.get("dataset_id") for row in included_landmarks
+            ),
+            "included_by_sample_type": _counter_dict(
+                row.get("sample_type") for row in included_landmarks
+            ),
+            "reason_counts": dict(sorted(reason_counts.items())),
+            "negative_policy": "unverified teacher negatives are held; only non-conflicting human-confirmed negatives enter multitask",
+            "artifacts": {
+                "landmark_labels": str(output_dir / landmarks_path.relative_to(temporary_dir)),
+                "multitask_labels": str(output_dir / multitask_path.relative_to(temporary_dir)),
+                "smoke_labels": str(output_dir / smoke_path.relative_to(temporary_dir)),
+                "catalog": str(output_dir / catalog_path.relative_to(temporary_dir)),
+                "excluded": str(output_dir / excluded_path.relative_to(temporary_dir)),
+                "negative_review_queue": str(output_dir / review_queue_path.relative_to(temporary_dir)),
+                "manifest": str(output_dir / manifest_path.relative_to(temporary_dir)),
+            },
+        }
+        report_path = qc_dir / "curation_report.json"
+        write_json(report_path, report)
+
+        if output_dir.exists():
+            _guard_curation_output(
+                output_dir, source_labels, source_crops, allow_overwrite
+            )
+            shutil.rmtree(str(output_dir))
+        os.replace(str(temporary_dir), str(output_dir))
+        temporary_dir = None
+        return report
+    finally:
+        if temporary_dir is not None and temporary_dir.exists():
+            shutil.rmtree(str(temporary_dir), ignore_errors=True)

@@ -19,6 +19,7 @@ from .config import load_config
 from .contracts import effective_head_weights
 from .inspect import EVALUATION_SCHEMA, DatasetContractError, audit_canonical_dataset, leakage_report
 from .io_utils import read_image, to_uint8_gray
+from .pretrain_curation import verify_curation_manifest
 
 
 try:  # Keep ``make inspect`` independent of TensorFlow by importing this module only for training.
@@ -820,6 +821,9 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
     sampling_cfg = dict(cfg.get("sampling", {}))
     experiment_cfg = dict(cfg.get("experiment", {}))
     seed = int(experiment_cfg.get("seed", 0))
+    curation_manifest = verify_curation_manifest(
+        cfg, dataset_cfg, error_type=DatasetContractError
+    )
     train_records, train_report = audit_canonical_dataset(
         cfg,
         dataset=dataset_cfg,
@@ -888,6 +892,7 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
         "validation": validation_report,
         "leakage": leakage_checks,
         "sampler": train_sequence.sampling_report(),
+        "curation_manifest": curation_manifest,
         "tensor_contract": {
             "inputs": [None, 1, 256, 256],
             "targets": [[None, 42], [None, 1], [None, 1]],

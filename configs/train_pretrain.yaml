@@ -15,7 +15,11 @@ environment:
 
 data:
   data_root: "${HAND_DATA_ROOT:-/root/autodl-tmp}"
-  labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl"
+  # Generated explicitly by `make curate-pretrain`; training never filters the
+  # source labels in memory.
+  labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_curated/${HAND_PRETRAIN_CURATED_ID:-v1}/05_labels/hand_training_labels_pretrain_landmarks.jsonl"
+  curation_manifest: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_curated/${HAND_PRETRAIN_CURATED_ID:-v1}/qc/sha256_manifest.json"
+  require_curation_schema: pretrain_curation_v1
   crop_path_key: crop_path
   path_policy: canonical_crop_path_only
   require_schema_version: train_finalize_v1
@@ -52,7 +56,7 @@ targets:
     Right: 1
     unknown: null
 training:
-  epochs: 120
+  epochs: 160
   batch_size: 64
   steps_per_epoch: null
   initial_checkpoint: null
@@ -65,15 +69,20 @@ training:
     beta_1: 0.9
     beta_2: 0.999
     epsilon: 1.0e-7
+  checkpoint:
+    monitor: val_landmark_mae
+    mode: min
   learning_rate_schedule:
     name: reduce_on_plateau
     monitor: val_landmark_mae
+    mode: min
     factor: 0.5
-    patience: 20
+    patience: 5
     min_learning_rate: 1.0e-6
   early_stopping:
     enabled: true
     monitor: val_landmark_mae
+    mode: min
     patience: 20
     restore_best_weights: true
 
@@ -84,13 +93,13 @@ sampling:
   bucket_key: sampling_bucket
   sample_type_key: sample_type
   weight_key: sampling_weight
-  # Exact per-batch type marginals: 70% positive, 25% runtime negative,
-  # 5% low-Palm negative. sampling_weight is used only inside a selected cell.
+  # Geometry-first pretrain: every record has a verified pseudo landmark
+  # target. Teacher-negative candidates remain in the on-disk quarantine.
   sample_type_fractions:
-    POS_RUNTIME: 0.56
-    POS_LOW_PALM: 0.14
-    NEG_RUNTIME_CANDIDATE: 0.25
-    NEG_LOW_PALM_CANDIDATE: 0.05
+    POS_RUNTIME: 0.75
+    POS_LOW_PALM: 0.25
+    NEG_RUNTIME_CANDIDATE: 0.0
+    NEG_LOW_PALM_CANDIDATE: 0.0
   quota_rounding: largest_remainder
   quota_tie_break: [POS_RUNTIME, POS_LOW_PALM, NEG_RUNTIME_CANDIDATE, NEG_LOW_PALM_CANDIDATE]
   require_all_tier_sample_type_cells: true
@@ -106,11 +115,13 @@ losses:
   hand_flag:
     name: binary_crossentropy
     from_logits: false
-    coefficient: 1.0
+    # Positive-only auxiliary supervision keeps Palm proposals from being
+    # rejected at inference without injecting unverified negative gradients.
+    coefficient: 0.1
   handedness:
     name: binary_crossentropy
     from_logits: false
-    coefficient: 0.1
+    coefficient: 0.0
   honor_record_loss_weights: true
 
 augmentation:
@@ -150,7 +161,7 @@ inspection:
       channels: 1
 
 outputs:
-  run_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1-landmarks-enhanced/pretrain"
+  run_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/pretrain"
   overwrite: false
 
 runtime:

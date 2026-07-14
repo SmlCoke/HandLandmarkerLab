@@ -24,7 +24,7 @@ class StageConfigRouteTests(unittest.TestCase):
                 config = load_config(CONFIGS / "{}.yaml".format(name))
                 self.assertEqual(config["model"]["checkpoint_stage"], "pretrain")
                 self.assertIn(
-                    "/hand_landmarker_runs/v1/pretrain/checkpoints/best.weights.h5",
+                    "/hand_landmarker_runs/v1-pretrain-geometry/pretrain/checkpoints/best.weights.h5",
                     _normalized(config["hand"]["model_path"]),
                 )
 
@@ -42,7 +42,7 @@ class StageConfigRouteTests(unittest.TestCase):
         )
         self.assertTrue(
             _normalized(load_config(CONFIGS / "infer.yaml")["output"]["dir"]).endswith(
-                "/output/pretrain"
+                "/hand_landmarker_inference/v1-pretrain-geometry"
             )
         )
 
@@ -60,6 +60,21 @@ class StageConfigRouteTests(unittest.TestCase):
         serialized = json.dumps(config, ensure_ascii=False).replace("\\", "/").lower()
         self.assertNotIn("train_finetune_merged", serialized)
         self.assertNotIn("/v1/finetune/checkpoints/", serialized)
+
+    def test_pretrain_curation_output_is_the_training_input(self):
+        curation = load_config(CONFIGS / "curate_pretrain.yaml")
+        training = load_config(CONFIGS / "train_pretrain.yaml")
+        smoke = load_config(CONFIGS / "train_pretrain_smoke.yaml")
+        curated_root = _normalized(curation["output"]["dir"])
+        labels = _normalized(training["data"]["labels"])
+        smoke_labels = _normalized(smoke["data"]["labels"])
+        self.assertTrue(labels.startswith(curated_root + "/"))
+        self.assertTrue(smoke_labels.startswith(curated_root + "/"))
+        self.assertTrue(labels.endswith("hand_training_labels_pretrain_landmarks.jsonl"))
+        self.assertTrue(smoke_labels.endswith("hand_training_labels_pretrain_smoke.jsonl"))
+        fractions = training["sampling"]["sample_type_fractions"]
+        self.assertEqual(0.0, fractions["NEG_RUNTIME_CANDIDATE"])
+        self.assertEqual(0.0, fractions["NEG_LOW_PALM_CANDIDATE"])
 
     def test_conversion_dataset_sources_follow_export_stage(self):
         for stage in ("pretrain", "finetune"):
@@ -98,10 +113,12 @@ class StageConfigRouteTests(unittest.TestCase):
                     )
                     config = load_config(path)
                     self.assertEqual(config["model"]["checkpoint_stage"], stage)
-                    self.assertIn(
-                        "/hand_landmarker_runs/v1/{}/checkpoints/best.weights.h5".format(stage),
-                        _normalized(config["hand"]["model_path"]),
+                    expected_checkpoint = (
+                        "/hand_landmarker_runs/v1-pretrain-geometry/pretrain/checkpoints/best.weights.h5"
+                        if stage == "pretrain"
+                        else "/hand_landmarker_runs/v1/finetune/checkpoints/best.weights.h5"
                     )
+                    self.assertIn(expected_checkpoint, _normalized(config["hand"]["model_path"]))
                     if name.startswith("eval_"):
                         self.assertNotIn("palm", config)
                         self.assertEqual("roi", config["evaluation"]["mode"])
@@ -122,7 +139,11 @@ class StageConfigRouteTests(unittest.TestCase):
         self.assertIn("/eval/finetune/test", outputs[("eval_test", "finetune")])
         self.assertIn("/export/pretrain/", outputs[("export", "pretrain")])
         self.assertIn("/export/finetune/", outputs[("export", "finetune")])
-        self.assertTrue(outputs[("infer", "pretrain")].endswith("/inference/output/pretrain"))
+        self.assertTrue(
+            outputs[("infer", "pretrain")].endswith(
+                "/hand_landmarker_inference/v1-pretrain-geometry"
+            )
+        )
         self.assertTrue(outputs[("infer", "finetune")].endswith("/inference/output/finetune"))
 
 

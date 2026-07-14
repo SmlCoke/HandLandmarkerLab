@@ -5,7 +5,9 @@ CONDA ?= conda
 ENV_FILE ?= environment.yml
 MODEL_STAGE ?= pretrain
 
+CURATE_PRETRAIN_CONFIG ?= configs/curate_pretrain.yaml
 TRAIN_PRETRAIN_CONFIG ?= configs/train_pretrain.yaml
+TRAIN_PRETRAIN_SMOKE_CONFIG ?= configs/train_pretrain_smoke.yaml
 TRAIN_FINETUNE_CONFIG ?= configs/train_finetune.yaml
 EVAL_VAL_PRETRAIN_CONFIG ?= configs/eval_val_pretrain.yaml
 EVAL_VAL_FINETUNE_CONFIG ?= configs/eval_val_finetune.yaml
@@ -24,16 +26,21 @@ EXPORT_CONFIG ?= $(if $(filter pretrain,$(MODEL_STAGE)),$(EXPORT_PRETRAIN_CONFIG
 DOCTOR_CONFIG ?= $(TRAIN_PRETRAIN_CONFIG)
 
 TRAIN_ARGS ?=
+CURATE_ARGS ?=
+SMOKE_TRAIN_ARGS ?=
+SMOKE_GATE_ARGS ?=
 EVAL_ARGS ?=
 INFER_ARGS ?=
 EXPORT_ARGS ?=
 CONVERSION_ARGS ?=
 TEST_ARGS ?=
 
-.PHONY: help env env-update doctor inspect inspect-all inspect-pretrain inspect-finetune \
+.PHONY: help env env-update doctor curate-pretrain pretrain-pipeline \
+	inspect inspect-all inspect-pretrain inspect-pretrain-smoke inspect-finetune \
 	inspect-val inspect-test inspect-val-pretrain inspect-val-finetune \
 	inspect-test-pretrain inspect-test-finetune train train-all \
-	pretrain finetune train-pretrain train-finetune train_pretrain train_finetune \
+	pretrain finetune train-pretrain train-pretrain-smoke check-pretrain-smoke \
+	smoke-pretrain-overfit train-finetune train_pretrain train_finetune \
 	eval-val eval-test eval-val-pretrain eval-val-finetune \
 	eval-test-pretrain eval-test-finetune eval_val eval_test \
 	infer infer-pretrain infer-finetune export export-pretrain export-finetune \
@@ -49,6 +56,9 @@ help:
 	@echo   make env             Create the documented Conda environment
 	@echo   make env-update      Reconcile and prune the documented environment
 	@echo   make doctor          Verify Python, TensorFlow and GPU compatibility
+	@echo   make curate-pretrain Materialize the auditable positive-only pretrain snapshot
+	@echo   make smoke-pretrain-overfit  Gate full pretrain on a persisted 128-ROI overfit run
+	@echo   make pretrain-pipeline Run curation, inspection, smoke gate, then full pretrain
 	@echo   make inspect         Validate MODEL_STAGE Train/Val/Test datasets [default: pretrain]
 	@echo   make inspect-all     Validate both pretrain and finetune routes
 	@echo   make inspect-pretrain Validate stage-1 Train/Val/Test and leakage
@@ -78,6 +88,9 @@ env-update:
 doctor:
 	$(PYTHON) -B scripts/check_environment.py --config "$(DOCTOR_CONFIG)"
 
+curate-pretrain:
+	$(PYTHON) -B scripts/curate_pretrain.py --config "$(CURATE_PRETRAIN_CONFIG)" $(CURATE_ARGS)
+
 inspect:
 	$(call require_model_stage)
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(TRAIN_CONFIG)"
@@ -92,6 +105,9 @@ inspect-all:
 
 inspect-pretrain:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(TRAIN_PRETRAIN_CONFIG)"
+
+inspect-pretrain-smoke:
+	$(PYTHON) -B scripts/inspect_dataset.py --config "$(TRAIN_PRETRAIN_SMOKE_CONFIG)"
 
 inspect-finetune:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(TRAIN_FINETUNE_CONFIG)"
@@ -116,8 +132,26 @@ inspect-test-pretrain:
 inspect-test-finetune:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(EVAL_TEST_FINETUNE_CONFIG)"
 
-train-pretrain:
+train-pretrain: check-pretrain-smoke
 	$(PYTHON) -B scripts/train.py --config "$(TRAIN_PRETRAIN_CONFIG)" $(TRAIN_ARGS)
+
+train-pretrain-smoke:
+	$(PYTHON) -B scripts/train.py --config "$(TRAIN_PRETRAIN_SMOKE_CONFIG)" $(SMOKE_TRAIN_ARGS)
+
+check-pretrain-smoke:
+	$(PYTHON) -B scripts/check_pretrain_smoke.py --config "$(TRAIN_PRETRAIN_SMOKE_CONFIG)" $(SMOKE_GATE_ARGS)
+
+smoke-pretrain-overfit:
+	$(MAKE) inspect-pretrain-smoke
+	$(MAKE) train-pretrain-smoke
+	$(MAKE) check-pretrain-smoke
+
+# Keep the dependent pretrain steps sequential even under `make -j`.
+pretrain-pipeline:
+	$(MAKE) curate-pretrain
+	$(MAKE) inspect-pretrain
+	$(MAKE) smoke-pretrain-overfit
+	$(MAKE) train-pretrain
 
 train-finetune:
 	$(PYTHON) -B scripts/train.py --config "$(TRAIN_FINETUNE_CONFIG)" $(TRAIN_ARGS)
@@ -128,7 +162,7 @@ finetune: train-finetune
 
 train:
 	$(call require_model_stage)
-	$(PYTHON) -B scripts/train.py --config "$(TRAIN_CONFIG)" $(TRAIN_ARGS)
+	$(MAKE) train-$(MODEL_STAGE)
 
 # Keep the two dependent stages sequential even when the caller normally uses
 # parallel Make jobs.

@@ -551,9 +551,23 @@ def _read_state_json(weights_path: Path) -> Dict[str, Any]:
 
 
 def _monitor_mode(monitor: str, configured: Optional[str] = None) -> str:
-    if configured and str(configured).lower() in {"min", "max"}:
-        return str(configured).lower()
-    return "min" if "loss" in str(monitor).lower() else "max"
+    if configured is not None:
+        mode = str(configured).lower()
+        if mode not in {"min", "max"}:
+            raise ValueError("monitor mode must be min or max; got {!r}".format(configured))
+        return mode
+
+    name = str(monitor).lower()
+    minimize_tokens = ("loss", "mae", "mse", "rmse", "error", "nme", "distance")
+    maximize_tokens = ("accuracy", "acc", "auc", "precision", "recall", "f1", "pck", "iou")
+    minimize = any(token in name for token in minimize_tokens)
+    maximize = any(token in name for token in maximize_tokens)
+    if minimize == maximize:
+        raise ValueError(
+            "Could not infer whether monitor {!r} should be minimized or maximized; "
+            "set mode: min or mode: max explicitly".format(monitor)
+        )
+    return "min" if minimize else "max"
 
 
 def _build_callbacks(
@@ -569,11 +583,32 @@ def _build_callbacks(
 ) -> List[Any]:
     training = _require_mapping(config, "training")
     outputs = _require_mapping(config, "outputs")
+    checkpoint = training.get("checkpoint", {})
     early = training.get("early_stopping", {})
     lr_schedule = training.get("learning_rate_schedule", {})
     default_monitor = "val_total_loss"
-    monitor = str(early.get("monitor") or lr_schedule.get("monitor") or default_monitor)
-    mode = _monitor_mode(monitor, early.get("mode"))
+    monitor = str(
+        checkpoint.get("monitor")
+        or early.get("monitor")
+        or lr_schedule.get("monitor")
+        or default_monitor
+    )
+    mode = _monitor_mode(monitor, checkpoint.get("mode"))
+
+    lr_monitor = str(lr_schedule.get("monitor") or monitor)
+    lr_mode = _monitor_mode(lr_monitor, lr_schedule.get("mode"))
+    early_monitor = str(early.get("monitor") or monitor)
+    early_mode = _monitor_mode(early_monitor, early.get("mode"))
+    if bool(early.get("enabled", True)) and lr_monitor == early_monitor and lr_mode == early_mode:
+        lr_patience = int(lr_schedule.get("patience", 4))
+        early_patience = int(early.get("patience", 10))
+        if lr_patience >= early_patience:
+            raise ValueError(
+                "ReduceLROnPlateau patience must be smaller than EarlyStopping patience "
+                "when both monitor the same metric; got {} >= {}".format(
+                    lr_patience, early_patience
+                )
+            )
 
     class BackboneCheckpoint(tf.keras.callbacks.Callback):
         def __init__(self, path: Path, save_best_only: bool):
@@ -671,26 +706,99 @@ def _build_callbacks(
         raise ValueError("Only training.learning_rate_schedule.name=reduce_on_plateau is supported")
     callbacks.append(
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor=str(lr_schedule.get("monitor", monitor)),
+            monitor=lr_monitor,
             factor=float(lr_schedule.get("factor", 0.5)),
             patience=int(lr_schedule.get("patience", 4)),
             min_lr=float(lr_schedule.get("min_learning_rate", 0.0)),
             cooldown=int(lr_schedule.get("cooldown", 0)),
+            mode=lr_mode,
             verbose=1,
         )
     )
     if bool(early.get("enabled", True)):
         callbacks.append(
             tf.keras.callbacks.EarlyStopping(
-                monitor=str(early.get("monitor", monitor)),
+                monitor=early_monitor,
                 min_delta=float(early.get("min_delta", 0.0)),
                 patience=int(early.get("patience", 10)),
-                mode=str(early.get("mode", "auto")),
+                mode=early_mode,
                 restore_best_weights=bool(early.get("restore_best_weights", True)),
                 verbose=1,
             )
         )
     return callbacks
+
+
+def _verify_best_checkpoint_selection(
+    best_path: Path,
+    history_payload: Mapping[str, Any],
+    training: Mapping[str, Any],
+    resumed: bool,
+    validation: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Prove that the persisted best state uses the configured direction."""
+
+    state = _read_state_json(best_path)
+    if not state:
+        raise FileNotFoundError("Best checkpoint state was not created for {}".format(best_path))
+    checkpoint = training.get("checkpoint", {})
+    early = training.get("early_stopping", {})
+    lr_schedule = training.get("learning_rate_schedule", {})
+    monitor = str(
+        checkpoint.get("monitor")
+        or early.get("monitor")
+        or lr_schedule.get("monitor")
+        or "val_total_loss"
+    )
+    mode = _monitor_mode(monitor, checkpoint.get("mode"))
+    if state.get("monitor") != monitor or state.get("mode") != mode:
+        raise RuntimeError(
+            "Best checkpoint selection state conflicts with config: state={}/{} config={}/{}".format(
+                state.get("monitor"), state.get("mode"), monitor, mode
+            )
+        )
+    result = {
+        "monitor": monitor,
+        "mode": mode,
+        "completed_epoch": state.get("completed_epoch"),
+        "value": state.get("value"),
+        "verified_against_current_history": not resumed,
+    }
+    if resumed:
+        return result
+    values = list((history_payload.get("history") or {}).get(monitor) or [])
+    epochs = list(history_payload.get("epochs") or [])
+    monitor_epochs = epochs
+    if monitor.startswith("val_"):
+        validation_frequency = int((validation or {}).get("every_epochs", 1))
+        if validation_frequency <= 0:
+            raise ValueError("validation.every_epochs must be positive")
+        monitor_epochs = [
+            epoch for epoch in epochs if int(epoch) % validation_frequency == 0
+        ]
+    if not values or len(values) != len(monitor_epochs):
+        raise RuntimeError(
+            "Checkpoint monitor {!r} is missing or misaligned in training history".format(monitor)
+        )
+    numeric = [float(value) for value in values]
+    expected_value = min(numeric) if mode == "min" else max(numeric)
+    expected_index = numeric.index(expected_value)
+    expected_epoch = int(monitor_epochs[expected_index])
+    if not math.isclose(float(state.get("value")), expected_value, rel_tol=1.0e-6, abs_tol=1.0e-8):
+        raise RuntimeError(
+            "Best checkpoint value {} does not equal history {} {}".format(
+                state.get("value"), mode, expected_value
+            )
+        )
+    if int(state.get("completed_epoch")) != expected_epoch:
+        raise RuntimeError(
+            "Best checkpoint epoch {} does not equal history best epoch {}".format(
+                state.get("completed_epoch"), expected_epoch
+            )
+        )
+    result["history_best_epoch"] = expected_epoch
+    result["history_best_value"] = expected_value
+    return result
 
 
 def _load_starting_state(
@@ -1029,7 +1137,6 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         write_json(metadata_path, metadata)
         raise
 
-    _atomic_save_weights(backbone, final_path)
     history_payload = {
         "epochs": [int(epoch) + 1 for epoch in history.epoch],
         "initial_epoch": initial_epoch,
@@ -1039,6 +1146,19 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         str(outputs.get("history_path", run_dir / "history.json")), config
     )
     write_json(history_path, history_payload)
+    checkpoint_selection = _verify_best_checkpoint_selection(
+        best_path,
+        history_payload,
+        training,
+        resumed=starting_state["mode"] == "resume",
+        validation=validation,
+    )
+    # ``final`` is an explicit, global-best convenience artifact.  This also
+    # prevents a resumed fit from publishing only the best weights from its
+    # post-resume callback window.
+    backbone.load_weights(str(best_path))
+    _atomic_save_weights(backbone, final_path)
+    checkpoint_selection["final_weights_source"] = "best_checkpoint"
 
     artifacts: Dict[str, Any] = {}
     for name, path in (
@@ -1058,6 +1178,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     metadata["status"] = "complete"
     metadata["finished_at_utc"] = _utc_now()
     metadata["completed_epochs"] = history_payload["epochs"]
+    metadata["checkpoint_selection"] = checkpoint_selection
     metadata["artifacts"] = artifacts
     write_json(metadata_path, metadata)
 
@@ -1069,6 +1190,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "initial_epoch": initial_epoch,
         "completed_epochs": history_payload["epochs"],
         "artifacts": artifacts,
+        "checkpoint_selection": checkpoint_selection,
         "metadata_path": str(metadata_path),
         "data_report": _jsonable(data_report),
         "label_hashes": label_hashes,

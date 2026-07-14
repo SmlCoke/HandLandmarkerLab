@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional,
 from .config import load_config, resolve_path
 from .contracts import effective_head_weights
 from .io_utils import build_basename_index, read_jsonl, sha256_file
+from .pretrain_curation import verify_curation_manifest
 
 
 TRAIN_SCHEMA = "train_finalize_v1"
@@ -620,6 +621,16 @@ def audit_canonical_dataset(
             try:
                 image_hash = sha256_file(resolved_path)
                 hash_to_ids[image_hash].append(record_id)
+                curation = row.get("pretrain_curation") or {}
+                expected_image_hash = (
+                    curation.get("image_sha256")
+                    if isinstance(curation, Mapping)
+                    else None
+                )
+                if expected_image_hash and image_hash != str(expected_image_hash):
+                    row_errors.append(
+                        "materialized image hash does not match pretrain_curation.image_sha256"
+                    )
             except OSError as exc:
                 row_errors.append("could not hash image: {}".format(exc))
 
@@ -735,6 +746,9 @@ def inspect_config(
     """Inspect the primary configured dataset and configured comparison sets."""
 
     dataset_cfg = dict(config.get("data") or config.get("dataset") or {})
+    curation_manifest = verify_curation_manifest(
+        config, dataset_cfg, error_type=DatasetContractError
+    )
     task = str(config.get("task", ""))
     stage = str(dataset_cfg.get("require_training_stage") or config.get("stage") or "") or None
     split = str(dataset_cfg.get("require_split") or config.get("split") or "") or None
@@ -888,6 +902,7 @@ def inspect_config(
         "leakage": leakages,
         "failed_datasets": failed_datasets,
         "failed_leakage_checks": len(failed_leakage),
+        "curation_manifest": curation_manifest,
     }
 
 

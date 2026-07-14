@@ -32,7 +32,7 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/pretrain/checkpoints/best.weights.h5"
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/pretrain/checkpoints/best.weights.h5"
 
 evaluation:
   # Canonical inputs are already 256x256 Hand ROIs. Evaluation loads only Hand.
@@ -45,7 +45,7 @@ inference:
   batch_size: 128
 
 output:
-  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/eval/pretrain/test"
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/eval/pretrain/test"
   overwrite: false
 
 runtime:
