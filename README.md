@@ -7,7 +7,7 @@ pretrain 分为两个显式阶段：
 1. `geometry`：只使用具有完整 21 点伪标签的 positive，先学稳定手部几何；
 2. `multitask`：从 geometry best 初始化，只加入人工确认的 true negative，学习 `hand_flag` 并轻量学习 handedness。
 
-未经人工复核的 `NEG_*_CANDIDATE` 是 teacher abstention，不是可信无手样本。系统会把它们及其 ROI 持久化到审查包，但 `make multitask` 会 fail-closed，绝不会自动把它们作为负例训练。
+未经人工复核的 `NEG_*_CANDIDATE` 是 teacher abstention，不是可信无手样本。系统会把它们及其 ROI 持久化到审查包，但 `make pretrain-multitask` 会 fail-closed，绝不会自动把它们作为负例训练。
 
 详细的分阶段原理、人工负例判定、JSONL 格式和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)。
 
@@ -21,7 +21,7 @@ pretrain 分为两个显式阶段：
 | 输出 2 | `handedness` sigmoid，Left=0、Right=1 |
 | 外部原图 ROI | `scale=(1.8,1.8)`、`shift=(0,-0.1)`、wrist→middle MCP 旋转 |
 
-Val/Test 直接读取 canonical 256×256 Hand ROI，只运行 Hand Landmarker。只有 `make infer` 才对外部原图执行 Palm → rotated ROI → Hand。
+Val/Test 直接读取 canonical 256×256 Hand ROI，只运行 Hand Landmarker。只有 `make infer-geometry` 或 `make infer-multitask` 才对外部原图执行 Palm → rotated ROI → Hand。
 
 ## v2
 
@@ -47,29 +47,29 @@ conda activate hand-landmarker-tf29
 make paths
 make compile
 make test
-make curate
+make pretrain-curate
 make doctor
-make inspect
-make smoke
-make train
-make eval-val
-make eval-test
-make infer
+make inspect-geometry
+make pretrain-geometry-smoke
+make pretrain-geometry
+make eval-val-geometry
+make eval-test-geometry
+make infer-geometry
 ```
 
 完成负例人工审查后：
 
 ```bash
-make curate-reviewed
-make check-multitask
-make multitask
-make eval-val HAND_PRETRAIN_PHASE=multitask
-make eval-test HAND_PRETRAIN_PHASE=multitask
-make infer HAND_PRETRAIN_PHASE=multitask
-make export HAND_PRETRAIN_PHASE=multitask
+make pretrain-curate-reviewed
+make check-multitask-data
+make pretrain-multitask
+make eval-val-multitask
+make eval-test-multitask
+make infer-multitask
+make export-multitask
 ```
 
-`make pretrain` 是 geometry 的首次顺序入口：`curate → doctor → inspect → smoke → train`；它不会跳过人工复核去自动启动 multitask。
+Makefile 不再提供 `train`、`pretrain`、`multitask`、`inspect` 等含义不完整的别名；每个公开目标都显式标出 pretrain 子阶段和动作。
 
 ## 配置与目录
 

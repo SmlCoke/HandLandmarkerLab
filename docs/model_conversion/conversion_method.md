@@ -134,7 +134,7 @@ datasets/
 本仓库已把上述输入数据制作集成到 Hand Landmarker 的 ONNX `export` 步骤。默认执行：
 
 ```bash
-make export
+make export-geometry
 ```
 
 会在 ONNX 通过接口、算子和数值一致性校验后，从当前阶段的 canonical 数据中只读抽样并同时生成：
@@ -149,7 +149,7 @@ make export
 默认产物位于：
 
 ```text
-${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/model_conversion/
+${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/export/<phase>/model_conversion/
 ├── datasets/
 │   ├── calibrate_datasets/
 │   │   └── img_*.npy
@@ -165,9 +165,9 @@ ${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/model_conversion/
 若只想重建数据包而不运行 TensorFlow/ONNX 导出，可执行：
 
 ```bash
-make conversion-data
+make conversion-data-geometry
 # multitask checkpoint：
-make conversion-data HAND_PRETRAIN_PHASE=multitask
+make conversion-data-multitask
 ```
 
 命令只读取当前 pretrain geometry Train 与公共 Val/Test。目标目录已存在时会失败；确认可替换后显式传入 `CONVERSION_ARGS=--overwrite`，或在 export 时使用 `EXPORT_ARGS=--overwrite`。

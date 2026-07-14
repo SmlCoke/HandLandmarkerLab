@@ -56,10 +56,10 @@ P_image = TL + x_roi × (TR-TL) + y_roi × (BL-TL)
 ## 4. ONNX 导出
 
 ```bash
-make export
+make export-geometry
 ```
 
-默认导出 Makefile 中 `HAND_PRETRAIN_PHASE := geometry` 指定的 checkpoint。multitask 完成后使用 `make export HAND_PRETRAIN_PHASE=multitask`。
+multitask 完成后使用 `make export-multitask`。目标名直接决定 checkpoint 和校准训练集子阶段。
 
 导出器执行以下门禁：
 
@@ -84,7 +84,7 @@ make export
 当项目内维护的清单尚未覆盖已经由 A1 官方工具链验证过的算子时，可以只对本次运行追加 `--force`：
 
 ```bash
-make export EXPORT_ARGS=--force
+make export-geometry EXPORT_ARGS=--force
 ```
 
 该参数只绕过 A1 算子名称与属性门禁。`onnx.checker`、固定 I/O/类型/shape、静态 batch、opset 11、Keras↔ONNX 数值比对、转换数据检查和覆盖保护仍然执行。contract 的 `a1_operator_audit` 会保留 `unsupported` 与属性违规，并记录 `strict: true`、`forced: true`、`enforced: false`。若目标产物已存在，仍需单独、显式追加 `--overwrite`。
@@ -96,9 +96,9 @@ make export EXPORT_ARGS=--force
 默认产物按 checkpoint 阶段隔离：
 
 ```text
-${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/hand_landmarker_v2.onnx
-${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/hand_landmarker_v2.contract.json
-${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/model_conversion/datasets.zip
+${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/export/<phase>/hand_landmarker_v2.onnx
+${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/export/<phase>/hand_landmarker_v2.contract.json
+${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/export/<phase>/model_conversion/datasets.zip
 ```
 
 其中 `<phase>` 为 `geometry` 或 `multitask`。配置中的 `model.checkpoint_stage: pretrain` 声明大训练阶段，phase 则由 Makefile 选择当前 pretrain 子阶段。contract 额外记录 `reparameterization_parity` 的训练/部署参数量与逐输出融合误差。

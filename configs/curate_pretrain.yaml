@@ -2,7 +2,7 @@ schema_version: 1
 task: curate_pretrain
 
 source:
-  labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl"
 
 curation:
   # LOW handedness confidence does not invalidate otherwise useful geometry;
@@ -11,8 +11,8 @@ curation:
   normalized_coordinate_range: [0.0, 1.0]
 
   # A teacher abstention is never treated as verified background by default.
-  # `make curate` leaves this empty and writes the review queue.  Then
-  # `make curate-reviewed` supplies the external, versioned decision JSONL.
+  # `make pretrain-curate` leaves this empty and writes the review queue. Then
+  # `make pretrain-curate-reviewed` supplies the versioned decision JSONL.
   negative_review_decisions: null
   overlap_core_landmark_ids: [0, 1, 5, 9, 13, 17]
   overlap_minimum_core_points: 3
@@ -22,7 +22,7 @@ curation:
   smoke_selection_salt: pretrain_landmark_smoke_v2
 
 output:
-  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_curated/${HAND_PRETRAIN_CURATED_ID:-v2-pretrain-r1}"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}"
   # Byte-isolated snapshot: later edits to source crops cannot change the
   # images that were actually reviewed and trained.
   materialize_images: copy

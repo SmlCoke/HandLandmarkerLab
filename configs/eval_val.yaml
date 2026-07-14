@@ -3,13 +3,13 @@ task: evaluate
 split: val
 
 data:
-  data_root: "${HAND_DATA_ROOT:-/root/autodl-tmp}"
-  labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/val_merged/05_labels/hand_validation_labels.jsonl"
-  ignored_labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/val_merged/05_labels/hand_val_ignored.jsonl"
+  data_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/val_merged/05_labels/hand_validation_labels.jsonl"
+  ignored_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/val_merged/05_labels/hand_val_ignored.jsonl"
   crop_image_roots:
-    - "${HAND_DATA_ROOT:-/root/autodl-tmp}/eval_sources/peak_vals/02_roi_crops/images"
-    - "${HAND_DATA_ROOT:-/root/autodl-tmp}/eval_sources/soar_vals/02_roi_crops/images"
-    - "${HAND_DATA_ROOT:-/root/autodl-tmp}/eval_sources/peak_vali/02_roi_crops/images"
+    - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/eval_sources/peak_vals/02_roi_crops/images"
+    - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/eval_sources/soar_vals/02_roi_crops/images"
+    - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/eval_sources/peak_vali/02_roi_crops/images"
   crop_path_key: crop_path
   path_policy: canonical_crop_path_only
   require_schema_version: evaluation_gold_v1
@@ -33,7 +33,7 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/${HAND_PRETRAIN_PHASE:-geometry}/checkpoints/best.weights.h5"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/${HAND_PRETRAIN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 evaluation:
   # Canonical inputs are already 256x256 Hand ROIs. Evaluation loads only Hand.
@@ -47,7 +47,7 @@ inference:
   batch_size: 128
 
 output:
-  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/eval/${HAND_PRETRAIN_PHASE:-geometry}/val"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/eval/${HAND_PRETRAIN_PHASE:-geometry}/val"
   overwrite: false
 
 runtime:

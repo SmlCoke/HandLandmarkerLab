@@ -3,11 +3,11 @@
 ## 1. Hand ROI Gold 评估
 
 ```bash
-make eval-val
-make eval-test
+make eval-val-geometry
+make eval-test-geometry
 ```
 
-默认评估 Makefile 中 `HAND_PRETRAIN_PHASE := geometry` 对应的 checkpoint。multitask 完成后使用 `make eval-val HAND_PRETRAIN_PHASE=multitask` 和 `make eval-test HAND_PRETRAIN_PHASE=multitask`。
+multitask 完成后使用 `make eval-val-multitask` 和 `make eval-test-multitask`。目标名直接决定 checkpoint 子阶段。
 
 Val/Test 的 07B Gold 中，每行 `crop_path` 已经指向一张 `256×256` Hand ROI。评估器直接把这些 ROI 批量送入 Hand Landmarker，执行路径固定为：
 
@@ -21,7 +21,7 @@ canonical Hand ROI → Hand Landmarker → 三个 head 的指标
 
 在所有未忽略 ROI 上输出 TP/FP/TN/FN、accuracy、precision、recall、F1、FPR 和 FNR。Val 可以扫 threshold；Test 配置关闭调阈值，必须使用同一 pretrain phase 在 Val 上冻结的值。geometry 与 multitask 的 threshold 必须独立选择、记录和冻结。
 
-具体冻结流程：运行 `make eval-val HAND_PRETRAIN_PHASE=<phase>`，根据 Val 报告选择 threshold，把值写入 `configs/eval_test.yaml` 的 `evaluation.hand_flag_threshold`，并在实验记录中注明 phase，再运行相同 phase 的 Test。外部推理还应同步更新 `configs/infer.yaml` 的 `inference.hand_flag_threshold`。
+具体冻结流程：运行对应阶段的 `make eval-val-geometry` 或 `make eval-val-multitask`，根据 Val 报告选择 threshold，把值写入 `configs/eval_test.yaml` 的 `evaluation.hand_flag_threshold`，并在实验记录中注明阶段，再运行同阶段的 Test。外部推理还应同步更新 `configs/infer.yaml` 的 `inference.hand_flag_threshold`。
 
 ### Landmarks
 
@@ -39,7 +39,7 @@ canonical Hand ROI → Hand Landmarker → 三个 head 的指标
 
 只在 GT positive 且 Left/Right 明确的样本上报告 overall accuracy、Left recall、Right recall 和 confusion matrix。
 
-默认输出目录分别是 `${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/eval/<phase>/val` 与 `${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/eval/<phase>/test`，目录内包含 `metrics.json` 和逐 ROI `predictions.jsonl`。
+默认输出目录分别是 `${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/eval/<phase>/val` 与 `${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/eval/<phase>/test`，目录内包含 `metrics.json` 和逐 ROI `predictions.jsonl`。
 
 评估默认不覆盖已有的这两个文件；重复运行前应换一个 `output.dir`，或在确认后显式设置 `output.overwrite: true`。
 
@@ -69,10 +69,10 @@ python scripts/evaluate.py --config configs/eval_val.yaml \
 编辑 `configs/infer.yaml` 的输入路径，然后运行：
 
 ```bash
-make infer
+make infer-geometry
 ```
 
-该目标默认加载 geometry checkpoint。multitask 使用 `make infer HAND_PRETRAIN_PHASE=multitask`，输出按 phase 隔离在 `${HAND_DATA_ROOT}/hand_landmarker_inference/<RUN_ID>/<phase>`。
+multitask 使用 `make infer-multitask`。输出按阶段隔离在 `${HAND_TRAIN_ROOT}/hand_landmarker_inference/<PRETRAIN_ID>/<phase>`。
 
 这是本系统中处理任意外部图片的独立入口，始终执行：
 
@@ -90,7 +90,7 @@ make infer
 
 叠加图包含 Palm bbox、旋转 ROI、Hand skeleton、Palm/presence/handedness 分数。板端本身不会按 `hand_flag` 门控 landmark 输出；PC 图中 threshold 仅控制是否绘制骨架，JSONL 始终保存三个 head 的原始结果。
 
-`make infer` 的级联输出用于人工复核，不得写入或替代 `eval-val`/`eval-test` 的 Hand ROI 指标。
+`make infer-geometry`/`make infer-multitask` 的级联输出用于人工复核，不得写入或替代对应阶段的 Val/Test Hand ROI 指标。
 
 输入应是标注系统约定的 `1280×720 upright` 灰度/可转灰度图。若输入是板端传感器的 `720×1280` 竖屏原始方向，显式设置：
 

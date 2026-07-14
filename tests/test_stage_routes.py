@@ -120,22 +120,34 @@ class MakePretrainRouteTests(unittest.TestCase):
 
     def test_makefile_declares_reproducible_identity(self):
         text = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("HAND_DATA_ROOT := /root/autodl-tmp", text)
-        self.assertIn("HAND_PRETRAIN_CURATED_ID := v2-pretrain-r1", text)
-        self.assertIn("HAND_PRETRAIN_RUN_ID := v2-pretrain-r1", text)
+        self.assertIn("HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0", text)
+        self.assertIn("HAND_PRETRAIN_ID := v2-pretrain-r1", text)
+        self.assertNotIn("HAND_DATA_ROOT", text)
+        self.assertNotIn("HAND_PRETRAIN_CURATED_ID", text)
+        self.assertNotIn("HAND_PRETRAIN_RUN_ID", text)
 
-    def test_compact_targets_route_to_compact_configs(self):
+    def test_explicit_targets_route_to_compact_configs(self):
         expected = {
-            "curate": "configs/curate_pretrain.yaml",
-            "inspect": "configs/train_geometry.yaml",
-            "smoke": "configs/train_smoke.yaml",
-            "train": "configs/train_geometry.yaml",
-            "multitask": "configs/train_multitask.yaml",
-            "eval-val": "configs/eval_val.yaml",
-            "eval-test": "configs/eval_test.yaml",
-            "infer": "configs/infer.yaml",
-            "export": "configs/export.yaml",
-            "conversion-data": "configs/export.yaml",
+            "pretrain-curate": "configs/curate_pretrain.yaml",
+            "pretrain-curate-reviewed": "configs/curate_pretrain.yaml",
+            "inspect-geometry": "configs/train_geometry.yaml",
+            "inspect-geometry-smoke": "configs/train_smoke.yaml",
+            "pretrain-geometry-smoke": "configs/train_smoke.yaml",
+            "check-geometry-smoke": "configs/train_smoke.yaml",
+            "pretrain-geometry": "configs/train_geometry.yaml",
+            "check-multitask-data": "configs/train_multitask.yaml",
+            "inspect-multitask": "configs/train_multitask.yaml",
+            "pretrain-multitask": "configs/train_multitask.yaml",
+            "eval-val-geometry": "configs/eval_val.yaml",
+            "eval-test-geometry": "configs/eval_test.yaml",
+            "eval-val-multitask": "configs/eval_val.yaml",
+            "eval-test-multitask": "configs/eval_test.yaml",
+            "infer-geometry": "configs/infer.yaml",
+            "infer-multitask": "configs/infer.yaml",
+            "export-geometry": "configs/export.yaml",
+            "export-multitask": "configs/export.yaml",
+            "conversion-data-geometry": "configs/export.yaml",
+            "conversion-data-multitask": "configs/export.yaml",
         }
         for target, config in expected.items():
             with self.subTest(target=target):
@@ -143,12 +155,25 @@ class MakePretrainRouteTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stdout)
                 self.assertIn(config, result.stdout)
 
-    def test_multitask_runs_gate_before_training(self):
-        result = self._dry_run("multitask")
+    def test_ambiguous_legacy_targets_do_not_exist(self):
+        for target in (
+            "env", "curate", "inspect", "inspect-smoke", "smoke", "train",
+            "pretrain", "multitask", "eval-val", "eval-test", "infer", "export",
+            "conversion-data",
+        ):
+            with self.subTest(target=target):
+                result = self._dry_run(target)
+                self.assertNotEqual(0, result.returncode, result.stdout)
+
+    def test_multitask_runs_gate_and_inspection_before_training(self):
+        result = self._dry_run("pretrain-multitask")
         self.assertEqual(0, result.returncode, result.stdout)
         gate = result.stdout.find("check_multitask_data.py")
+        inspection = result.stdout.find("inspect_dataset.py")
         train = result.stdout.find("scripts/train.py")
         self.assertGreaterEqual(gate, 0, result.stdout)
+        self.assertGreater(inspection, gate, result.stdout)
+        self.assertGreater(train, inspection, result.stdout)
         self.assertGreater(train, gate, result.stdout)
 
 

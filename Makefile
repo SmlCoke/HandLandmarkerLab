@@ -4,15 +4,13 @@ PYTHON := python
 CONDA := conda
 ENV_FILE := environment.yml
 
-# Reproducible experiment identity. Edit these values in the repository before
-# a new server run; they are exported to every YAML config below.
-HAND_DATA_ROOT := /root/autodl-tmp
-HAND_PRETRAIN_CURATED_ID := v2-pretrain-r1
-HAND_PRETRAIN_RUN_ID := v2-pretrain-r1
-HAND_PRETRAIN_PHASE := geometry
-HAND_PRETRAIN_CALIBRATION_CONFIG := $(if $(filter multitask,$(HAND_PRETRAIN_PHASE)),configs/train_multitask.yaml,configs/train_geometry.yaml)
-HAND_PRETRAIN_REVIEW_FILE := $(HAND_DATA_ROOT)/hand_landmarker_reviews/$(HAND_PRETRAIN_CURATED_ID)/negative_review_decisions.jsonl
-export HAND_DATA_ROOT HAND_PRETRAIN_CURATED_ID HAND_PRETRAIN_RUN_ID HAND_PRETRAIN_PHASE HAND_PRETRAIN_CALIBRATION_CONFIG
+# The only experiment inputs that operators edit between runs.
+# HLML-2.0 matches the latest repository tag and isolates this training system
+# from the separate DatasetFab repository under /root/autodl-tmp.
+HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
+HAND_PRETRAIN_ID := v2-pretrain-r1
+HAND_PRETRAIN_REVIEW_FILE := $(HAND_TRAIN_ROOT)/hand_landmarker_reviews/$(HAND_PRETRAIN_ID)/negative_review_decisions.jsonl
+export HAND_TRAIN_ROOT HAND_PRETRAIN_ID
 
 CURATE_CONFIG := configs/curate_pretrain.yaml
 GEOMETRY_CONFIG := configs/train_geometry.yaml
@@ -24,7 +22,8 @@ INFER_CONFIG := configs/infer.yaml
 EXPORT_CONFIG := configs/export.yaml
 
 CURATE_ARGS ?=
-TRAIN_ARGS ?=
+GEOMETRY_ARGS ?=
+MULTITASK_ARGS ?=
 SMOKE_TRAIN_ARGS ?=
 SMOKE_GATE_ARGS ?=
 MULTITASK_GATE_ARGS ?=
@@ -34,38 +33,52 @@ EXPORT_ARGS ?=
 CONVERSION_ARGS ?=
 TEST_ARGS ?=
 
-.PHONY: help paths env env-update doctor curate curate-reviewed inspect inspect-smoke \
-	smoke train check-multitask inspect-multitask multitask pretrain eval-val \
-	eval-test infer export conversion-data test compile
+.PHONY: help paths env-create env-update doctor \
+	pretrain-curate pretrain-curate-reviewed \
+	inspect-geometry inspect-geometry-smoke inspect-multitask \
+	pretrain-geometry-smoke check-geometry-smoke pretrain-geometry \
+	check-multitask-data pretrain-multitask \
+	eval-val-geometry eval-test-geometry eval-val-multitask eval-test-multitask \
+	infer-geometry infer-multitask export-geometry export-multitask \
+	conversion-data-geometry conversion-data-multitask test compile
 
 help:
-	@echo Hand Landmarker v2 pretrain
-	@echo   make paths             Print the fixed dataset/run identity
-	@echo   make env               Create the Conda environment
-	@echo   make doctor            Verify Python, TensorFlow and GPU
-	@echo   make curate            Persist geometry data and negative review queue
-	@echo   make curate-reviewed   Rebuild curation with human review decisions
-	@echo   make smoke             Train and verify the 128-ROI overfit gate
-	@echo   make train             Train phase 1: positive-only geometry
-	@echo   make multitask         Train phase 2 after the confirmed-negative gate
-	@echo   make pretrain          Run curate, inspect, smoke and geometry train
-	@echo   make eval-val          Evaluate HAND_PRETRAIN_PHASE [geometry by default]
-	@echo   make eval-test         Evaluate HAND_PRETRAIN_PHASE on locked Test
-	@echo   make infer             Palm + Hand inference for HAND_PRETRAIN_PHASE
-	@echo   make export            Fuse v2 branches, export and validate ONNX
-	@echo   make conversion-data   Build conversion NPY inputs only
-	@echo   make test              Run unit tests
-	@echo   make compile           Syntax-check Python sources
+	@echo Hand Landmarker HLML-2.0 pretrain
+	@echo   make paths                       Print the fixed training root and experiment ID
+	@echo   make env-create                  Create the documented Conda environment
+	@echo   make env-update                  Reconcile the documented Conda environment
+	@echo   make doctor                      Verify Python, TensorFlow and GPU
+	@echo   make pretrain-curate             Persist geometry data and the negative review pack
+	@echo   make pretrain-curate-reviewed    Rebuild curation with human review decisions
+	@echo   make inspect-geometry            Audit geometry Train, Val and locked Test
+	@echo   make inspect-geometry-smoke      Audit the fixed 128-ROI smoke set
+	@echo   make pretrain-geometry-smoke     Train and verify the geometry smoke gate
+	@echo   make check-geometry-smoke        Recheck an existing geometry smoke run
+	@echo   make pretrain-geometry           Train geometry after the smoke gate
+	@echo   make check-multitask-data        Verify human-confirmed negative evidence
+	@echo   make inspect-multitask           Audit multitask Train, Val and locked Test
+	@echo   make pretrain-multitask          Train multitask from geometry best
+	@echo   make eval-val-geometry           Evaluate geometry on Val
+	@echo   make eval-test-geometry          Evaluate geometry on locked Test
+	@echo   make eval-val-multitask          Evaluate multitask on Val
+	@echo   make eval-test-multitask         Evaluate multitask on locked Test
+	@echo   make infer-geometry              Palm + geometry Hand inference
+	@echo   make infer-multitask             Palm + multitask Hand inference
+	@echo   make export-geometry             Fuse and export geometry ONNX
+	@echo   make export-multitask            Fuse and export multitask ONNX
+	@echo   make conversion-data-geometry    Build geometry conversion NPY inputs
+	@echo   make conversion-data-multitask   Build multitask conversion NPY inputs
+	@echo   make test                        Run unit tests
+	@echo   make compile                     Syntax-check Python sources
 
 paths:
-	@echo HAND_DATA_ROOT=$(HAND_DATA_ROOT)
-	@echo HAND_PRETRAIN_CURATED_ID=$(HAND_PRETRAIN_CURATED_ID)
-	@echo HAND_PRETRAIN_RUN_ID=$(HAND_PRETRAIN_RUN_ID)
-	@echo HAND_PRETRAIN_PHASE=$(HAND_PRETRAIN_PHASE)
-	@echo HAND_PRETRAIN_CALIBRATION_CONFIG=$(HAND_PRETRAIN_CALIBRATION_CONFIG)
+	@echo HAND_TRAIN_ROOT=$(HAND_TRAIN_ROOT)
+	@echo HAND_PRETRAIN_ID=$(HAND_PRETRAIN_ID)
 	@echo HAND_PRETRAIN_REVIEW_FILE=$(HAND_PRETRAIN_REVIEW_FILE)
+	@echo CURATED_ROOT=$(HAND_TRAIN_ROOT)/train_pretrain_curated/$(HAND_PRETRAIN_ID)
+	@echo RUN_ROOT=$(HAND_TRAIN_ROOT)/hand_landmarker_runs/$(HAND_PRETRAIN_ID)
 
-env:
+env-create:
 	$(CONDA) env create -f "$(ENV_FILE)"
 
 env-update:
@@ -74,57 +87,56 @@ env-update:
 doctor:
 	$(PYTHON) -B scripts/check_environment.py --config "$(GEOMETRY_CONFIG)"
 
-curate:
+pretrain-curate:
 	$(PYTHON) -B scripts/curate_pretrain.py --config "$(CURATE_CONFIG)" $(CURATE_ARGS)
 
-curate-reviewed:
+pretrain-curate-reviewed:
 	$(PYTHON) -B scripts/curate_pretrain.py --config "$(CURATE_CONFIG)" --review-decisions "$(HAND_PRETRAIN_REVIEW_FILE)" --overwrite $(CURATE_ARGS)
 
-inspect:
+inspect-geometry:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(GEOMETRY_CONFIG)"
 
-inspect-smoke:
+inspect-geometry-smoke:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(SMOKE_CONFIG)"
 
-smoke:
-	$(MAKE) inspect-smoke
+pretrain-geometry-smoke: inspect-geometry-smoke
 	$(PYTHON) -B scripts/train.py --config "$(SMOKE_CONFIG)" $(SMOKE_TRAIN_ARGS)
 	$(PYTHON) -B scripts/check_pretrain_smoke.py --config "$(SMOKE_CONFIG)" $(SMOKE_GATE_ARGS)
 
-train:
+check-geometry-smoke:
 	$(PYTHON) -B scripts/check_pretrain_smoke.py --config "$(SMOKE_CONFIG)" $(SMOKE_GATE_ARGS)
-	$(PYTHON) -B scripts/train.py --config "$(GEOMETRY_CONFIG)" $(TRAIN_ARGS)
 
-check-multitask:
+pretrain-geometry: check-geometry-smoke
+	$(PYTHON) -B scripts/train.py --config "$(GEOMETRY_CONFIG)" $(GEOMETRY_ARGS)
+
+check-multitask-data:
 	$(PYTHON) -B scripts/check_multitask_data.py --config "$(MULTITASK_CONFIG)" $(MULTITASK_GATE_ARGS)
 
-inspect-multitask: check-multitask
+inspect-multitask:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(MULTITASK_CONFIG)"
 
-multitask: inspect-multitask
-	$(PYTHON) -B scripts/train.py --config "$(MULTITASK_CONFIG)" $(TRAIN_ARGS)
+pretrain-multitask: check-multitask-data inspect-multitask
+	$(PYTHON) -B scripts/train.py --config "$(MULTITASK_CONFIG)" $(MULTITASK_ARGS)
 
-# Keep dependent steps sequential even if the caller normally uses make -j.
-pretrain:
-	$(MAKE) curate
-	$(MAKE) doctor
-	$(MAKE) inspect
-	$(MAKE) smoke
-	$(MAKE) train
+eval-val-geometry eval-test-geometry infer-geometry export-geometry conversion-data-geometry: export HAND_PRETRAIN_PHASE := geometry
+export-geometry conversion-data-geometry: export HAND_PRETRAIN_CALIBRATION_CONFIG := configs/train_geometry.yaml
 
-eval-val:
+eval-val-multitask eval-test-multitask infer-multitask export-multitask conversion-data-multitask: export HAND_PRETRAIN_PHASE := multitask
+export-multitask conversion-data-multitask: export HAND_PRETRAIN_CALIBRATION_CONFIG := configs/train_multitask.yaml
+
+eval-val-geometry eval-val-multitask:
 	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_VAL_CONFIG)" $(EVAL_ARGS)
 
-eval-test:
+eval-test-geometry eval-test-multitask:
 	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_TEST_CONFIG)" $(EVAL_ARGS)
 
-infer:
+infer-geometry infer-multitask:
 	$(PYTHON) -B scripts/infer_folder.py --config "$(INFER_CONFIG)" $(INFER_ARGS)
 
-export:
+export-geometry export-multitask:
 	$(PYTHON) -B scripts/export_onnx.py --config "$(EXPORT_CONFIG)" $(EXPORT_ARGS)
 
-conversion-data:
+conversion-data-geometry conversion-data-multitask:
 	$(PYTHON) -B scripts/build_conversion_datasets.py --config "$(EXPORT_CONFIG)" $(CONVERSION_ARGS)
 
 test:

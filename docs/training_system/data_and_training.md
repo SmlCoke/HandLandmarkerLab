@@ -21,7 +21,7 @@
 
 Geometry 阶段不是“模型只能训练 landmarks”。它仍保留三个输出，只是 loss 配置有意设为 landmarks 主导、positive-only presence 辅助、handedness 关闭。Multitask 阶段会从 geometry 的 `best.weights.h5` 初始化，启用人工 true negative 和较小的 presence/handedness loss。
 
-`make multitask` 默认 fail-closed：没有足够人工确认负例时会拒绝训练，不会把未复核 teacher abstention 自动降格成负例。这也是先前没有把 multitask 与 geometry 一起自动执行的根本原因。
+`make pretrain-multitask` 默认 fail-closed：没有足够人工确认负例时会拒绝训练，不会把未复核 teacher abstention 自动降格成负例。这也是先前没有把 multitask 与 geometry 一起自动执行的根本原因。
 
 ## 2. 当前文件与固定实验身份
 
@@ -41,16 +41,33 @@ export.yaml            v2 融合、ONNX 与转换数据导出
 服务器路径与实验 ID 固定写在 `Makefile` 顶部：
 
 ```make
-HAND_DATA_ROOT := /root/autodl-tmp
-HAND_PRETRAIN_CURATED_ID := v2-pretrain-r1
-HAND_PRETRAIN_RUN_ID := v2-pretrain-r1
-HAND_PRETRAIN_PHASE := geometry
+HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
+HAND_PRETRAIN_ID := v2-pretrain-r1
 ```
 
-每次正式实验前直接修改并提交这几行。不要只在 shell 中临时 `export` 一个新值，否则后续难以仅凭仓库版本复核训练使用了哪套数据与输出目录。执行以下命令可核对本次 Make 实际使用的值：
+`HAND_TRAIN_ROOT` 是当前训练系统版本的唯一数据盘根；`HAND_PRETRAIN_ID` 同时标识提纯快照、geometry/multitask run、评估、推理和导出。review 文件路径由这两个值派生，不再维护 curated ID、run ID、phase 三套外部变量。每次正式实验前直接修改并提交这两行。不要只在 shell 中临时 `export` 一个新值，否则后续难以仅凭仓库版本复核训练使用了哪套数据与输出目录。执行以下命令可核对本次 Make 实际使用的值：
 
 ```bash
 make paths
+```
+
+目标数据盘布局如下。`TrainFab` 只属于本仓库的训练、评估和推理系统；`DatasetFab` 是另一个仓库的数据集制作系统，两者不得互相写入。
+
+```text
+/root/autodl-tmp/
+├── DatasetFab/                         # 独立的数据集制作系统
+└── TrainFab/
+    └── HLML-2.0/                       # HAND_TRAIN_ROOT
+        ├── eval_sources/
+        ├── hand_landmarker_inference/
+        ├── hand_landmarker_runs/
+        ├── hand_landmarker_reviews/
+        ├── peak_train_data/
+        ├── soar_train_data/
+        ├── test_merged/
+        ├── train_pretrain_merged/
+        ├── train_pretrain_curated/
+        └── val_merged/
 ```
 
 新的数据提纯或训练不得复用已有 ID。建议按 `v2-pretrain-r1`、`v2-pretrain-r2` 递增；系统默认拒绝覆盖非空训练目录。
@@ -60,13 +77,13 @@ make paths
 原始入口固定为：
 
 ```text
-${HAND_DATA_ROOT}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl
+${HAND_TRAIN_ROOT}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl
 ```
 
-运行 `make curate` 后生成：
+运行 `make pretrain-curate` 后生成：
 
 ```text
-train_pretrain_curated/<CURATED_ID>/
+train_pretrain_curated/<HAND_PRETRAIN_ID>/
 ├── images/                         # 真正允许进入训练的独立 ROI
 ├── review_images/                  # 冻结后的待审负例 ROI，不参与训练
 ├── 05_labels/
@@ -108,7 +125,7 @@ make test
 ### 4.2 第一次提纯并产生人工审查包
 
 ```bash
-make curate
+make pretrain-curate
 ```
 
 首先检查：
@@ -149,13 +166,13 @@ make curate
 决策文件固定放在 Makefile 打印的 `HAND_PRETRAIN_REVIEW_FILE`，默认是：
 
 ```text
-/root/autodl-tmp/hand_landmarker_reviews/<CURATED_ID>/negative_review_decisions.jsonl
+${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<PRETRAIN_ID>/negative_review_decisions.jsonl
 ```
 
 先创建目录：
 
 ```bash
-mkdir -p /root/autodl-tmp/hand_landmarker_reviews/v2-pretrain-r1
+mkdir -p /root/autodl-tmp/TrainFab/HLML-2.0/hand_landmarker_reviews/v2-pretrain-r1
 ```
 
 每行格式如下；JSONL 不能带数组外壳，`reviewer` 与 `reviewed_at` 必填：
@@ -171,13 +188,13 @@ mkdir -p /root/autodl-tmp/hand_landmarker_reviews/v2-pretrain-r1
 ### 4.4 用人工决策重建提纯快照
 
 ```bash
-make curate-reviewed
+make pretrain-curate-reviewed
 ```
 
 该命令读取 Makefile 固定的 review 文件并显式重建同一个 curated ID。重建后检查：
 
 ```bash
-make check-multitask
+make check-multitask-data
 ```
 
 默认 multitask 门禁要求：
@@ -196,46 +213,38 @@ make check-multitask
 
 ```bash
 make doctor
-make inspect
-make smoke
-make train
+make inspect-geometry
+make pretrain-geometry-smoke
+make pretrain-geometry
 ```
 
 顺序含义：
 
 1. `doctor` 检查 Python 3.8、TensorFlow 2.9、CUDA/cuDNN 和 GPU；
-2. `inspect` 审计 geometry Train、Val、锁定 Test，并检查跨 split 泄漏；
-3. `smoke` 在固定 128 ROI 上训练，并逐条前向验证是否真的可过拟合；
-4. `train` 会再次验证 smoke gate，然后启动完整 geometry。
+2. `inspect-geometry` 审计 geometry Train、Val、锁定 Test，并检查跨 split 泄漏；
+3. `pretrain-geometry-smoke` 在固定 128 ROI 上训练，并逐条前向验证是否真的可过拟合；
+4. `pretrain-geometry` 会再次验证 smoke gate，然后启动完整 geometry。
 
-首次无需人工负例、只想先完成 geometry 时，也可运行：
-
-```bash
-make pretrain
-```
-
-它按 `curate → doctor → inspect → smoke → train` 顺序执行，但不会自动执行人工审查或 multitask。
+系统不提供聚合的 `make pretrain` 或缩写 `make train`；这是为了让日志中的每条命令都能独立说明实际执行的阶段。首次训练仍按上述四条显式命令顺序执行。
 
 Geometry 输出：
 
 ```text
-${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/geometry/
+${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/geometry/
 ```
 
 正式候选权重是 `checkpoints/best.weights.h5`。checkpoint、ReduceLROnPlateau 和 EarlyStopping 都以 `val_landmark_mae/min` 为准；训练结束还会核验 best 状态是否真的对应 history 中的最低验证 MAE。
 
 ### 4.6 Geometry 评估与推理
 
-Makefile 默认 `HAND_PRETRAIN_PHASE := geometry`：
-
 ```bash
-make eval-val
+make eval-val-geometry
 # 根据 Val 报告确定 hand_flag threshold，并写回 eval_test.yaml / infer.yaml。
-make eval-test
-make infer
+make eval-test-geometry
+make infer-geometry
 ```
 
-Val/Test 直接读取已有 256×256 Hand ROI，只运行 Hand Landmarker；它们不运行 Palm。`make infer` 才会对外部原图执行 Palm → rotated ROI → Hand，因此两者不能混为同一评估口径。
+Val/Test 直接读取已有 256×256 Hand ROI，只运行 Hand Landmarker；它们不运行 Palm。`make infer-geometry` 才会对外部原图执行 Palm → rotated ROI → Hand，因此两者不能混为同一评估口径。
 
 Test 只能在 Val 已完成 checkpoint、threshold 和训练方案选择后运行。Test 结果不得反向用于调学习率、epoch、增强、loss coefficient 或 threshold。
 
@@ -244,12 +253,12 @@ Test 只能在 Val 已完成 checkpoint、threshold 和训练方案选择后运�
 人工负例门禁通过且 geometry best checkpoint 已存在后执行：
 
 ```bash
-make check-multitask
+make check-multitask-data
 make inspect-multitask
-make multitask
+make pretrain-multitask
 ```
 
-`make multitask` 本身也会先运行门禁与 inspect。它从：
+`make pretrain-multitask` 本身也会先运行门禁与 inspect。它从：
 
 ```text
 <RUN_ID>/geometry/checkpoints/best.weights.h5
@@ -284,14 +293,14 @@ val_multitask_score = val_landmark_mae
 
 ### 4.8 Multitask 评估、推理和导出
 
-用命令行显式选择 multitask 产物；Make 命令行值会覆盖 Makefile 中的默认 `geometry`，并写入本次子进程环境：
+每个命令直接在目标名中选择 multitask 产物，不再要求人工传入 phase 环境变量：
 
 ```bash
-make eval-val HAND_PRETRAIN_PHASE=multitask
+make eval-val-multitask
 # 冻结 multitask 自己的 Val threshold 后：
-make eval-test HAND_PRETRAIN_PHASE=multitask
-make infer HAND_PRETRAIN_PHASE=multitask
-make export HAND_PRETRAIN_PHASE=multitask
+make eval-test-multitask
+make infer-multitask
+make export-multitask
 ```
 
 Geometry 和 multitask 必须各自在 Val 上确定 threshold，不能沿用另一个阶段的值。
@@ -315,7 +324,7 @@ v2 的改动：
 Conv, Add, Relu, MaxPool, Sigmoid, Identity
 ```
 
-`LeakyRelu` 不再在白名单中。`make export` 会依次验证：
+`LeakyRelu` 不再在白名单中。`make export-geometry` 或 `make export-multitask` 会依次验证：
 
 1. 训练图与融合后 Keras 图的数值一致性；
 2. 融合后的 Keras 与 ONNX 数值一致性；
@@ -365,7 +374,7 @@ model_summary.txt
 复核一次实验时至少保存并对应检查：
 
 - 训练所用 Git commit 与 dirty 状态；
-- Makefile 中的 data root、curated ID、run ID、phase；
+- Makefile 中的 `HAND_TRAIN_ROOT`、`HAND_PRETRAIN_ID` 和所执行的显式阶段目标；
 - curation manifest、review decision SHA-256、训练 labels SHA-256、逐图 SHA-256；
 - best checkpoint SHA-256 与 best epoch；
 - Val 选择的 threshold；
@@ -377,31 +386,31 @@ model_summary.txt
 Geometry：
 
 ```bash
-make curate
+make pretrain-curate
 make doctor
-make inspect
-make smoke
-make train
-make eval-val
-make eval-test
-make infer
+make inspect-geometry
+make pretrain-geometry-smoke
+make pretrain-geometry
+make eval-val-geometry
+make eval-test-geometry
+make infer-geometry
 ```
 
 人工负例与 multitask：
 
 ```bash
 # 人工填写 Makefile 所示 HAND_PRETRAIN_REVIEW_FILE 后
-make curate-reviewed
-make check-multitask
-make multitask
-make eval-val HAND_PRETRAIN_PHASE=multitask
-make eval-test HAND_PRETRAIN_PHASE=multitask
-make infer HAND_PRETRAIN_PHASE=multitask
-make export HAND_PRETRAIN_PHASE=multitask
+make pretrain-curate-reviewed
+make check-multitask-data
+make pretrain-multitask
+make eval-val-multitask
+make eval-test-multitask
+make infer-multitask
+make export-multitask
 ```
 
 只生成官方转换 NPY 数据：
 
 ```bash
-make conversion-data HAND_PRETRAIN_PHASE=multitask
+make conversion-data-multitask
 ```
