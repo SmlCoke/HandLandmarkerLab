@@ -23,8 +23,15 @@ def main() -> None:
         action="store_true",
         help="Replace exactly the configured snapshot directory",
     )
+    parser.add_argument(
+        "--review-decisions",
+        default=None,
+        help="Human negative-review JSONL; overrides curation.negative_review_decisions",
+    )
     args = parser.parse_args()
     config = load_config(args.config)
+    if args.review_decisions:
+        config.setdefault("curation", {})["negative_review_decisions"] = args.review_decisions
     report = curate_pretrain_from_config(
         config,
         overwrite=True if args.overwrite else None,
@@ -34,4 +41,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

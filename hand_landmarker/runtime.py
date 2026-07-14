@@ -330,7 +330,7 @@ def create_hand_predictor(config: Mapping[str, Any]):
         configure_tensorflow_runtime(config)
         return KerasHandPredictor(
             weights_path=str(hand_config["model_path"]),
-            model_version=str(config.get("model", {}).get("version", "v1")),
+            model_version=str(config.get("model", {}).get("version", "v2")),
             num_iterations=config.get("model", {}).get("num_iterations", 8),
         )
     if backend == "onnx":

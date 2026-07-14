@@ -41,7 +41,7 @@ A1 NPU 支持的 ONNX 算子及其限制如下：
 | Concat | 支持 C通道拼接 |
 | Split | 支持 C通道拆分 |
 | Relu | 无特殊限制 |
-| LeakyRelu | 仅支持 alpha = 0.1 或 0.01 |
+| LeakyRelu | 历史白名单曾声明仅支持 alpha = 0.1 或 0.01；当前官方转换工具链实测已不接受，本项目 v2 禁用 |
 | Transpose | 支持4维tensor维度重排， perm = [0,2,3,1] |
 | resize	  | 支持nearest |
 | convtranspose2d	| 无特殊限制 |

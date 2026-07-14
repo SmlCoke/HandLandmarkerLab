@@ -40,12 +40,7 @@ class A1ExportAuditTests(unittest.TestCase):
                 input=["x"],
                 attribute=[_attribute("kernel_shape", [2, 2])],
             ),
-            SimpleNamespace(
-                name="activation",
-                op_type="LeakyRelu",
-                input=["x"],
-                attribute=[_attribute("alpha", 0.1)],
-            ),
+            SimpleNamespace(name="activation", op_type="Relu", input=["x"], attribute=[]),
         ]
         report = _a1_attribute_audit(
             _graph(nodes, {"w": [16, 8, 3, 3]}), SimpleNamespace(helper=_Helper)
@@ -66,12 +61,6 @@ class A1ExportAuditTests(unittest.TestCase):
                 input=["x"],
                 attribute=[_attribute("kernel_shape", [9, 2])],
             ),
-            SimpleNamespace(
-                name="activation",
-                op_type="LeakyRelu",
-                input=["x"],
-                attribute=[_attribute("alpha", 0.2)],
-            ),
         ]
         report = _a1_attribute_audit(
             _graph(nodes, {"w": [16, 300, 3, 3]}), SimpleNamespace(helper=_Helper)
@@ -80,7 +69,7 @@ class A1ExportAuditTests(unittest.TestCase):
         self.assertTrue(any("stride" in value for value in rules))
         self.assertTrue(any("2048" in value for value in rules))
         self.assertTrue(any("MaxPool" in value for value in rules))
-        self.assertTrue(any("alpha" in value for value in rules))
+        self.assertEqual({"Conv", "MaxPool"}, set(report["checked_nodes"]))
 
     def test_contract_and_onnx_share_the_same_overwrite_guard(self):
         with tempfile.TemporaryDirectory() as directory:

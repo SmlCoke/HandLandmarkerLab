@@ -15,149 +15,99 @@ def _normalized(value):
     return str(value).replace("\\", "/")
 
 
-class StageConfigRouteTests(unittest.TestCase):
-    route_names = ("eval_val", "eval_test", "export", "infer")
+class PretrainConfigRouteTests(unittest.TestCase):
+    expected_configs = {
+        "curate_pretrain.yaml",
+        "train_geometry.yaml",
+        "train_smoke.yaml",
+        "train_multitask.yaml",
+        "eval_val.yaml",
+        "eval_test.yaml",
+        "infer.yaml",
+        "export.yaml",
+    }
 
-    def test_default_configs_are_pretrain_routes(self):
-        for name in self.route_names:
+    def test_config_surface_is_small_and_pretrain_only(self):
+        self.assertEqual(
+            self.expected_configs,
+            {path.name for path in CONFIGS.glob("*.yaml")},
+        )
+        for path in CONFIGS.glob("*.yaml"):
+            text = path.read_text(encoding="utf-8").lower()
+            self.assertNotIn("finetune", text, path.name)
+
+    def test_every_model_consumer_routes_to_v2(self):
+        names = (
+            "train_geometry",
+            "train_smoke",
+            "train_multitask",
+            "eval_val",
+            "eval_test",
+            "infer",
+            "export",
+        )
+        for name in names:
             with self.subTest(config=name):
-                config = load_config(CONFIGS / "{}.yaml".format(name))
-                self.assertEqual(config["model"]["checkpoint_stage"], "pretrain")
-                self.assertIn(
-                    "/hand_landmarker_runs/v1-pretrain-geometry/pretrain/checkpoints/best.weights.h5",
-                    _normalized(config["hand"]["model_path"]),
-                )
+                config = load_config(CONFIGS / (name + ".yaml"))
+                self.assertEqual("v2", config["model"]["version"])
+                self.assertEqual("pretrain", config["model"]["checkpoint_stage"])
 
-        self.assertIn(
-            "/eval/pretrain/val",
-            _normalized(load_config(CONFIGS / "eval_val.yaml")["output"]["dir"]),
-        )
-        self.assertIn(
-            "/eval/pretrain/test",
-            _normalized(load_config(CONFIGS / "eval_test.yaml")["output"]["dir"]),
-        )
-        self.assertIn(
-            "/export/pretrain/",
-            _normalized(load_config(CONFIGS / "export.yaml")["export"]["model_path"]),
-        )
-        self.assertTrue(
-            _normalized(load_config(CONFIGS / "infer.yaml")["output"]["dir"]).endswith(
-                "/hand_landmarker_inference/v1-pretrain-geometry"
-            )
-        )
-
-    def test_train_configs_declare_checkpoint_stage(self):
-        for stage in ("pretrain", "finetune"):
-            with self.subTest(stage=stage):
-                config = load_config(CONFIGS / "train_{}.yaml".format(stage))
-                self.assertEqual(config["stage"], stage)
-                self.assertEqual(config["model"]["checkpoint_stage"], stage)
-
-    def test_pretrain_training_has_no_finetune_dependency(self):
-        config = load_config(CONFIGS / "train_pretrain.yaml")
-        self.assertEqual("pretrain", config["stage"])
-        self.assertIsNone(config["training"]["initial_checkpoint"])
-        serialized = json.dumps(config, ensure_ascii=False).replace("\\", "/").lower()
-        self.assertNotIn("train_finetune_merged", serialized)
-        self.assertNotIn("/v1/finetune/checkpoints/", serialized)
-
-    def test_pretrain_curation_output_is_the_training_input(self):
+    def test_geometry_and_multitask_are_explicit_persisted_phases(self):
         curation = load_config(CONFIGS / "curate_pretrain.yaml")
-        training = load_config(CONFIGS / "train_pretrain.yaml")
-        smoke = load_config(CONFIGS / "train_pretrain_smoke.yaml")
+        geometry = load_config(CONFIGS / "train_geometry.yaml")
+        smoke = load_config(CONFIGS / "train_smoke.yaml")
+        multitask = load_config(CONFIGS / "train_multitask.yaml")
         curated_root = _normalized(curation["output"]["dir"])
-        labels = _normalized(training["data"]["labels"])
-        smoke_labels = _normalized(smoke["data"]["labels"])
-        self.assertTrue(labels.startswith(curated_root + "/"))
-        self.assertTrue(smoke_labels.startswith(curated_root + "/"))
-        self.assertTrue(labels.endswith("hand_training_labels_pretrain_landmarks.jsonl"))
-        self.assertTrue(smoke_labels.endswith("hand_training_labels_pretrain_smoke.jsonl"))
-        fractions = training["sampling"]["sample_type_fractions"]
-        self.assertEqual(0.0, fractions["NEG_RUNTIME_CANDIDATE"])
-        self.assertEqual(0.0, fractions["NEG_LOW_PALM_CANDIDATE"])
+        self.assertTrue(_normalized(geometry["data"]["labels"]).startswith(curated_root + "/"))
+        self.assertTrue(_normalized(smoke["data"]["labels"]).startswith(curated_root + "/"))
+        self.assertTrue(_normalized(multitask["data"]["labels"]).startswith(curated_root + "/"))
+        self.assertTrue(geometry["data"]["labels"].endswith("pretrain_landmarks.jsonl"))
+        self.assertTrue(multitask["data"]["labels"].endswith("pretrain_multitask.jsonl"))
+        self.assertIn("/geometry/checkpoints/best.weights.h5", _normalized(multitask["training"]["initial_checkpoint"]))
+        self.assertEqual(0.0, geometry["sampling"]["sample_type_fractions"]["NEG_RUNTIME_CANDIDATE"])
+        self.assertGreater(multitask["sampling"]["sample_type_fractions"]["NEG_RUNTIME_CANDIDATE"], 0.0)
+        self.assertGreaterEqual(multitask["multitask_gate"]["minimum_confirmed_negatives"], 1)
+        self.assertEqual("val_multitask_score", multitask["training"]["checkpoint"]["monitor"])
+        self.assertTrue(multitask["training"]["multitask_monitor"]["enabled"])
 
-    def test_conversion_dataset_sources_follow_export_stage(self):
-        for stage in ("pretrain", "finetune"):
-            with self.subTest(stage=stage):
-                config = load_config(CONFIGS / "export_{}.yaml".format(stage))
-                conversion = config["export"]["conversion_datasets"]
-                self.assertTrue(conversion["enabled"])
-                self.assertIn(
-                    "/export/{}/model_conversion".format(stage),
-                    _normalized(conversion["output_dir"]),
-                )
-                sources = conversion["sets"]
-                self.assertEqual(
-                    "configs/train_{}.yaml".format(stage),
-                    sources["calibrate_datasets"]["sources"]["train"]["config_path"],
-                )
-                self.assertEqual(
-                    "configs/eval_val_{}.yaml".format(stage),
-                    sources["evaluate_datasets"]["sources"]["val"]["config_path"],
-                )
-                self.assertEqual(
-                    "configs/eval_test_{}.yaml".format(stage),
-                    sources["evaluate_datasets"]["sources"]["test"]["config_path"],
-                )
-
-    def test_stage_wrappers_extend_defaults_and_isolate_artifacts(self):
-        outputs = {}
-        for stage in ("pretrain", "finetune"):
-            for name in self.route_names:
-                with self.subTest(stage=stage, config=name):
-                    path = CONFIGS / "{}_{}.yaml".format(name, stage)
-                    self.assertTrue(
-                        path.read_text(encoding="utf-8").startswith(
-                            "extends: {}.yaml\n".format(name)
-                        )
-                    )
-                    config = load_config(path)
-                    self.assertEqual(config["model"]["checkpoint_stage"], stage)
-                    expected_checkpoint = (
-                        "/hand_landmarker_runs/v1-pretrain-geometry/pretrain/checkpoints/best.weights.h5"
-                        if stage == "pretrain"
-                        else "/hand_landmarker_runs/v1/finetune/checkpoints/best.weights.h5"
-                    )
-                    self.assertIn(expected_checkpoint, _normalized(config["hand"]["model_path"]))
-                    if name.startswith("eval_"):
-                        self.assertNotIn("palm", config)
-                        self.assertEqual("roi", config["evaluation"]["mode"])
-                        self.assertIn("hand_flag_threshold", config["evaluation"])
-                        output = config["output"]["dir"]
-                    elif name == "export":
-                        output = config["export"]["model_path"]
-                    else:
-                        output = config["output"]["dir"]
-                    outputs[(name, stage)] = _normalized(output)
-
-        for name in self.route_names:
-            self.assertNotEqual(outputs[(name, "pretrain")], outputs[(name, "finetune")])
-
-        self.assertIn("/eval/pretrain/val", outputs[("eval_val", "pretrain")])
-        self.assertIn("/eval/finetune/val", outputs[("eval_val", "finetune")])
-        self.assertIn("/eval/pretrain/test", outputs[("eval_test", "pretrain")])
-        self.assertIn("/eval/finetune/test", outputs[("eval_test", "finetune")])
-        self.assertIn("/export/pretrain/", outputs[("export", "pretrain")])
-        self.assertIn("/export/finetune/", outputs[("export", "finetune")])
-        self.assertTrue(
-            outputs[("infer", "pretrain")].endswith(
-                "/hand_landmarker_inference/v1-pretrain-geometry"
+    def test_evaluation_inference_and_export_select_phase_from_make(self):
+        for name in ("eval_val", "eval_test", "infer", "export"):
+            config = load_config(CONFIGS / (name + ".yaml"))
+            self.assertIn(
+                "/v2-pretrain-r1/geometry/checkpoints/best.weights.h5",
+                _normalized(config["hand"]["model_path"]),
             )
+        export = load_config(CONFIGS / "export.yaml")
+        self.assertNotIn("LeakyRelu", export["export"]["a1_allowed_operators"])
+        self.assertIn("Relu", export["export"]["a1_allowed_operators"])
+        sources = export["export"]["conversion_datasets"]["sets"]
+        self.assertEqual(
+            "configs/train_geometry.yaml",
+            sources["calibrate_datasets"]["sources"]["train"]["config_path"],
         )
-        self.assertTrue(outputs[("infer", "finetune")].endswith("/inference/output/finetune"))
+        self.assertEqual(
+            "configs/eval_val.yaml",
+            sources["evaluate_datasets"]["sources"]["val"]["config_path"],
+        )
+        self.assertEqual(
+            "configs/eval_test.yaml",
+            sources["evaluate_datasets"]["sources"]["test"]["config_path"],
+        )
+
+    def test_no_config_serializes_a_v1_model(self):
+        for path in CONFIGS.glob("*.yaml"):
+            config = load_config(path)
+            serialized = json.dumps(config, ensure_ascii=False)
+            self.assertNotIn('"version": "v1"', serialized)
 
 
-@unittest.skipUnless(shutil.which("make"), "GNU Make is required for route dry-run tests")
-class MakeStageRouteTests(unittest.TestCase):
+@unittest.skipUnless(shutil.which("make"), "GNU Make is required")
+class MakePretrainRouteTests(unittest.TestCase):
     make = shutil.which("make")
 
-    def _dry_run(self, target, stage=None):
-        command = [self.make, "-n"]
-        if stage is not None:
-            command.append("MODEL_STAGE={}".format(stage))
-        command.append(target)
+    def _dry_run(self, target):
         return subprocess.run(
-            command,
+            [self.make, "-n", target],
             cwd=str(ROOT),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -168,65 +118,38 @@ class MakeStageRouteTests(unittest.TestCase):
             check=False,
         )
 
-    def test_generic_targets_default_to_pretrain(self):
+    def test_makefile_declares_reproducible_identity(self):
+        text = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("HAND_DATA_ROOT := /root/autodl-tmp", text)
+        self.assertIn("HAND_PRETRAIN_CURATED_ID := v2-pretrain-r1", text)
+        self.assertIn("HAND_PRETRAIN_RUN_ID := v2-pretrain-r1", text)
+
+    def test_compact_targets_route_to_compact_configs(self):
         expected = {
-            "inspect": "configs/train_pretrain.yaml",
-            "train": "configs/train_pretrain.yaml",
-            "eval-val": "configs/eval_val_pretrain.yaml",
-            "eval-test": "configs/eval_test_pretrain.yaml",
-            "infer": "configs/infer_pretrain.yaml",
-            "export": "configs/export_pretrain.yaml",
-            "conversion-datasets": "configs/export_pretrain.yaml",
+            "curate": "configs/curate_pretrain.yaml",
+            "inspect": "configs/train_geometry.yaml",
+            "smoke": "configs/train_smoke.yaml",
+            "train": "configs/train_geometry.yaml",
+            "multitask": "configs/train_multitask.yaml",
+            "eval-val": "configs/eval_val.yaml",
+            "eval-test": "configs/eval_test.yaml",
+            "infer": "configs/infer.yaml",
+            "export": "configs/export.yaml",
+            "conversion-data": "configs/export.yaml",
         }
-        for target, config_path in expected.items():
+        for target, config in expected.items():
             with self.subTest(target=target):
                 result = self._dry_run(target)
-                self.assertEqual(result.returncode, 0, result.stdout)
-                self.assertIn(config_path, result.stdout)
-                self.assertNotIn("finetune", result.stdout.lower())
+                self.assertEqual(0, result.returncode, result.stdout)
+                self.assertIn(config, result.stdout)
 
-    def test_generic_targets_can_route_to_finetune(self):
-        expected = {
-            "inspect": "configs/train_finetune.yaml",
-            "train": "configs/train_finetune.yaml",
-            "eval-val": "configs/eval_val_finetune.yaml",
-            "eval-test": "configs/eval_test_finetune.yaml",
-            "infer": "configs/infer_finetune.yaml",
-            "export": "configs/export_finetune.yaml",
-            "conversion-datasets": "configs/export_finetune.yaml",
-        }
-        for target, config_path in expected.items():
-            with self.subTest(target=target):
-                result = self._dry_run(target, stage="finetune")
-                self.assertEqual(result.returncode, 0, result.stdout)
-                self.assertIn(config_path, result.stdout)
-
-    def test_all_targets_include_both_stages_in_order(self):
-        for target in ("inspect-all", "train-all"):
-            with self.subTest(target=target):
-                result = self._dry_run(target)
-                self.assertEqual(result.returncode, 0, result.stdout)
-                pretrain = result.stdout.find("configs/train_pretrain.yaml")
-                finetune = result.stdout.find("configs/train_finetune.yaml")
-                self.assertGreaterEqual(pretrain, 0, result.stdout)
-                self.assertGreater(finetune, pretrain, result.stdout)
-
-    def test_short_training_aliases_are_stage_explicit(self):
-        for target, config_path in (
-            ("pretrain", "configs/train_pretrain.yaml"),
-            ("finetune", "configs/train_finetune.yaml"),
-        ):
-            with self.subTest(target=target):
-                result = self._dry_run(target)
-                self.assertEqual(result.returncode, 0, result.stdout)
-                self.assertIn(config_path, result.stdout)
-
-    def test_invalid_model_stage_fails_closed(self):
-        for stage in ("invalid", "pretrain finetune"):
-            with self.subTest(stage=stage):
-                result = self._dry_run("train", stage=stage)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("MODEL_STAGE must be", result.stdout)
+    def test_multitask_runs_gate_before_training(self):
+        result = self._dry_run("multitask")
+        self.assertEqual(0, result.returncode, result.stdout)
+        gate = result.stdout.find("check_multitask_data.py")
+        train = result.stdout.find("scripts/train.py")
+        self.assertGreaterEqual(gate, 0, result.stdout)
+        self.assertGreater(train, gate, result.stdout)
 
 
 if __name__ == "__main__":

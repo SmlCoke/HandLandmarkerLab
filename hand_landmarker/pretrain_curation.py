@@ -320,8 +320,13 @@ def _load_review_decisions(
                     decision, crop_id, sorted(REVIEW_DECISIONS)
                 )
             )
-        if decision == "CONFIRMED_NEGATIVE" and not str(row.get("reviewer") or "").strip():
-            raise ValueError("CONFIRMED_NEGATIVE requires a non-empty reviewer for {}".format(crop_id))
+        for field in ("reviewer", "reviewed_at"):
+            if not str(row.get(field) or "").strip():
+                raise ValueError(
+                    "Every human review decision requires non-empty {} for {}".format(
+                        field, crop_id
+                    )
+                )
         decisions[crop_id] = row
     return decisions
 
@@ -429,6 +434,63 @@ def _materialize_crop(
     return value, manifest
 
 
+def _materialize_review_crop(
+    row: Mapping[str, Any],
+    temporary_root: Path,
+    final_root: Path,
+    mode: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Freeze a held candidate for later human review without training it."""
+
+    source = Path(str(row.get("crop_path") or ""))
+    if not source.is_file():
+        raise FileNotFoundError("Negative review crop does not exist: {}".format(source))
+    digest = hashlib.sha256(str(row.get("crop_id")).encode("utf-8")).hexdigest()[:20]
+    dataset_id = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in str(row.get("dataset_id") or "unknown")
+    )
+    suffix = source.suffix.lower() or ".png"
+    relative = Path("review_images") / dataset_id / (digest + "__" + source.stem + suffix)
+    temporary = temporary_root / relative
+    final = final_root / relative
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    used_mode = mode
+    if mode in {"hardlink", "hardlink_or_copy"}:
+        try:
+            os.link(str(source), str(temporary))
+            used_mode = "hardlink"
+        except OSError:
+            if mode == "hardlink":
+                raise
+            shutil.copy2(str(source), str(temporary))
+            used_mode = "copy"
+    elif mode == "copy":
+        shutil.copy2(str(source), str(temporary))
+    else:
+        raise ValueError("materialize_images must be copy, hardlink, or hardlink_or_copy")
+    digest_value = sha256_file(temporary)
+    value = dict(row)
+    value["review_crop_path"] = str(final)
+    value["pretrain_curation"] = dict(value["pretrain_curation"])
+    value["pretrain_curation"].update(
+        {
+            "review_original_crop_path": str(source.resolve()),
+            "review_materialized_crop_path": str(final),
+            "review_materialization_method": used_mode,
+            "review_image_sha256": digest_value,
+        }
+    )
+    return value, {
+        "crop_id": str(row.get("crop_id")),
+        "relative_path": relative.as_posix(),
+        "source_path": str(source.resolve()),
+        "sha256": digest_value,
+        "size_bytes": int(temporary.stat().st_size),
+        "materialization_method": used_mode,
+    }
+
+
 def _counter_dict(values: Iterable[Any]) -> Dict[str, int]:
     return dict(sorted(Counter(str(value) for value in values).items()))
 
@@ -468,7 +530,14 @@ def curate_pretrain_from_config(
         output_dir, source_labels, source_crops, allow_overwrite
     )
 
-    decisions = _load_review_decisions(rules.get("negative_review_decisions"), cfg)
+    review_path_value = rules.get("negative_review_decisions")
+    decisions = _load_review_decisions(review_path_value, cfg)
+    review_path = resolve_path(str(review_path_value), cfg) if review_path_value else None
+    review_source = {
+        "path": str(review_path) if review_path else None,
+        "sha256": sha256_file(review_path) if review_path else None,
+        "decision_count": len(decisions),
+    }
     unknown_decisions = sorted(set(decisions) - set(crop_ids))
     if unknown_decisions:
         raise ValueError("Review decisions reference unknown crop_id values: {}".format(unknown_decisions[:10]))
@@ -587,6 +656,15 @@ def curate_pretrain_from_config(
             )
             materialized_by_id[str(row["crop_id"])] = value
             image_manifest.append(image_entry)
+        review_materialized: List[Dict[str, Any]] = []
+        review_image_manifest: List[Dict[str, Any]] = []
+        for row in negative_review_queue:
+            value, image_entry = _materialize_review_crop(
+                row, temporary_dir, output_dir, materialization_mode
+            )
+            review_materialized.append(value)
+            review_image_manifest.append(image_entry)
+        negative_review_queue = review_materialized
         ending_source_hash = sha256_file(source_labels)
         if ending_source_hash != source_hash:
             raise RuntimeError(
@@ -601,6 +679,7 @@ def curate_pretrain_from_config(
         included_landmarks.sort(key=lambda row: str(row["crop_id"]))
         multitask.sort(key=lambda row: str(row["crop_id"]))
         image_manifest.sort(key=lambda row: str(row["crop_id"]))
+        review_image_manifest.sort(key=lambda row: str(row["crop_id"]))
         smoke_count = int(rules.get("smoke_subset_size", 128))
         smoke = _stable_smoke_subset(
             included_landmarks,
@@ -630,6 +709,7 @@ def curate_pretrain_from_config(
         excluded_path = audit_dir / "excluded_and_held.jsonl"
         review_queue_path = audit_dir / "negative_review_queue.jsonl"
         image_manifest_path = audit_dir / "image_manifest.jsonl"
+        review_image_manifest_path = audit_dir / "review_image_manifest.jsonl"
         write_jsonl(landmarks_path, included_landmarks)
         write_jsonl(multitask_path, multitask)
         write_jsonl(smoke_path, smoke)
@@ -638,6 +718,7 @@ def curate_pretrain_from_config(
         write_jsonl(excluded_path, excluded)
         write_jsonl(review_queue_path, negative_review_queue)
         write_jsonl(image_manifest_path, image_manifest)
+        write_jsonl(review_image_manifest_path, review_image_manifest)
 
         artifact_paths = [
             landmarks_path,
@@ -648,6 +729,7 @@ def curate_pretrain_from_config(
             excluded_path,
             review_queue_path,
             image_manifest_path,
+            review_image_manifest_path,
         ]
         artifacts = {
             path.relative_to(temporary_dir).as_posix(): {
@@ -675,6 +757,7 @@ def curate_pretrain_from_config(
                 "labels_sha256": source_hash,
                 "record_count": len(records),
             },
+            "negative_review_decisions": review_source,
             "config_path": str(config_path_value) if config_path_value else None,
             "config_sha256": config_hash,
             "output_dir": str(output_dir),
@@ -684,6 +767,16 @@ def curate_pretrain_from_config(
                 "aggregate_sha256": image_aggregate,
                 "manifest": "audit/image_manifest.jsonl",
             },
+            "review_images": {
+                "count": len(review_image_manifest),
+                "manifest": "audit/review_image_manifest.jsonl",
+                "aggregate_sha256": hashlib.sha256(
+                    "".join(
+                        "{}:{}\n".format(row["relative_path"], row["sha256"])
+                        for row in review_image_manifest
+                    ).encode("utf-8")
+                ).hexdigest(),
+            },
         }
         manifest_path = qc_dir / "sha256_manifest.json"
         write_json(manifest_path, manifest)
@@ -692,6 +785,7 @@ def curate_pretrain_from_config(
             "schema_version": CURATION_SCHEMA,
             "source_labels": str(source_labels),
             "source_labels_sha256": source_hash,
+            "negative_review_decisions": review_source,
             "output_dir": str(output_dir),
             "counts": {
                 "source_records": len(records),
@@ -718,6 +812,7 @@ def curate_pretrain_from_config(
                 "catalog": str(output_dir / catalog_path.relative_to(temporary_dir)),
                 "excluded": str(output_dir / excluded_path.relative_to(temporary_dir)),
                 "negative_review_queue": str(output_dir / review_queue_path.relative_to(temporary_dir)),
+                "review_image_manifest": str(output_dir / review_image_manifest_path.relative_to(temporary_dir)),
                 "manifest": str(output_dir / manifest_path.relative_to(temporary_dir)),
             },
         }

@@ -2,7 +2,7 @@ schema_version: 1
 task: export_onnx
 
 model:
-  version: v1
+  version: v2
   checkpoint_stage: pretrain
   input_shape: [1, 256, 256]
   input_layout: NCHW
@@ -16,17 +16,17 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/pretrain/checkpoints/best.weights.h5"
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/${HAND_PRETRAIN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 export:
-  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/export/pretrain/hand_landmarker_v1_pretrain.onnx"
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/export/${HAND_PRETRAIN_PHASE:-geometry}/hand_landmarker_v2.onnx"
   opset: 11
   input_name: inputs
   output_names: [landmarks, hand_flag, handedness]
   dynamic_batch: false
   overwrite: false
   strict_a1_operators: true
-  a1_allowed_operators: [Conv, Add, LeakyRelu, MaxPool, Sigmoid, Identity]
+  a1_allowed_operators: [Conv, Add, Relu, MaxPool, Sigmoid, Identity]
   metadata:
     input_layout: NCHW
     input_color: grayscale
@@ -39,6 +39,8 @@ export:
     enabled: true
     backend: onnxruntime_cpu
     random_samples: 4
+    fusion_absolute_tolerance: 5.0e-5
+    fusion_relative_tolerance: 5.0e-4
     absolute_tolerance: 1.0e-5
     relative_tolerance: 1.0e-4
     require_output_order_match: true
@@ -46,8 +48,8 @@ export:
   # are opened read-only and are never copied back into Train/Val/Test roots.
   conversion_datasets:
     enabled: true
-    output_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/export/pretrain/model_conversion"
-    selection_salt: hand_landmarker_v1_conversion_inputs_v1
+    output_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/export/${HAND_PRETRAIN_PHASE:-geometry}/model_conversion"
+    selection_salt: hand_landmarker_v2_conversion_inputs_v1
     input:
       shape: [1, 1, 256, 256]
       layout: NCHW
@@ -58,18 +60,18 @@ export:
         minimum_count: 20
         sources:
           train:
-            config_path: configs/train_pretrain.yaml
+            config_path: "${HAND_PRETRAIN_CALIBRATION_CONFIG:-configs/train_geometry.yaml}"
             count: 100
             stratify_by: [sample_type, dataset_id]
       evaluate_datasets:
         minimum_count: 10
         sources:
           val:
-            config_path: configs/eval_val_pretrain.yaml
+            config_path: configs/eval_val.yaml
             count: 25
             stratify_by: [dataset_id, hand_presence.present, handedness.label]
           test:
-            config_path: configs/eval_test_pretrain.yaml
+            config_path: configs/eval_test.yaml
             count: 25
             stratify_by: [dataset_id, hand_presence.present, handedness.label]
 

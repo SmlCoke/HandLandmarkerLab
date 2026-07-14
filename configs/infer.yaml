@@ -9,7 +9,7 @@ input:
   source_orientation: as_stored_no_auto_rotate
 
 model:
-  version: v1
+  version: v2
   checkpoint_stage: pretrain
   input_shape: [1, 256, 256]
   input_layout: NCHW
@@ -25,7 +25,7 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/pretrain/checkpoints/best.weights.h5"
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/${HAND_PRETRAIN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 palm:
   model_path: preminilary/palm/model_opt.onnx
@@ -53,7 +53,7 @@ inference:
   fail_fast: false
 
 output:
-  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_inference/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}"
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_inference/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/${HAND_PRETRAIN_PHASE:-geometry}"
   write_annotated_images: true
   write_jsonl: true
   draw_palm_box: true

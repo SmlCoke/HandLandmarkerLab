@@ -149,7 +149,7 @@ make export
 默认产物位于：
 
 ```text
-${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/model_conversion/
+${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/model_conversion/
 ├── datasets/
 │   ├── calibrate_datasets/
 │   │   └── img_*.npy
@@ -165,10 +165,9 @@ ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/model_conversion/
 若只想重建数据包而不运行 TensorFlow/ONNX 导出，可执行：
 
 ```bash
-make conversion-datasets
-# 或显式阶段：
-make conversion-datasets-pretrain
-make conversion-datasets-finetune
+make conversion-data
+# multitask checkpoint：
+make conversion-data HAND_PRETRAIN_PHASE=multitask
 ```
 
-通用命令默认是 `pretrain`，只读取 pretrain Train、Val、Test，不要求 finetune 数据存在。finetune 命令才会读取 finetune Train。目标目录已存在时命令会失败；确认可替换后显式传入 `CONVERSION_ARGS=--overwrite`，或在 export 时使用 `EXPORT_ARGS=--overwrite`。
+命令只读取当前 pretrain geometry Train 与公共 Val/Test。目标目录已存在时会失败；确认可替换后显式传入 `CONVERSION_ARGS=--overwrite`，或在 export 时使用 `EXPORT_ARGS=--overwrite`。

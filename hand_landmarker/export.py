@@ -158,12 +158,59 @@ def _numeric_parity(
     return report
 
 
+def _reparameterization_parity(
+    training_model,
+    deploy_model,
+    absolute_tolerance: float,
+    relative_tolerance: float,
+) -> Dict[str, Any]:
+    """Verify that branch fusion preserves all three Keras outputs."""
+
+    import numpy as np
+
+    random = np.random.RandomState(20260714)
+    cases = {
+        "zeros": np.zeros((1, 1, 256, 256), dtype=np.float32),
+        "random": random.uniform(0.0, 1.0, (1, 1, 256, 256)).astype(np.float32),
+    }
+    report: Dict[str, Any] = {
+        "absolute_tolerance": float(absolute_tolerance),
+        "relative_tolerance": float(relative_tolerance),
+        "training_parameter_count": int(training_model.count_params()),
+        "deploy_parameter_count": int(deploy_model.count_params()),
+        "cases": {},
+    }
+    for name, tensor in cases.items():
+        reference = training_model(tensor, training=False)
+        actual = deploy_model(tensor, training=False)
+        reference = reference if isinstance(reference, (list, tuple)) else [reference]
+        actual = actual if isinstance(actual, (list, tuple)) else [actual]
+        maximums = []
+        for output_index, (expected_value, actual_value) in enumerate(zip(reference, actual)):
+            expected = np.asarray(expected_value, dtype=np.float64)
+            observed = np.asarray(actual_value, dtype=np.float64)
+            maximums.append(float(np.max(np.abs(expected - observed))))
+            if not np.allclose(
+                expected,
+                observed,
+                atol=float(absolute_tolerance),
+                rtol=float(relative_tolerance),
+            ):
+                raise ValueError(
+                    "v2 branch fusion parity failed for {} output {}: max_abs_error={}".format(
+                        name, output_index, maximums[-1]
+                    )
+                )
+        report["cases"][name] = {"max_abs_error_by_output": maximums}
+    return report
+
+
 def _a1_attribute_audit(graph, onnx_module) -> Dict[str, Any]:
     """Validate the project-9 A1 operator attributes, not just op names."""
 
     initializers = {item.name: item for item in graph.graph.initializer}
     violations: List[Dict[str, Any]] = []
-    checked = {"Conv": 0, "MaxPool": 0, "LeakyRelu": 0}
+    checked = {"Conv": 0, "MaxPool": 0}
 
     def add(node, rule: str, value: Any) -> None:
         violations.append(
@@ -200,10 +247,6 @@ def _a1_attribute_audit(graph, onnx_module) -> Dict[str, Any]:
             kernel = list(attributes.get("kernel_shape") or [])
             if not kernel or any(int(value) <= 0 or int(value) > 8 for value in kernel):
                 add(node, "MaxPool kernel dimensions must be in [1,8]", kernel)
-        elif node.op_type == "LeakyRelu":
-            alpha = float(attributes.get("alpha", 0.01))
-            if not any(abs(alpha - allowed) <= 1e-7 for allowed in (0.1, 0.01)):
-                add(node, "LeakyRelu alpha must be 0.1 or 0.01", alpha)
     return {"checked_nodes": checked, "violations": violations}
 
 
@@ -262,7 +305,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     except ImportError as exc:
         raise RuntimeError("TensorFlow, tf2onnx, onnx, and onnxruntime are required for export") from exc
 
-    from models.hand_landmarker.registry import build_model
+    from models.hand_landmarker.registry import build_model, reparameterize_for_deploy
 
     export_config = config.get("export", {})
     validate_config = export_config.get("validate", {})
@@ -320,12 +363,25 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    model = build_model(
-        str(model_config.get("version", "v1")),
+    model_version = str(model_config.get("version", "v2"))
+    training_model = build_model(
+        model_version,
         num_iterations=model_config.get("num_iterations", 8),
     )
-    model.load_weights(str(weights_path))
+    training_model.load_weights(str(weights_path))
+    _assert_model_interface(training_model)
+    model = reparameterize_for_deploy(
+        training_model,
+        version=model_version,
+        num_iterations=model_config.get("num_iterations", 8),
+    )
     _assert_model_interface(model)
+    fusion_parity = _reparameterization_parity(
+        training_model,
+        model,
+        absolute_tolerance=float(validate_config.get("fusion_absolute_tolerance", 5e-5)),
+        relative_tolerance=float(validate_config.get("fusion_relative_tolerance", 5e-4)),
+    )
     signature = (tf.TensorSpec([1, 1, 256, 256], tf.float32, name=input_name),)
     temporary = output_path.with_name(output_path.name + ".tmp")
     if temporary.exists():
@@ -378,7 +434,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         operators = sorted({node.op_type for node in graph.graph.node})
         allowed_operators = set(
             export_config.get("a1_allowed_operators")
-            or ["Conv", "Add", "LeakyRelu", "MaxPool", "Sigmoid", "Identity"]
+            or ["Conv", "Add", "Relu", "MaxPool", "Sigmoid", "Identity"]
         )
         unsupported = sorted(set(operators) - allowed_operators)
         strict_a1 = bool(export_config.get("strict_a1_operators", True))
@@ -410,7 +466,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "model_sha256": sha256_file(output_path),
         "weights_path": str(weights_path),
         "weights_sha256": sha256_file(weights_path),
-        "model_version": str(model_config.get("version", "v1")),
+        "model_version": model_version,
         "opset": int(export_config.get("opset", 11)),
         "inputs": inputs,
         "outputs": outputs,
@@ -425,6 +481,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "attributes": attribute_audit,
         },
         "numeric_parity": parity,
+        "reparameterization_parity": fusion_parity,
         "deployment_metadata": dict(export_config.get("metadata", {})),
         "normalization": {"dtype": "float32", "range": [0.0, 1.0], "board_source": "uint8 gray / 255"},
         "contract": MODEL_IO,

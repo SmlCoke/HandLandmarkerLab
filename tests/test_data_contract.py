@@ -204,7 +204,7 @@ def _dataset_config(labels, data_root=None):
 class CanonicalDataContractTests(unittest.TestCase):
     def test_training_inspection_configs_compare_only_locked_test(self):
         repo_root = Path(__file__).resolve().parents[1]
-        for filename in ("train_pretrain.yaml", "train_finetune.yaml"):
+        for filename in ("train_geometry.yaml", "train_multitask.yaml"):
             with self.subTest(config=filename):
                 config = load_config(repo_root / "configs" / filename)
                 comparisons = config["inspection"]["compare_datasets"]

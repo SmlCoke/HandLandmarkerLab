@@ -178,7 +178,7 @@ def _full_smoke_metrics(
     )
     model_config = dict(config.get("model") or {})
     backbone = build_model(
-        str(model_config.get("version", "v1")),
+        str(model_config.get("version", "v2")),
         num_iterations=model_config.get("num_iterations", 8),
     )
     interface = assert_model_interface(backbone)

@@ -570,6 +570,35 @@ def _monitor_mode(monitor: str, configured: Optional[str] = None) -> str:
     return "min" if minimize else "max"
 
 
+def _multitask_monitor_value(
+    logs: Mapping[str, Any], monitor_config: Mapping[str, Any]
+) -> Optional[float]:
+    """Return a geometry-first validation score, or None without validation logs."""
+
+    required = (
+        "val_landmark_mae",
+        "val_hand_flag_accuracy",
+        "val_handedness_accuracy",
+    )
+    if any(logs.get(name) is None for name in required):
+        return None
+    weights = {
+        "landmark_mae": float(monitor_config.get("landmark_mae_weight", 1.0)),
+        "hand_flag_error": float(monitor_config.get("hand_flag_error_weight", 0.02)),
+        "handedness_error": float(monitor_config.get("handedness_error_weight", 0.005)),
+    }
+    if any(not math.isfinite(value) or value < 0.0 for value in weights.values()):
+        raise ValueError("training.multitask_monitor weights must be finite and non-negative")
+    values = {name: float(logs[name]) for name in required}
+    if any(not math.isfinite(value) for value in values.values()):
+        raise FloatingPointError("Cannot compute multitask monitor from non-finite validation metrics")
+    return (
+        weights["landmark_mae"] * values["val_landmark_mae"]
+        + weights["hand_flag_error"] * (1.0 - values["val_hand_flag_accuracy"])
+        + weights["handedness_error"] * (1.0 - values["val_handedness_accuracy"])
+    )
+
+
 def _build_callbacks(
     tf: Any,
     trainer: Any,
@@ -609,6 +638,17 @@ def _build_callbacks(
                     lr_patience, early_patience
                 )
             )
+
+    multitask_monitor = dict(training.get("multitask_monitor") or {})
+
+    class DerivedMultitaskMonitor(tf.keras.callbacks.Callback):
+        def on_epoch_end(self, epoch: int, logs: Optional[MutableMapping[str, Any]] = None) -> None:
+            del epoch
+            if logs is None:
+                return
+            value = _multitask_monitor_value(logs, multitask_monitor)
+            if value is not None:
+                logs[str(multitask_monitor.get("name", "val_multitask_score"))] = value
 
     class BackboneCheckpoint(tf.keras.callbacks.Callback):
         def __init__(self, path: Path, save_best_only: bool):
@@ -690,10 +730,23 @@ def _build_callbacks(
             self._check("epoch {}".format(epoch + 1), logs)
 
     logs_dir.mkdir(parents=True, exist_ok=True)
-    callbacks: List[Any] = [
+    callbacks: List[Any] = []
+    if bool(multitask_monitor.get("enabled", False)):
+        derived_name = str(multitask_monitor.get("name", "val_multitask_score"))
+        if not derived_name.startswith("val_"):
+            raise ValueError("training.multitask_monitor.name must start with val_")
+        used_monitors = {monitor, lr_monitor, early_monitor}
+        if derived_name not in used_monitors:
+            raise ValueError(
+                "Enabled multitask monitor {!r} must be used by checkpoint, LR, or early stopping".format(
+                    derived_name
+                )
+            )
+        callbacks.append(DerivedMultitaskMonitor())
+    callbacks.extend([
         tf.keras.callbacks.CSVLogger(str(logs_dir / "history.csv"), append=resume_enabled),
         tf.keras.callbacks.TensorBoard(log_dir=str(logs_dir / "tensorboard"), update_freq="epoch"),
-    ]
+    ])
     if bool(config.get("runtime", {}).get("fail_on_nan", True)):
         callbacks.append(FailOnNonFinite())
     callbacks.extend(
@@ -967,7 +1020,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         tf.keras.mixed_precision.set_global_policy("float32")
 
     backbone = build_model(
-        str(model_config.get("version", "v1")),
+        str(model_config.get("version", "v2")),
         num_iterations=model_config.get("num_iterations", 8),
     )
     interface_report = assert_model_interface(backbone)
@@ -1073,7 +1126,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "experiment": _jsonable(experiment),
         "stage": stage,
         "seed": seed,
-        "model_version": str(model_config.get("version", "v1")),
+        "model_version": str(model_config.get("version", "v2")),
         "model_interface": interface_report,
         "losses": _jsonable(loss_config),
         "starting_state": _jsonable(starting_state),
@@ -1186,7 +1239,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "status": "complete",
         "stage": stage,
         "experiment": str(experiment.get("name", "hand_landmarker")),
-        "model_version": str(model_config.get("version", "v1")),
+        "model_version": str(model_config.get("version", "v2")),
         "initial_epoch": initial_epoch,
         "completed_epochs": history_payload["epochs"],
         "artifacts": artifacts,

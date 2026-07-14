@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -142,6 +143,13 @@ class PretrainCurationTests(unittest.TestCase):
 
         queue = read_jsonl(output / "audit" / "negative_review_queue.jsonl")
         by_id = {row["crop_id"]: row for row in queue}
+        for row in queue:
+            review_crop = Path(row["review_crop_path"])
+            self.assertTrue(review_crop.is_file())
+            self.assertTrue(str(review_crop).startswith(str(output / "review_images")))
+            self.assertEqual(
+                sha256_file(review_crop), row["pretrain_curation"]["review_image_sha256"]
+            )
         self.assertIn(
             "NEGATIVE_OVERLAPS_CONFIRMED_HAND",
             by_id["neg-overlap"]["pretrain_curation"]["reasons"],
@@ -153,6 +161,9 @@ class PretrainCurationTests(unittest.TestCase):
         self.assertEqual(5, len(read_jsonl(output / "audit" / "pretrain_curation_catalog.jsonl")))
         self.assertTrue((output / "qc" / "curation_report.json").is_file())
         self.assertTrue((output / "qc" / "sha256_manifest.json").is_file())
+        with (output / "qc" / "sha256_manifest.json").open(encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        self.assertEqual(2, manifest["review_images"]["count"])
         dataset = {
             "labels": str(output / "05_labels" / "hand_training_labels_pretrain_landmarks.jsonl"),
             "curation_manifest": str(output / "qc" / "sha256_manifest.json"),
@@ -179,17 +190,20 @@ class PretrainCurationTests(unittest.TestCase):
                     "crop_id": "neg-clean",
                     "decision": "CONFIRMED_NEGATIVE",
                     "reviewer": "tester",
+                    "reviewed_at": "2026-07-14T12:00:00+08:00",
                 },
                 {
                     "crop_id": "neg-overlap",
                     "decision": "CONFIRMED_NEGATIVE",
                     "reviewer": "tester",
+                    "reviewed_at": "2026-07-14T12:00:00+08:00",
                 },
             ],
         )
         output = self.root / "reviewed"
         report = curate_pretrain_from_config(self._config(output, decisions))
         self.assertEqual(1, report["counts"]["included_confirmed_negatives"])
+        self.assertEqual(sha256_file(decisions), report["negative_review_decisions"]["sha256"])
         multitask = read_jsonl(
             output / "05_labels" / "hand_training_labels_pretrain_multitask.jsonl"
         )
@@ -259,6 +273,7 @@ class PretrainCurationTests(unittest.TestCase):
                     "crop_id": "pos-runtime",
                     "decision": "HOLD",
                     "reviewer": "tester",
+                    "reviewed_at": "2026-07-14T12:00:00+08:00",
                 }
             ],
         )

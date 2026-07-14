@@ -17,7 +17,7 @@ data:
   channels: 1
 
 model:
-  version: v1
+  version: v2
   checkpoint_stage: pretrain
   input_shape: [1, 256, 256]
   input_layout: NCHW
@@ -33,7 +33,7 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/pretrain/checkpoints/best.weights.h5"
+  model_path: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/${HAND_PRETRAIN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 evaluation:
   # Canonical inputs are already 256x256 Hand ROIs. Evaluation loads only Hand.
@@ -47,7 +47,7 @@ inference:
   batch_size: 128
 
 output:
-  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v1-pretrain-geometry}/eval/pretrain/val"
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/eval/${HAND_PRETRAIN_PHASE:-geometry}/val"
   overwrite: false
 
 runtime:

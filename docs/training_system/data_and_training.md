@@ -1,176 +1,407 @@
-# 数据、权重与可选两阶段训练
+# Pretrain 数据与分阶段训练操作手册
 
-pretrain 是可独立训练、评估、推理和导出的完整交付阶段；finetune 是 Gold 数据就绪后的可选增强阶段，不是系统运行的前置条件。通用 Make 目标由 `MODEL_STAGE` 路由，默认 `MODEL_STAGE=pretrain`，因此没有 finetune canonical JSONL 时也能完成整个 pretrain 闭环。
+本文是当前 v2 pretrain 的主操作手册。当前范围不包含 finetune，也不需要 Gold finetune 数据。
 
-## 1. Canonical JSONL
+## 1. 为什么 pretrain 分成两个阶段
 
-一个 JSONL 行对应一个已经裁好的 `256×256` Hand ROI。训练仅接受 07A 输出的 `hand_training_labels_pretrain.jsonl` 或 `hand_training_labels_finetune.jsonl`；Val/Test 仅接受 07B 输出的 Gold 文件。manifest、catalog、excluded、ignored 和旧版 `hand_training_labels.jsonl` 都不是正式 loader 输入。
+模型始终有三个输出：
 
-关键字段如下：
+1. `landmarks`：21 个二维关键点，共 42 个数；
+2. `hand_flag`：ROI 中是否有手；
+3. `handedness`：Left/Right。
 
-- 唯一身份：`global_crop_id`、`dataset_id`、`source_group_id`；
-- 图片：`crop_path`、`width=256`、`height=256`；
-- 标签：`hand_presence.present`、`handedness.label`、三组 landmarks；
-- ROI 溯源元数据：`palm_valid`、`palm_score`、`roi_rect`、`roi_corners_px`；这些字段不会让 Val/Test 加载或运行 Palm；
-- Train：`training_stage`、`supervision_tier`、`sample_type`、质量/采样/loss 权重；
-- Eval：`split`、`ground_truth_valid`、evaluation source/partition/owner。
+训练代码一直能够计算三个 head 的 loss，但旧流程没有一个安全、正式的 multitask 阶段入口。原因不是缺少三头网络，而是原始 `NEG_RUNTIME_CANDIDATE` 和 `NEG_LOW_PALM_CANDIDATE` 只是 Google MediaPipe 没有给出结果的 teacher abstention。已有审计证明其中包含大量肉眼可见的手；直接将它们当作 `hand_flag=0` 会迫使 backbone 把真实手特征学习成背景，并通过共享特征反过来破坏 landmarks。
 
-Positive 必须有且仅有 ID `0..20` 的 21 点；loader 按 `id` 排序，不能依赖 JSON 数组顺序。Negative 的三组 landmarks 必须为空，handedness 必须为 `unknown`。当前 schema 没有逐点 visibility；一个 Gold 点无法可靠标注时应忽略整个 ROI，而不是发明逐点 mask。
+当前 pretrain 因而明确分成两阶段：
 
-模型监督使用 `landmarks_crop_norm`，像素换算固定为：
+| 阶段 | 配置 | 数据 | 目的 |
+|---|---|---|---|
+| Geometry | `configs/train_geometry.yaml` | 只有经过提纯、具有完整 21 点的 positive | 先学稳定的手部几何与关键点拓扑 |
+| Multitask | `configs/train_multitask.yaml` | 同一批 positive + 人工确认的 true negative | 在尽量保持 geometry 的同时学习 presence，并轻量学习 handedness |
 
-```text
-x_px = x_norm × 255
-y_px = y_norm × 255
-```
+Geometry 阶段不是“模型只能训练 landmarks”。它仍保留三个输出，只是 loss 配置有意设为 landmarks 主导、positive-only presence 辅助、handedness 关闭。Multitask 阶段会从 geometry 的 `best.weights.h5` 初始化，启用人工 true negative 和较小的 presence/handedness loss。
 
-Pseudo 可能包含轻微越界点，inspect 会报告；不会静默 clamp。Gold 点必须在 `[0,1]`。
+`make multitask` 默认 fail-closed：没有足够人工确认负例时会拒绝训练，不会把未复核 teacher abstention 自动降格成负例。这也是先前没有把 multitask 与 geometry 一起自动执行的根本原因。
 
-## 2. Fail-closed 过滤
+## 2. 当前文件与固定实验身份
 
-Train 必须满足：
-
-- `selection_action=include`（字段必须存在）；
-- `ignore_for_training != true`；
-- `training_stage` 与配置阶段一致；
-- 所有采样和 loss 权重有限且非负。
-
-Val/Test 必须满足：
-
-- `ground_truth_valid=true`；
-- `split` 与配置一致；
-- `palm_valid=true`；
-- 不在 ignored 文件中。
-
-满足上述条件后，Val/Test loader 直接读取每行 `crop_path` 指向的 `256×256` Hand ROI，并且只调用 Hand Landmarker。`palm_valid` 是 canonical 数据的质量/溯源字段，不是运行 Palm Detector 的开关。
-
-Canonical 文件已完成质量裁决，因此 loader 不会再次按 `needs_review`、Palm score、teacher confidence 或学生预测过滤。`palm_valid=false` 也不表示 Hand negative：`POS_LOW_PALM` 是合法正样本。这里的 Palm 名称来自数据制作阶段，不代表训练或 Val/Test 会执行 Palm 推理。
-
-图片只从 canonical `crop_path` 解析。`source_crop_path` 是搬迁前溯源信息，不可作为隐式 fallback。图片目录中可能残留未被 canonical 文件引用的旧 crop，禁止用目录 glob 产生样本。
-
-## 3. Head 权重
-
-每个 head 的有效 loss 权重分别是：
+`configs/` 只保留 8 个文件：
 
 ```text
-presence = hand_presence_loss_weight
-         × supervision_loss_weight
-         × presence_quality_weight
-
-landmark = landmark_loss_weight
-         × supervision_loss_weight
-         × landmark_quality_weight
-
-handedness = handedness_loss_weight
-           × supervision_loss_weight
-           × handedness_quality_weight
+curate_pretrain.yaml   持久化提纯与负例审查队列
+train_smoke.yaml       128 ROI 过拟合门禁
+train_geometry.yaml    第一阶段 geometry
+train_multitask.yaml   第二阶段 multitask
+eval_val.yaml          Val ROI 评估
+eval_test.yaml         锁定 Test ROI 评估
+infer.yaml             外部原图 Palm → ROI → Hand 推理
+export.yaml            v2 融合、ONNX 与转换数据导出
 ```
 
-Negative 的 landmark/handedness 权重为 0；unknown handedness 的 handedness 权重为 0。`sampling_weight` **只用于 sampler 在一个已经选定的 `supervision_tier × sample_type` 单元内选择记录**；它不决定单元配额，也不乘入 loss。
+服务器路径与实验 ID 固定写在 `Makefile` 顶部：
 
-训练 step 对三个 head 分别计算：
-
-```text
-head_loss = sum(sample_weight × per_sample_loss) / sum(sample_weight)
+```make
+HAND_DATA_ROOT := /root/autodl-tmp
+HAND_PRETRAIN_CURATED_ID := v2-pretrain-r1
+HAND_PRETRAIN_RUN_ID := v2-pretrain-r1
+HAND_PRETRAIN_PHASE := geometry
 ```
 
-分母为 0 时该 head loss 为 0。这样不同 batch 的 positive/negative 构成不会意外改变 head 的整体尺度。
-
-默认损失：landmark 使用 Huber，presence 和 handedness 使用 BCE；三者再乘 YAML 的全局 coefficient 后组成 total loss。
-
-## 4. Stage 1：Pseudo pretrain
-
-输入为 `train_pretrain_merged` canonical 文件，且活动 supervision tier 必须只有 `pseudo`。每个实际 batch（包括最后一个不足 batch）先用 largest-remainder 构造四类整数配额：`POS_RUNTIME=56%`、`POS_LOW_PALM=14%`、`NEG_RUNTIME_CANDIDATE=25%`、`NEG_LOW_PALM_CANDIDATE=5%`，即合计 70% positive、25% runtime negative、5% low-Palm negative。余数相同时按上述固定顺序裁决。选定 `supervision_tier × sample_type` 单元后，才按该单元内的 `sampling_weight` 抽行。
-
-所有正比例 sample type 都必须在每个活动 supervision tier 中存在，且对应单元的正 `sampling_weight` 总和必须大于 0。缺少交叉单元、`sampling_bucket != supervision_tier:sample_type` 或把桶权重静默重归一化到其他类别都会 fail-closed。
-
-默认启用轻量、同步增强：亮度、对比度、噪声和小幅仿射。仿射会同步更新 21 点；点不会被静默裁到边界。水平翻转默认关闭。若后续确认真实手/镜像约定，启用翻转时必须同时执行 `x→1-x` 并交换 Left/Right。
-
-主要输出：
-
-```text
-<run_dir>/checkpoints/best.weights.h5
-<run_dir>/checkpoints/last.weights.h5
-<run_dir>/checkpoints/final.weights.h5
-<run_dir>/experiment_metadata.json
-<run_dir>/history.json
-<run_dir>/training_report.json
-```
-
-其中 `<run_dir>` 的默认值由当前阶段决定：pretrain 为 `${HAND_DATA_ROOT}/hand_landmarker_runs/v1/pretrain`，可选 finetune 为 `${HAND_DATA_ROOT}/hand_landmarker_runs/v1/finetune`。另外还会写入：
-
-```text
-<run_dir>/checkpoints/best.weights.h5.state/
-<run_dir>/checkpoints/best.weights.h5.state.json
-<run_dir>/checkpoints/last.weights.h5.state/
-<run_dir>/checkpoints/last.weights.h5.state.json
-<run_dir>/logs/history.csv
-<run_dir>/logs/tensorboard/
-<run_dir>/model_summary.txt
-```
-
-`best.weights.h5`、`last.weights.h5` 和 `final.weights.h5` 都是仅含 Hand backbone 权重的 HDF5 文件。`.state/` 与 `.state.json` 是 best/last 对应的 optimizer、完成 epoch 和 monitor 状态；`training_report.json` 与 `experiment_metadata.json` 保存数据检查、标签/配置哈希和产物 SHA-256。`final.weights.h5` 是训练正常结束后当前内存中的权重；启用 `restore_best_weights` 时通常对应 early-stopping 恢复后的最佳权重。
-
-新训练默认拒绝写入非空 `outputs.run_dir`，避免静默覆盖已有实验。续训应设置 `training.resume_checkpoint`；确认需要重新使用同一路径时，才显式设置 `outputs.overwrite: true`。更稳妥的做法是为每次新实验使用独立 run 目录。
-
-pretrain 正常结束后，其 `best.weights.h5` 可以直接作为正式候选模型。使用 `make eval-val` 在 Val 上为 pretrain 独立选择并冻结 presence threshold，随后即可运行 `make eval-test`、`make infer` 与 `make export`；这些通用命令默认都不会寻找 finetune 数据或 checkpoint。
-
-## 5. Stage 2：Gold + pseudo replay（可选）
-
-只有 finetune 数据准备完成后才进入本节。输入为 `train_finetune_merged` canonical 文件，并从 Stage 1 最佳权重初始化。启动时必须确认至少存在一条 `supervision_tier=gold`。缺少该文件或 Gold 记录时，不应创建空占位文件，也不应运行 `finetune`、`inspect-finetune`、`inspect-all` 或 `train-all`；继续使用默认 pretrain 路线即可。
-
-默认每个 batch 先用 half-up 得到约 40% Gold 和 60% pseudo replay 的整数行配额，同时用 largest-remainder 得到四类 sample type 的整数列配额，再构造满足两组边际总数的 `Gold/pseudo × sample_type` 交叉配额。默认 batch=32 时，Gold 为 13 条，四类总数依次为 `18/4/8/2`；Gold 四类为 `7/2/3/1`，pseudo 四类为 `11/2/5/1`。八个交叉单元均须存在。不要只用少量 Gold 长时间训练，否则容易遗忘第一阶段覆盖的姿态、背景和光照。
-
-Stage 2 使用更低学习率，在人工 Val 上 early stopping。finetune 训练完成后，必须重新在 Val 上选择并冻结属于 finetune 的 presence threshold；pretrain threshold 与 finetune threshold 是两个独立决策，不能跨阶段沿用。Test 不允许参与学习率、epoch、presence threshold、增强或量化选择。
-
-Keras `fit` 固定使用 `shuffle=False`：batch 内容和 epoch 随机流完全由 `CanonicalSequence` 管理，Keras 不再独立打乱 Sequence 的 batch 顺序。每个正常 epoch 结束时 Sequence 自增 epoch；从 `training.resume_checkpoint` 恢复时，训练入口先读取完成 epoch，并调用 `CanonicalSequence.set_epoch(initial_epoch)`。同一 labels、seed、配置、绝对 epoch 和 batch index 会复现相同采样与增强随机流；恢复不会重放 epoch 0。该契约只覆盖 epoch 边界恢复，不声明支持 batch 中途恢复。
-
-完整恢复依赖所选 best/last 权重旁的 `.state/` TensorFlow checkpoint；存在时会恢复 optimizer 和 epoch。若 `.state/` 缺失但 `.state.json` 仍在，只能恢复模型权重和记录的 epoch，报告会明确给出 optimizer 未恢复警告。`training.initial_checkpoint` 只加载初始权重（Stage 2 默认指向 Stage 1 的 `checkpoints/best.weights.h5`），不是续训语义；它与 `training.resume_checkpoint` 互斥。
-
-阶段命令关系如下：
+每次正式实验前直接修改并提交这几行。不要只在 shell 中临时 `export` 一个新值，否则后续难以仅凭仓库版本复核训练使用了哪套数据与输出目录。执行以下命令可核对本次 Make 实际使用的值：
 
 ```bash
-# 默认完整闭环：只使用 pretrain
+make paths
+```
+
+新的数据提纯或训练不得复用已有 ID。建议按 `v2-pretrain-r1`、`v2-pretrain-r2` 递增；系统默认拒绝覆盖非空训练目录。
+
+## 3. 持久化提纯产物
+
+原始入口固定为：
+
+```text
+${HAND_DATA_ROOT}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl
+```
+
+运行 `make curate` 后生成：
+
+```text
+train_pretrain_curated/<CURATED_ID>/
+├── images/                         # 真正允许进入训练的独立 ROI
+├── review_images/                  # 冻结后的待审负例 ROI，不参与训练
+├── 05_labels/
+│   ├── hand_training_labels_pretrain_landmarks.jsonl
+│   ├── hand_training_labels_pretrain_multitask.jsonl
+│   └── hand_training_labels_pretrain_smoke.jsonl
+├── audit/
+│   ├── pretrain_curation_catalog.jsonl
+│   ├── included_landmarks.jsonl
+│   ├── excluded_and_held.jsonl
+│   ├── negative_review_queue.jsonl
+│   ├── image_manifest.jsonl
+│   └── review_image_manifest.jsonl
+└── qc/
+    ├── curation_report.json
+    └── sha256_manifest.json
+```
+
+`landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。待审负例及其图片写入磁盘，但绝不会因为文件存在就自动进入训练。人工确认后重新提纯，只有 `INCLUDE_CONFIRMED_NEGATIVE` 才会进入 `multitask.jsonl` 和正式 `images/`。
+
+训练入口会验证 labels、materialized ROI 和 manifest 的 SHA-256。提纯不是训练时的内存过滤，因此训练结束后仍能复核当时真正使用的 JSONL 和图片。
+
+## 4. 人工完整操作流程
+
+以下命令均在服务器仓库根目录执行。
+
+### 4.1 更新代码和确认环境
+
+```bash
+git pull
+conda activate hand-landmarker-tf29
+make paths
+make compile
+make test
+```
+
+检查 `make paths` 的数据根、curated ID 和 run ID。若目标目录已经用于旧实验，先修改并提交 Makefile 中的 ID，不要打开 `overwrite` 覆盖旧实验。
+
+### 4.2 第一次提纯并产生人工审查包
+
+```bash
+make curate
+```
+
+首先检查：
+
+```text
+<curated_root>/qc/curation_report.json
+<curated_root>/audit/negative_review_queue.jsonl
+<curated_root>/audit/review_image_manifest.jsonl
+<curated_root>/review_images/
+```
+
+`curation_report.json` 中至少需要核对：
+
+- `included_landmark_positives` 是否与预期接近；
+- `negative_review_queue` 是否等于待人工处理的规模；
+- `negative_overlap_confirmed_hand` 是否异常偏高；
+- `reason_counts` 中是否出现新的未知原因；
+- `included_by_dataset`、`included_by_sample_type` 是否被单一来源完全支配。
+
+### 4.3 人工复核负例
+
+逐行读取 `audit/negative_review_queue.jsonl`。每一行的：
+
+- `crop_id` 是写回决策文件的唯一键；
+- `review_crop_path` 指向本次快照冻结的 256×256 待审 ROI；
+- `sample_type` 区分 runtime 与 low-Palm 候选；
+- `pretrain_curation.reasons` 给出进入 HOLD 的原因；
+- `pretrain_curation.review_image_sha256` 可与 manifest 交叉核验。
+
+判定标准必须保守：
+
+- ROI 中完全没有手、手指、手腕或足以构成手部特征的局部区域，才标记 `CONFIRMED_NEGATIVE`；
+- 只要能看到手，即使 MediaPipe 没检出、手很小、模糊、遮挡或在 ROI 边缘，也标记 `FALSE_NEGATIVE_HAND_VISIBLE`；
+- 无法确定、曝光严重、裁剪含糊或需要第二人复核，标记 `HOLD`；
+- 不要因为 Palm score 低或 teacher 无输出就判负；
+- 同一个人最好分两轮复核，或由第二名 reviewer 抽检全部 confirmed negative 的至少 10%。
+
+决策文件固定放在 Makefile 打印的 `HAND_PRETRAIN_REVIEW_FILE`，默认是：
+
+```text
+/root/autodl-tmp/hand_landmarker_reviews/<CURATED_ID>/negative_review_decisions.jsonl
+```
+
+先创建目录：
+
+```bash
+mkdir -p /root/autodl-tmp/hand_landmarker_reviews/v2-pretrain-r1
+```
+
+每行格式如下；JSONL 不能带数组外壳，`reviewer` 与 `reviewed_at` 必填：
+
+```json
+{"crop_id":"peak:000001","decision":"CONFIRMED_NEGATIVE","reviewer":"alice","reviewed_at":"2026-07-14T21:00:00+08:00","notes":"two-pass review; empty ROI"}
+{"crop_id":"peak:000002","decision":"FALSE_NEGATIVE_HAND_VISIBLE","reviewer":"alice","reviewed_at":"2026-07-14T21:01:00+08:00","notes":"visible fingers at right edge"}
+{"crop_id":"soar:000003","decision":"HOLD","reviewer":"alice","reviewed_at":"2026-07-14T21:02:00+08:00","notes":"motion blur; needs second review"}
+```
+
+决策文件可以只覆盖已经看完的子集；未出现的 crop 继续保持 HOLD。不得批量把剩余记录自动填成 `CONFIRMED_NEGATIVE`。
+
+### 4.4 用人工决策重建提纯快照
+
+```bash
+make curate-reviewed
+```
+
+该命令读取 Makefile 固定的 review 文件并显式重建同一个 curated ID。重建后检查：
+
+```bash
+make check-multitask
+```
+
+默认 multitask 门禁要求：
+
+- confirmed negative 总数不少于 500；
+- `NEG_RUNTIME_CANDIDATE` 不少于 100；
+- `NEG_LOW_PALM_CANDIDATE` 不少于 100；
+- 每个进入 multitask 的 negative 都带 `CONFIRMED_NEGATIVE`、`reviewer`、`reviewed_at`；
+- 不允许任何未复核 negative 混入。
+
+门槛写在 `configs/train_multitask.yaml`，变更门槛必须作为一次明确的配置变更提交，不能通过删掉 gate 绕过。数量不足时仍可训练 geometry，但不可启动 multitask。
+
+`qc/sha256_manifest.json` 和 `qc/curation_report.json` 会记录 review 文件路径、SHA-256 与决策数。确认后的 multitask JSONL 和图片全部保留在磁盘。
+
+### 4.5 Geometry 阶段
+
+```bash
+make doctor
 make inspect
+make smoke
+make train
+```
+
+顺序含义：
+
+1. `doctor` 检查 Python 3.8、TensorFlow 2.9、CUDA/cuDNN 和 GPU；
+2. `inspect` 审计 geometry Train、Val、锁定 Test，并检查跨 split 泄漏；
+3. `smoke` 在固定 128 ROI 上训练，并逐条前向验证是否真的可过拟合；
+4. `train` 会再次验证 smoke gate，然后启动完整 geometry。
+
+首次无需人工负例、只想先完成 geometry 时，也可运行：
+
+```bash
+make pretrain
+```
+
+它按 `curate → doctor → inspect → smoke → train` 顺序执行，但不会自动执行人工审查或 multitask。
+
+Geometry 输出：
+
+```text
+${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/geometry/
+```
+
+正式候选权重是 `checkpoints/best.weights.h5`。checkpoint、ReduceLROnPlateau 和 EarlyStopping 都以 `val_landmark_mae/min` 为准；训练结束还会核验 best 状态是否真的对应 history 中的最低验证 MAE。
+
+### 4.6 Geometry 评估与推理
+
+Makefile 默认 `HAND_PRETRAIN_PHASE := geometry`：
+
+```bash
+make eval-val
+# 根据 Val 报告确定 hand_flag threshold，并写回 eval_test.yaml / infer.yaml。
+make eval-test
+make infer
+```
+
+Val/Test 直接读取已有 256×256 Hand ROI，只运行 Hand Landmarker；它们不运行 Palm。`make infer` 才会对外部原图执行 Palm → rotated ROI → Hand，因此两者不能混为同一评估口径。
+
+Test 只能在 Val 已完成 checkpoint、threshold 和训练方案选择后运行。Test 结果不得反向用于调学习率、epoch、增强、loss coefficient 或 threshold。
+
+### 4.7 Multitask 阶段
+
+人工负例门禁通过且 geometry best checkpoint 已存在后执行：
+
+```bash
+make check-multitask
+make inspect-multitask
+make multitask
+```
+
+`make multitask` 本身也会先运行门禁与 inspect。它从：
+
+```text
+<RUN_ID>/geometry/checkpoints/best.weights.h5
+```
+
+初始化，并写入：
+
+```text
+<RUN_ID>/multitask/
+```
+
+默认 batch 采样为 90% positive、10% confirmed negative：
+
+```text
+POS_RUNTIME               72%
+POS_LOW_PALM              18%
+NEG_RUNTIME_CANDIDATE      8%
+NEG_LOW_PALM_CANDIDATE     2%
+```
+
+Landmark coefficient 仍为 20，presence 为 0.25，handedness 为 0.05；学习率降到 `5e-5`。checkpoint、降学习率与 early stopping 统一最小化 geometry-first 指标：
+
+```text
+val_multitask_score = val_landmark_mae
+                    + 0.02  × (1 - val_hand_flag_accuracy)
+                    + 0.005 × (1 - val_handedness_accuracy)
+```
+
+分类误差会参与选 best，但权重明显低于 landmark MAE，避免 presence 变好却让 geometry 再次崩坏。该派生指标也会写入 history 和 checkpoint state，训练结束时按 history 复核 best epoch。
+
+如果 hand_flag 指标上升但 Val landmark MAE、PCK 或可视化骨架明显恶化，不应接受该 checkpoint。优先降低 presence coefficient/negative fraction，而不是增加错误负例。
+
+### 4.8 Multitask 评估、推理和导出
+
+用命令行显式选择 multitask 产物；Make 命令行值会覆盖 Makefile 中的默认 `geometry`，并写入本次子进程环境：
+
+```bash
+make eval-val HAND_PRETRAIN_PHASE=multitask
+# 冻结 multitask 自己的 Val threshold 后：
+make eval-test HAND_PRETRAIN_PHASE=multitask
+make infer HAND_PRETRAIN_PHASE=multitask
+make export HAND_PRETRAIN_PHASE=multitask
+```
+
+Geometry 和 multitask 必须各自在 Val 上确定 threshold，不能沿用另一个阶段的值。
+
+## 5. v2 模型与导出约束
+
+所有训练、Val/Test、infer 和 export 配置都固定使用 `model.version: v2`。v1 已从当前 registry 移除。
+
+v2 的改动：
+
+- 所有 `LeakyReLU` 替换为普通 `ReLU`；
+- residual block 在 depthwise 后增加 ReLU，提升非线性表达；
+- pointwise 与 depthwise 主干使用训练期多分支 `Conv + BatchNorm`、辅助分支和可用时的 identity 分支；
+- 导出前把 BN、辅助分支与 identity 精确折叠为一个带 bias 的 Conv；
+- 训练图参数量更大，部署图只保留单分支，因此板端不会携带训练分支和 BN；
+- 输入和三个输出的名称、顺序、shape、数据类型完全不变。
+
+严格导出白名单为：
+
+```text
+Conv, Add, Relu, MaxPool, Sigmoid, Identity
+```
+
+`LeakyRelu` 不再在白名单中。`make export` 会依次验证：
+
+1. 训练图与融合后 Keras 图的数值一致性；
+2. 融合后的 Keras 与 ONNX 数值一致性；
+3. 固定输入/三输出接口；
+4. ONNX opset 11；
+5. 算子名称和 Conv/MaxPool 属性限制；
+6. 转换校准/评测 NPY 数据集。
+
+融合报告写入 `hand_landmarker_v2.contract.json` 的 `reparameterization_parity`，其中记录训练参数量、部署参数量和逐输出最大误差。只要出现 `LeakyRelu`、未折叠 BN 或其他白名单外算子，默认导出就会失败，不应使用 `--force` 交付官方转换。
+
+## 6. Canonical 标签与 loss 规则
+
+一个 canonical JSONL 行对应一张 256×256 Hand ROI。Positive 必须有且仅有 ID `0..20` 的 21 点；loader 按 ID 排序。Negative 的 landmarks 必须为空，handedness 必须为 `unknown`。
+
+每个 head 的记录级有效权重为：
+
+```text
+presence   = hand_presence_loss_weight × supervision_loss_weight × presence_quality_weight
+landmark   = landmark_loss_weight × supervision_loss_weight × landmark_quality_weight
+handedness = handedness_loss_weight × supervision_loss_weight × handedness_quality_weight
+```
+
+Negative 的 landmark/handedness 权重自动为 0；unknown handedness 的 handedness 权重为 0。`sampling_weight` 只在已经选定的 `supervision_tier × sample_type` 单元内抽样，不乘入 loss。
+
+增强会同步变换图片与 21 点，不会静默 clamp 越界点。水平翻转仍关闭，因为真实手与镜像 handedness 约定尚未完成独立验证。
+
+## 7. 输出保护、恢复与复核
+
+新训练默认拒绝写入非空 `outputs.run_dir`。重跑时优先修改 Makefile 的 run ID；只有明确续训才在对应 YAML 中填写 `training.resume_checkpoint`。`initial_checkpoint` 只表示从某权重开始新的阶段，multitask 正是这种语义。
+
+每个训练目录包含：
+
+```text
+checkpoints/best.weights.h5
+checkpoints/last.weights.h5
+checkpoints/final.weights.h5
+checkpoints/*.state/
+checkpoints/*.state.json
+experiment_metadata.json
+history.json
+training_report.json
+logs/history.csv
+logs/tensorboard/
+model_summary.txt
+```
+
+复核一次实验时至少保存并对应检查：
+
+- 训练所用 Git commit 与 dirty 状态；
+- Makefile 中的 data root、curated ID、run ID、phase；
+- curation manifest、review decision SHA-256、训练 labels SHA-256、逐图 SHA-256；
+- best checkpoint SHA-256 与 best epoch；
+- Val 选择的 threshold；
+- Test、infer 与 export 的模型 SHA-256；
+- ONNX contract 中的 operator list 与两级 parity 报告。
+
+## 8. 最短命令清单
+
+Geometry：
+
+```bash
+make curate
+make doctor
+make inspect
+make smoke
 make train
 make eval-val
 make eval-test
 make infer
-make export
-
-# finetune 数据就绪后，显式切换当前阶段
-make MODEL_STAGE=finetune inspect
-make MODEL_STAGE=finetune train
-make MODEL_STAGE=finetune eval-val
-make MODEL_STAGE=finetune eval-test
-make MODEL_STAGE=finetune infer
-make MODEL_STAGE=finetune export
 ```
 
-显式训练目标为 `train-pretrain`/`train-finetune`，并提供短别名 `pretrain`/`finetune`。`train-all` 才会按 pretrain → finetune 顺序运行两阶段，且仅应在 finetune canonical 数据真实存在并通过审计后使用。`make train` 始终只训练 `MODEL_STAGE` 选中的一个阶段，默认只训练 pretrain。
-
-## 6. 数据检查
+人工负例与 multitask：
 
 ```bash
-make inspect
+# 人工填写 Makefile 所示 HAND_PRETRAIN_REVIEW_FILE 后
+make curate-reviewed
+make check-multitask
+make multitask
+make eval-val HAND_PRETRAIN_PHASE=multitask
+make eval-test HAND_PRETRAIN_PHASE=multitask
+make infer HAND_PRETRAIN_PHASE=multitask
+make export HAND_PRETRAIN_PHASE=multitask
 ```
 
-检查内容包括 JSONL/schema、ID 重复、stage/split、权重、图片存在性/可读性/尺寸、分布和文件 SHA-256。`make inspect` 只审计 `MODEL_STAGE` 选中的当前 Train、Val 和锁定 Test；默认阶段是 pretrain，因此它不会读取缺失的 finetune JSONL。在一次阶段审计内，检查器两两比较 `global_crop_id`、`source_group_id`、解析路径和内容哈希；任一精确跨集合重叠都会失败，文件名相同本身只告警。图片内容哈希只能发现完全相同文件，无法替代采集 session 元数据。
+只生成官方转换 NPY 数据：
 
-显式检查目标为 `inspect-pretrain` 与 `inspect-finetune`；只检查某个阶段的共享 Gold 时，还可使用 `inspect-val-pretrain`/`inspect-val-finetune` 和 `inspect-test-pretrain`/`inspect-test-finetune`。只有 finetune 数据真实存在时才运行 `inspect-all`；它会依次审计两个阶段及其 Val/Test 路由。pretrain 与 finetune 训练集允许 pseudo replay，因此即使执行 `inspect-all`，也不会把两个训练阶段彼此比较作为泄漏门禁。
-
-训练入口不会假定操作者已单独运行 `make inspect`：`create_sequences` 会再次对实际参加训练的 Train/Val 计算图像 SHA-256，并对 `global_crop_id`、`source_group_id`、解析后的 crop 路径和图像内容哈希做跨 split 检查；任一精确重叠都会在创建 Sequence 前拒绝训练。该检查结果嵌入 run 下的 `experiment_metadata.json` 与 `training_report.json`，不会伪造一个不存在的独立 `data_report.json`。
-
-## 7. 下游 checkpoint 阶段契约
-
-评估、外部图片推理和导出配置使用 `model.checkpoint_stage: pretrain|finetune` 声明 checkpoint 的训练阶段。通用 Make 目标会按 `MODEL_STAGE` 选择相应配置、默认 checkpoint 和独立输出目录；报告/contract provenance 把它记为 `model_checkpoint_stage`，并同时记录模型路径与 SHA-256。这个字段不会从 checkpoint 路径或 finetune 数据是否存在来推断，而是把操作者选择的路线显式暴露出来，使同一 Gold 集上的两条模型路线可审计比较。
-
-默认隔离布局为：
-
-```text
-评估    ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/eval/<stage>/{val,test}
-推理    ${HAND_DATA_ROOT}/inference/output/<stage>
-导出    ${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>
+```bash
+make conversion-data HAND_PRETRAIN_PHASE=multitask
 ```
-
-`evaluate.py` 和 `infer_folder.py` 可用 `--model-path`、`--output-dir` 与 `--overwrite` 做单次覆盖；`export_onnx.py` 可用 `--weights-path`、`--output-path`、`--contract-path` 与 `--overwrite`。覆盖不会改写 YAML，也不会根据自定义权重路径自动改变 `model.checkpoint_stage`；必须选用与权重真实来源相符的阶段 wrapper，并建议把自定义输出放在该阶段的命名空间中。

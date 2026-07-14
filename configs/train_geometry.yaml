@@ -1,10 +1,10 @@
 schema_version: 1
 task: train
-stage: finetune
+stage: pretrain
 
 experiment:
-  name: hand_landmarker_v1_finetune
-  seed: 20260713
+  name: hand_landmarker_v2_geometry
+  seed: 20260714
 
 environment:
   python: ">=3.8,<3.9"
@@ -15,7 +15,9 @@ environment:
 
 data:
   data_root: "${HAND_DATA_ROOT:-/root/autodl-tmp}"
-  labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_finetune_merged/05_labels/hand_training_labels_finetune.jsonl"
+  labels: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_curated/${HAND_PRETRAIN_CURATED_ID:-v2-pretrain-r1}/05_labels/hand_training_labels_pretrain_landmarks.jsonl"
+  curation_manifest: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_curated/${HAND_PRETRAIN_CURATED_ID:-v2-pretrain-r1}/qc/sha256_manifest.json"
+  require_curation_schema: pretrain_curation_v1
   crop_path_key: crop_path
   path_policy: canonical_crop_path_only
   require_schema_version: train_finalize_v1
@@ -29,16 +31,13 @@ data:
   cache: false
 
 model:
-  version: v1
-  checkpoint_stage: finetune
+  version: v2
+  checkpoint_stage: pretrain
   input_shape: [1, 256, 256]
   input_layout: NCHW
   num_iterations: 8
   output_order: [landmarks, hand_flag, handedness]
-  output_sizes:
-    landmarks: 42
-    hand_flag: 1
-    handedness: 1
+  output_sizes: {landmarks: 42, hand_flag: 1, handedness: 1}
 
 targets:
   num_landmarks: 21
@@ -47,35 +46,35 @@ targets:
   landmark_order: id_0_to_20_interleaved_xy
   presence_field: hand_presence.present
   handedness_field: handedness.label
-  handedness_encoding:
-    Left: 0
-    Right: 1
-    unknown: null
+  handedness_encoding: {Left: 0, Right: 1, unknown: null}
+
 training:
-  epochs: 40
-  batch_size: 32
+  epochs: 160
+  batch_size: 64
   steps_per_epoch: null
-  initial_checkpoint: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/pretrain/checkpoints/best.weights.h5"
+  initial_checkpoint: null
   resume_checkpoint: null
-  gold_fraction: 0.4
   gradient_clip_norm: 5.0
   mixed_precision: false
   optimizer:
     name: adam
-    learning_rate: 0.0001
+    learning_rate: 0.0003
     beta_1: 0.9
     beta_2: 0.999
     epsilon: 1.0e-7
+  checkpoint: {monitor: val_landmark_mae, mode: min}
   learning_rate_schedule:
     name: reduce_on_plateau
-    monitor: val_total_loss
+    monitor: val_landmark_mae
+    mode: min
     factor: 0.5
-    patience: 3
-    min_learning_rate: 1.0e-7
+    patience: 5
+    min_learning_rate: 1.0e-6
   early_stopping:
     enabled: true
-    monitor: val_total_loss
-    patience: 10
+    monitor: val_landmark_mae
+    mode: min
+    patience: 20
     restore_best_weights: true
 
 sampling:
@@ -85,13 +84,11 @@ sampling:
   bucket_key: sampling_bucket
   sample_type_key: sample_type
   weight_key: sampling_weight
-  # The loader first fixes the Gold/pseudo marginal, then constructs exact
-  # sample-type marginals. sampling_weight only selects rows inside each cell.
   sample_type_fractions:
-    POS_RUNTIME: 0.56
-    POS_LOW_PALM: 0.14
-    NEG_RUNTIME_CANDIDATE: 0.25
-    NEG_LOW_PALM_CANDIDATE: 0.05
+    POS_RUNTIME: 0.75
+    POS_LOW_PALM: 0.25
+    NEG_RUNTIME_CANDIDATE: 0.0
+    NEG_LOW_PALM_CANDIDATE: 0.0
   quota_rounding: largest_remainder
   quota_tie_break: [POS_RUNTIME, POS_LOW_PALM, NEG_RUNTIME_CANDIDATE, NEG_LOW_PALM_CANDIDATE]
   require_all_tier_sample_type_cells: true
@@ -100,30 +97,20 @@ sampling:
   honor_record_sampling_weight: true
 
 losses:
-  landmarks:
-    name: huber
-    delta: 0.01
-    coefficient: 1.0
-  hand_flag:
-    name: binary_crossentropy
-    from_logits: false
-    coefficient: 1.0
-  handedness:
-    name: binary_crossentropy
-    from_logits: false
-    coefficient: 0.1
+  landmarks: {name: huber, delta: 0.05, coefficient: 20.0}
+  hand_flag: {name: binary_crossentropy, from_logits: false, coefficient: 0.1}
+  handedness: {name: binary_crossentropy, from_logits: false, coefficient: 0.0}
   honor_record_loss_weights: true
 
 augmentation:
   enabled: true
-  brightness_delta: 0.08
-  contrast_range: [0.9, 1.1]
-  gaussian_noise_stddev: 0.005
-  rotation_degrees: 5.0
-  scale_range: [0.97, 1.03]
-  translation_fraction: 0.02
+  brightness_delta: 0.12
+  contrast_range: [0.85, 1.15]
+  gaussian_noise_stddev: 0.01
+  rotation_degrees: 8.0
+  scale_range: [0.95, 1.05]
+  translation_fraction: 0.03
   horizontal_flip_probability: 0.0
-  # Disabled until camera orientation and handedness mirroring are verified.
 
 validation:
   enabled: true
@@ -133,8 +120,6 @@ validation:
   every_epochs: 1
 
 inspection:
-  # This stage's Train and configured Val are compared with locked Test.
-  # Pretrain Train is intentionally absent: pseudo replay may overlap stages.
   compare_datasets:
     test:
       data_root: "${HAND_DATA_ROOT:-/root/autodl-tmp}"
@@ -151,10 +136,11 @@ inspection:
       channels: 1
 
 outputs:
-  run_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/v1/finetune"
+  run_dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/hand_landmarker_runs/${HAND_PRETRAIN_RUN_ID:-v2-pretrain-r1}/geometry"
   overwrite: false
 
 runtime:
   gpu_memory_growth: true
   deterministic: false
   fail_on_nan: true
+

@@ -59,11 +59,12 @@ P_image = TL + x_roi × (TR-TL) + y_roi × (BL-TL)
 make export
 ```
 
-通用目标默认 `MODEL_STAGE=pretrain`：它直接导出 pretrain checkpoint，不要求 finetune 数据或权重。finetune 完成后可运行 `make MODEL_STAGE=finetune export`。显式目标 `export-pretrain` 与 `export-finetune` 不受 `MODEL_STAGE` 影响，适合在脚本中锁定路线。
+默认导出 Makefile 中 `HAND_PRETRAIN_PHASE := geometry` 指定的 checkpoint。multitask 完成后使用 `make export HAND_PRETRAIN_PHASE=multitask`。
 
 导出器执行以下门禁：
 
-- 加载版本化 Keras 结构及指定权重；
+- 加载 v2 训练图及指定权重；
+- 将 Conv+BN 多分支融合为单分支部署图，并验证融合前后数值一致；
 - 断言 Keras 输入/输出接口；
 - TensorSpec 名固定为 `inputs`；
 - 静态 batch=1，默认 opset 11；
@@ -77,7 +78,6 @@ make export
 
 - Conv 的 kernel、stride 与 pad 各维均不得大于 16；每个输出 kernel 的 `Kw×Kh×Cin` 不得大于 2048，且权重必须是静态 initializer；
 - MaxPool 的 kernel 各维必须在 `1..8`；
-- LeakyRelu 的 `alpha` 只能是 `0.1` 或 `0.01`。
 
 `strict_a1_operators: true` 时，白名单外算子或任一属性违规都会让导出失败；失败的临时模型不会替换最终 ONNX。
 
@@ -89,19 +89,19 @@ make export EXPORT_ARGS=--force
 
 该参数只绕过 A1 算子名称与属性门禁。`onnx.checker`、固定 I/O/类型/shape、静态 batch、opset 11、Keras↔ONNX 数值比对、转换数据检查和覆盖保护仍然执行。contract 的 `a1_operator_audit` 会保留 `unsupported` 与属性违规，并记录 `strict: true`、`forced: true`、`enforced: false`。若目标产物已存在，仍需单独、显式追加 `--overwrite`。
 
-目标优化图应只包含 `Conv/Add/LeakyRelu/MaxPool/Sigmoid`（允许无语义的 Identity）。Keras 源码中的 Permute 应由 tf2onnx 优化消除；若最终 ONNX 仍出现 Transpose、动态 shape、Div、Softmax 等，严格导出会失败，不应继续送入 A1 工具链。
+目标优化图应只包含 `Conv/Add/Relu/MaxPool/Sigmoid`（允许无语义的 Identity）。`LeakyRelu` 已被当前官方转换工具拒绝，因此 v2 和白名单都不再包含它。训练期 BatchNormalization 与辅助分支必须在导出前折叠；若最终 ONNX 仍出现 BatchNormalization、LeakyRelu、Transpose、动态 shape、Div、Softmax 等，严格导出会失败，不应继续送入 A1 工具链。
 
 默认 parity 探针是 1 个全零、1 个全一和 4 个固定随机种子的 `[0,1]` 输入。契约报告对每个探针、每个输出 head 分别记录最大绝对/相对误差，并同时记录 Keras 与 ONNX 的 minimum、maximum、max-abs；landmark 输出还记录按板端规则推导的 scale divisor。验收使用配置中的 `atol=1e-5`、`rtol=1e-4` 做逐元素 `allclose`，任一 case/head 失败即中止导出。这里验证的是 Keras 与 ONNX 的数值等价及合成输入下的输出健康度，不是数据集精度，也不是 `.m1model` 板端实测。
 
 默认产物按 checkpoint 阶段隔离：
 
 ```text
-${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/hand_landmarker_v1_<stage>.onnx
-${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/hand_landmarker_v1_<stage>.contract.json
-${HAND_DATA_ROOT}/hand_landmarker_runs/v1/export/<stage>/model_conversion/datasets.zip
+${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/hand_landmarker_v2.onnx
+${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/hand_landmarker_v2.contract.json
+${HAND_DATA_ROOT}/hand_landmarker_runs/<RUN_ID>/export/<phase>/model_conversion/datasets.zip
 ```
 
-其中 `<stage>` 为 `pretrain` 或 `finetune`，实际文件名为 `hand_landmarker_v1_<stage>.onnx` 与 `hand_landmarker_v1_<stage>.contract.json`。配置中的 `model.checkpoint_stage` 显式声明权重来源并写入 contract provenance；它不会从路径推断 checkpoint 内容。Make 的阶段 wrapper 会让默认权重、声明和产物目录保持一致。pretrain ONNX 是完整受支持的交付产物，不以 finetune ONNX 是否存在为前提。
+其中 `<phase>` 为 `geometry` 或 `multitask`。配置中的 `model.checkpoint_stage: pretrain` 声明大训练阶段，phase 则由 Makefile 选择当前 pretrain 子阶段。contract 额外记录 `reparameterization_parity` 的训练/部署参数量与逐输出融合误差。
 
 `export` 还会自动制作模型转换输入：从当前阶段 Train 以稳定 SHA-256 分层抽取 100 个校准 ROI，从 Val/Test 各抽取 25 个评测 ROI。所有文件都是经 `uint8/255` 得到的 `float32 (1,1,256,256)` NCHW Hand ROI；不会运行 Palm、读取原图或写入模型输出。严格的 `datasets/` 树、可直接交付的 `datasets.zip` 以及树外的来源 manifest/report 位于同阶段 `model_conversion/`。详细格式见[模型转换数据制作说明](../model_conversion/conversion_method.md)。
 

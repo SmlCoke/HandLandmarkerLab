@@ -1,5 +1,7 @@
 # 两次 pretrain 失败分析与恢复方案（2026-07-14）
 
+> 历史说明：本文保留当时的服务器证据、旧配置名与故障分析。当前 v2 命令、geometry→multitask 分阶段流程和人工负例复核方法以 [Pretrain 数据与分阶段训练操作手册](../training_system/data_and_training.md) 为准。
+
 本文只讨论 pseudo-label pretrain。没有使用、要求或修改 finetune / Gold Train 路线。
 
 ## 结论

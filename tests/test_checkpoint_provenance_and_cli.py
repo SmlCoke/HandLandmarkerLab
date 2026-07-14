@@ -255,6 +255,9 @@ class CheckpointStageContractTests(unittest.TestCase):
             def load_weights(self, _path):
                 return None
 
+            def count_params(self):
+                return 123
+
             def __call__(self, _tensor, training=False):
                 del training
                 return [
@@ -308,6 +311,9 @@ class CheckpointStageContractTests(unittest.TestCase):
                     return_value=FakeModel(),
                 ):
                     with mock.patch(
+                        "models.hand_landmarker.registry.reparameterize_for_deploy",
+                        side_effect=lambda model, **_kwargs: model,
+                    ), mock.patch(
                         "hand_landmarker.export._shape_from_onnx",
                         side_effect=lambda item: item.expected_shape,
                     ):

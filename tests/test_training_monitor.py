@@ -6,6 +6,7 @@ from hand_landmarker.config import load_config
 from hand_landmarker.io_utils import write_json
 from hand_landmarker.training import (
     _monitor_mode,
+    _multitask_monitor_value,
     _state_json_path,
     _verify_best_checkpoint_selection,
 )
@@ -15,6 +16,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MonitorDirectionTests(unittest.TestCase):
+    def test_multitask_score_is_geometry_first_and_deterministic(self):
+        value = _multitask_monitor_value(
+            {
+                "val_landmark_mae": 0.03,
+                "val_hand_flag_accuracy": 0.80,
+                "val_handedness_accuracy": 0.60,
+            },
+            {
+                "landmark_mae_weight": 1.0,
+                "hand_flag_error_weight": 0.02,
+                "handedness_error_weight": 0.005,
+            },
+        )
+        self.assertAlmostEqual(0.036, value)
+        self.assertIsNone(_multitask_monitor_value({}, {}))
+
     def test_error_metrics_are_minimized(self):
         for name in (
             "val_total_loss",
@@ -40,7 +57,7 @@ class MonitorDirectionTests(unittest.TestCase):
             _monitor_mode("custom_score")
 
     def test_pretrain_config_is_explicit_and_lr_can_run_before_early_stop(self):
-        config = load_config(ROOT / "configs" / "train_pretrain.yaml")
+        config = load_config(ROOT / "configs" / "train_geometry.yaml")
         training = config["training"]
         self.assertEqual(
             {"monitor": "val_landmark_mae", "mode": "min"},

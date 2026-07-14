@@ -11,18 +11,18 @@ curation:
   normalized_coordinate_range: [0.0, 1.0]
 
   # A teacher abstention is never treated as verified background by default.
-  # Populate this optional JSONL only after human review.  Supported decisions:
-  # CONFIRMED_NEGATIVE, FALSE_NEGATIVE_HAND_VISIBLE, HOLD.
+  # `make curate` leaves this empty and writes the review queue.  Then
+  # `make curate-reviewed` supplies the external, versioned decision JSONL.
   negative_review_decisions: null
   overlap_core_landmark_ids: [0, 1, 5, 9, 13, 17]
   overlap_minimum_core_points: 3
 
   # This subset is persisted for the mandatory overfit gate before full train.
   smoke_subset_size: 128
-  smoke_selection_salt: pretrain_landmark_smoke_v1
+  smoke_selection_salt: pretrain_landmark_smoke_v2
 
 output:
-  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_curated/${HAND_PRETRAIN_CURATED_ID:-v1}"
+  dir: "${HAND_DATA_ROOT:-/root/autodl-tmp}/train_pretrain_curated/${HAND_PRETRAIN_CURATED_ID:-v2-pretrain-r1}"
   # Byte-isolated snapshot: later edits to source crops cannot change the
   # images that were actually reviewed and trained.
   materialize_images: copy
