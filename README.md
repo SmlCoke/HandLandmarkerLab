@@ -2,6 +2,30 @@
 
 本仓库训练 AetherSign Hand Landmarker。当前交付范围是 v2 pretrain，不包含 finetune，也不训练 Palm Detector。
 
+## I. 两阶段训练流程总览
+
+当前任务是训练一个适合 A1 板端部署的轻量 Hand Landmarker，使其在项目采集域内尽可能接近 Google MediaPipe Hand Landmarker (pretrain stage)，并通过少量人工金标准数据纠正教师模型的系统误差 (finetune stage)。
+
+采用两个阶段：
+
+1. **第一阶段：教师—学生伪标签学习**。使用 Google MediaPipe 生成的大规模伪标签训练学生模型，获得覆盖手型、光照、姿态、ROI 偏移和背景变化的基座模型。这一步无需人工精细标注训练集，因此可以在有限的时间内利用教师模型 Google MediaPipe 制造出大量训练集。
+2. **第二阶段：人工金标准数据微调**。从训练域中选择少量高价值 ROI 进行精细人工复核，再与第一阶段的高质量伪标签混合训练，纠正教师漏检、关键点偏差和 presence 错误。
+
+整个过程中，验证集 val 和测试集 test 不变，并且都是人工精细标注的金标准数据。
+
+这条路线属于教师—学生伪标签学习或模型模仿。由于当前 MediaPipe Python API 没有导出 hand presence 的连续分数，也没有逐点置信度，因此目前主要使用离散 presence、handedness 和 21 点坐标监督，不是完整的 soft-logit 知识蒸馏。
+
+**数据集角色**
+
+| 数据集 | 当前规模（以 Hand ROI 计） | 标签质量 | 是否更新模型参数 | 主要用途 |
+|---|---:|---|---|---|
+| Train pseudo | 10w 张左右 | Google MediaPipe 伪标签，存在噪声 | 是，第一阶段 | 学习教师行为和数据域多样性 |
+| Train gold | 未制作 | 人工复核的近似金标准 | 是，第二阶段 | 纠正伪标签偏差和困难样本 |
+| Val | 1000 张左右 | 人工金标准 | 否 | 选 checkpoint、调 presence 阈值、early stopping |
+| Test | 1000 张左右 | 人工金标准 | 否 | 最终冻结方案的独立评测 |
+
+### 1.1 第一阶段：pretrain
+
 pretrain 分为两个显式阶段：
 
 1. `geometry`：只使用具有完整 21 点伪标签的 positive，先学稳定手部几何；
@@ -11,7 +35,7 @@ pretrain 分为两个显式阶段：
 
 详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)、[v2 smoke 失败与架构恢复](docs/training_history/2026-07-15_v2_smoke_failure_and_architecture_recovery.md)、[preflight 量化失败分析](docs/training_history/2026-07-15_preflight_quantization_failure.md) 和 [训练来源负例及 ROI 域审计](docs/training_history/2026-07-15_train_source_negative_and_roi_audit.md)。
 
-## 固定接口
+## II. 固定接口
 
 | 项目 | 契约 |
 |---|---|
@@ -23,7 +47,9 @@ pretrain 分为两个显式阶段：
 
 Val/Test 直接读取 canonical 256×256 Hand ROI，只运行 Hand Landmarker。只有 `make infer-geometry` 或 `make infer-multitask` 才对外部原图执行 Palm → rotated ROI → Hand。
 
-## v2
+## III. 模型定义
+
+### 3.1 当前版本：v2
 
 当前 registry 只提供 `models/hand_landmarker/v2.py`：
 
@@ -40,7 +66,7 @@ multitask checkpoint 使用 geometry-first 的 `val_multitask_score`，同时考
 
 导出 contract 同时记录训练图→部署图、部署 Keras→ONNX 两级数值一致性。
 
-## 快速开始
+## IV. 快速开始
 
 实验路径和 ID 直接写在 Makefile 顶部。每次服务器实验先修改并提交这些值，然后执行：
 
@@ -86,7 +112,7 @@ make export-multitask
 
 Makefile 不再提供 `train`、`pretrain`、`multitask`、`inspect` 等含义不完整的别名；每个公开目标都显式标出 pretrain 子阶段和动作。
 
-## 配置与目录
+## V. 配置与目录
 
 ```text
 configs/                    9 个当前 pretrain 配置
