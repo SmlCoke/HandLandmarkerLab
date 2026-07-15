@@ -49,7 +49,7 @@ canonical Hand ROI → Hand Landmarker → 三个 head 的指标
 - Gold/predicted presence、handedness 及两个 score；
 - `landmarks_roi_norm`：固定 21 个 `[x,y]` 归一化预测点，不因 presence threshold 未通过而丢弃；
 - 对 GT positive 的 `landmark_errors_px_by_id`（ID 0..20）、平均像素误差和 NME；negative 的误差字段为 `null`；
-- `landmark_raw_max_abs`、`normalized_out_of_range_coordinate_count` 与 `board_landmark_scale_divisor`，用于识别输出范围异常以及板端 `max_abs>2` 时触发的整手 `/256` 兼容缩放；
+- `landmark_raw_max_abs` 与 `normalized_out_of_range_coordinate_count`，用于识别线性 landmark head 的输出范围异常；v2 不再对异常坐标做 `/256` 静默兼容缩放；
 - 本次 Gold JSONL 的 `labels_sha256`、实际 Hand 模型的 `hand_model_sha256`，以及从配置 `model.checkpoint_stage` 复制的 `model_checkpoint_stage`。
 
 `metrics.json` 汇总上述指标和 `landmark_output_health`，并记录 Gold JSONL 路径/SHA-256、实际评估 backend、模型路径/SHA-256、`model_checkpoint_stage`、配置路径/SHA-256 及 canonical 数据审计结果。逐 ROI 与汇总 provenance 让不同训练路线可以按同一 Gold 和模型字节复核；这些哈希不表示 Palm 或端到端整图评估。

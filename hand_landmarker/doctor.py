@@ -265,9 +265,7 @@ def environment_report(config: Optional[Mapping[str, Any]] = None) -> Dict[str, 
     if config is not None:
         path_specs = [
             ("hand.model_path", config.get("hand", {}).get("model_path")),
-            ("model.checkpoint", config.get("model", {}).get("checkpoint")),
             ("palm.model_path", config.get("palm", {}).get("model_path")),
-            ("pipeline.palm.model", config.get("pipeline", {}).get("palm", {}).get("model")),
         ]
         for label, value in path_specs:
             if value:
@@ -276,8 +274,8 @@ def environment_report(config: Optional[Mapping[str, Any]] = None) -> Dict[str, 
                 path_checks.append({"key": label, "path": str(path), "exists": exists})
                 if not exists:
                     failures.append("configured file not found: {}".format(path))
-        data_config = config.get("data") or config.get("dataset", {})
-        for key in ("train_labels", "val_labels", "labels"):
+        data_config = config.get("data", {})
+        for key in ("labels",):
             if data_config.get(key):
                 path = resolve_path(str(data_config[key]), config)
                 exists = path.is_file()

@@ -143,7 +143,7 @@ def _full_smoke_metrics(
 
     _configure_tensorflow(tf, config)
     tf.keras.mixed_precision.set_global_policy("float32")
-    data_config = dict(config.get("data") or config.get("dataset") or {})
+    data_config = dict(config.get("data") or {})
     verify_curation_manifest(
         config, data_config, error_type=DatasetContractError
     )

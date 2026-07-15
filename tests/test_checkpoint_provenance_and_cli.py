@@ -87,6 +87,7 @@ class CheckpointStageContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "model.checkpoint_stage"):
                 evaluate_from_config(
                     {
+                        "split": "val",
                         "model": common_model,
                         "hand": {"model_path": str(opposite_weights)},
                         "evaluation": {"mode": "roi"},
@@ -126,6 +127,7 @@ class CheckpointStageContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "model.checkpoint_stage"):
                 evaluate_from_config(
                     {
+                        "split": "val",
                         "model": {"checkpoint_stage": "teacher"},
                         "evaluation": {"mode": "roi"},
                         "output": {"dir": directory},
@@ -390,11 +392,8 @@ class CheckpointStageContractTests(unittest.TestCase):
 class CliOverrideTests(unittest.TestCase):
     def test_evaluate_cli_overrides_model_output_and_overwrite(self):
         config = {
-            "model": {"checkpoint": "old.weights.h5"},
             "hand": {"model_path": "old.weights.h5"},
-            "output": {"directory": "old-output", "overwrite": False},
-            "outputs": {"metrics": "old.json", "predictions": "old.jsonl"},
-            "paths": {"output_dir": "legacy-output"},
+            "output": {"dir": "old-output", "overwrite": False},
         }
         evaluate_script._apply_cli_overrides(
             config,
@@ -405,16 +404,11 @@ class CliOverrideTests(unittest.TestCase):
             ),
         )
         self.assertEqual("new.weights.h5", config["hand"]["model_path"])
-        self.assertEqual("new.weights.h5", config["model"]["checkpoint"])
         self.assertEqual("new-output", config["output"]["dir"])
         self.assertTrue(config["output"]["overwrite"])
-        self.assertNotIn("directory", config["output"])
-        self.assertEqual({}, config["outputs"])
-        self.assertEqual({}, config["paths"])
 
     def test_export_cli_overrides_all_artifact_paths(self):
         config = {
-            "model": {"checkpoint": "old.weights.h5"},
             "hand": {"model_path": "old.weights.h5"},
             "export": {"model_path": "old.onnx", "overwrite": False},
         }
@@ -430,7 +424,6 @@ class CliOverrideTests(unittest.TestCase):
             ),
         )
         self.assertEqual("new.weights.h5", config["hand"]["model_path"])
-        self.assertEqual("new.weights.h5", config["model"]["checkpoint"])
         self.assertEqual("new.onnx", config["export"]["model_path"])
         self.assertEqual("new.contract.json", config["export"]["contract_path"])
         self.assertEqual(
@@ -468,11 +461,9 @@ class CliOverrideTests(unittest.TestCase):
         config = {
             "hand": {"model_path": "old.weights.h5"},
             "output": {
-                "directory": "old-output",
-                "jsonl": "old-output/custom.jsonl",
+                "dir": "old-output",
                 "overwrite": False,
             },
-            "paths": {"output_dir": "legacy-output"},
         }
         infer_script._apply_cli_overrides(
             config,
@@ -485,9 +476,6 @@ class CliOverrideTests(unittest.TestCase):
         self.assertEqual("new.weights.h5", config["hand"]["model_path"])
         self.assertEqual("new-output", config["output"]["dir"])
         self.assertTrue(config["output"]["overwrite"])
-        self.assertNotIn("directory", config["output"])
-        self.assertNotIn("jsonl", config["output"])
-        self.assertEqual({}, config["paths"])
 
 
 if __name__ == "__main__":

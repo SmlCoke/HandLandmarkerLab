@@ -16,20 +16,8 @@ from hand_landmarker.evaluation import evaluate_from_config
 def _apply_cli_overrides(config, args):
     if args.model_path:
         config.setdefault("hand", {})["model_path"] = args.model_path
-        model = config.setdefault("model", {})
-        if "checkpoint" in model:
-            model["checkpoint"] = args.model_path
     if args.output_dir:
-        output = config.setdefault("output", {})
-        output["dir"] = args.output_dir
-        output.pop("directory", None)
-        paths = config.get("paths")
-        if isinstance(paths, dict):
-            paths.pop("output_dir", None)
-        outputs = config.get("outputs")
-        if isinstance(outputs, dict):
-            outputs.pop("predictions", None)
-            outputs.pop("metrics", None)
+        config.setdefault("output", {})["dir"] = args.output_dir
     if args.overwrite:
         config.setdefault("output", {})["overwrite"] = True
     return config

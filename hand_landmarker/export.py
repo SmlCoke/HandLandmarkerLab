@@ -118,11 +118,6 @@ def _numeric_parity(
                     "minimum": float(np.min(expected)),
                     "maximum": float(np.max(expected)),
                     "max_abs": float(np.max(np.abs(expected))),
-                    "board_landmark_scale_divisor": (
-                        256.0
-                        if output_index == 0 and float(np.max(np.abs(expected))) > 2.0
-                        else 1.0 if output_index == 0 else None
-                    ),
                 }
             )
             onnx_ranges.append(
@@ -130,11 +125,6 @@ def _numeric_parity(
                     "minimum": float(np.min(actual)),
                     "maximum": float(np.max(actual)),
                     "max_abs": float(np.max(np.abs(actual))),
-                    "board_landmark_scale_divisor": (
-                        256.0
-                        if output_index == 0 and float(np.max(np.abs(actual))) > 2.0
-                        else 1.0 if output_index == 0 else None
-                    ),
                 }
             )
             absolute = np.abs(expected - actual)
@@ -382,14 +372,8 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     if runtime_device != "cpu":
         raise ValueError("ONNX export runtime.device must remain cpu")
     model_checkpoint_stage = validate_model_checkpoint_stage(config)
-    preflight_hand = config.get("hand", {})
     preflight_export = config.get("export", {})
-    preflight_model = config.get("model", {})
-    preflight_weights = (
-        preflight_hand.get("model_path")
-        or preflight_export.get("weights_path")
-        or preflight_model.get("checkpoint")
-    )
+    preflight_weights = config.get("hand", {}).get("model_path")
     if preflight_weights:
         validate_checkpoint_path_stage(
             config,
@@ -442,16 +426,8 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         raise ValueError("export.validate.require_output_order_match must remain true")
     hand_config = config.get("hand", {})
     model_config = config.get("model", {})
-    weights_value = (
-        hand_config.get("model_path")
-        or export_config.get("weights_path")
-        or model_config.get("checkpoint")
-    )
-    output_value = (
-        export_config.get("model_path")
-        or export_config.get("output")
-        or config.get("output", {}).get("model_path")
-    )
+    weights_value = hand_config.get("model_path")
+    output_value = export_config.get("model_path")
     if not weights_value or not output_value:
         raise KeyError("Export config requires hand.model_path (weights) and export.model_path")
     weights_path = resolve_path(str(weights_value), config)

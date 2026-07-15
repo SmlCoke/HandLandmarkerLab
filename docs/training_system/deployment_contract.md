@@ -8,7 +8,7 @@ A1 C++ 创建的是 `256×256 SSNE_Y_8`，把 ROI 的 uint8 原始字节直接�
 
 ## 2. 外部原图/板端路径的 Palm 与 ROI
 
-本节只约束 `make infer` 处理任意外部图片以及 A1 板端的端到端运行路径。Val/Test 输入已经是 `256×256` Hand ROI，评估时不会加载、调用 Palm，也不会重新构造 ROI。
+本节只约束 `make infer-geometry` / `make infer-multitask` 处理任意外部图片以及 A1 板端的端到端运行路径。Val/Test 输入已经是 `256×256` Hand ROI，评估时不会加载、调用 Palm，也不会重新构造 ROI。
 
 冻结 Palm 输入是 upright `1280×720` 灰度图直接 half-pixel 双线性 resize 到 `224×224`，无 letterbox。板端来自 `720×1280` 传感器时先顺时针旋转，再 resize。
 
@@ -51,7 +51,7 @@ P_image = TL + x_roi × (TR-TL) + y_roi × (BL-TL)
 
 板端按元素数识别 landmarks，但两个标量只能按输出顺序区分；交换后不会报错，只会静默颠倒语义。Hand 输出必须保留 FLOAT32：当前 C++ 对 INT8/UINT8 输出没有按 quantization scale/zero-point 反量化。
 
-新训练的 landmark 监督与输出语义是归一化 crop 坐标，但 landmark head 是线性输出，并不会把数值 clamp 到 `[0,1]`。板端为兼容旧模型，在整手 `max_abs>2` 时会把全部坐标除以 256；一个异常点超过阈值就会触发整手缩放，因此导出/评估会报告最大绝对值、越界计数和实际采用的 scale divisor。
+landmark 监督与输出语义唯一固定为归一化 crop 坐标。landmark head 是线性输出，不会把数值 clamp 到 `[0,1]`；板端也不会对异常值做 `/256` 或其他单位猜测。评估与推理报告最大绝对值和越界坐标数，便于把模型异常直接暴露出来。两个 sigmoid head 必须输出 `[0,1]`；PC 参考实现遇到范围外结果会拒绝该输出。
 
 ## 4. ONNX 导出
 
@@ -92,7 +92,7 @@ make export-geometry EXPORT_ARGS=--force
 
 目标优化图应只包含 `Conv/Add/Relu/MaxPool/Sigmoid/Reshape`（允许无语义的 Identity）。`Reshape` 已确认属于当前官方白名单；`LeakyRelu` 已被当前官方转换工具拒绝。训练期 BatchNormalization 必须在导出前折叠；若最终 ONNX 仍出现 BatchNormalization、LeakyRelu、Transpose、动态 shape、Div、Softmax 等，严格导出会失败，不应继续送入 A1 工具链。
 
-默认 parity 探针是 1 个全零、1 个全一和 4 个固定随机种子的 `[0,1]` 输入。契约报告对每个探针、每个输出 head 分别记录最大绝对/相对误差，并同时记录 Keras 与 ONNX 的 minimum、maximum、max-abs；还会聚合每个输出的动态范围和标准差。landmark 输出另记录按板端规则推导的 scale divisor。验收使用配置中的 `atol=1e-5`、`rtol=1e-4` 做逐元素 `allclose`，任一 case/head 失败即中止导出；任一输出聚合动态范围小于 `1e-6` 也会中止。这里验证的是 Keras 与 ONNX 的数值等价及合成输入下的输出健康度，不是数据集精度，也不是 `.m1model` 板端实测。
+默认 parity 探针是 1 个全零、1 个全一和 4 个固定随机种子的 `[0,1]` 输入。契约报告对每个探针、每个输出 head 分别记录最大绝对/相对误差，并同时记录 Keras 与 ONNX 的 minimum、maximum、max-abs；还会聚合每个输出的动态范围和标准差。验收使用配置中的 `atol=1e-5`、`rtol=1e-4` 做逐元素 `allclose`，任一 case/head 失败即中止导出；任一输出聚合动态范围小于 `1e-6` 也会中止。这里验证的是 Keras 与 ONNX 的数值等价及合成输入下的输出健康度，不是数据集精度，也不是 `.m1model` 板端实测。
 
 默认产物按 checkpoint 阶段隔离：
 

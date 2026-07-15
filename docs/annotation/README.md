@@ -1,15 +1,13 @@
-# 训练接口文档：数据集标注工程
+# 数据制作系统边界
 
-本文件夹下的文件介绍了我们项目是如何进行数据标注的。
+本仓库只维护 Hand Landmarker 的提纯、训练、评估、推理与导出，不复制数据制作系统的操作文档或实现。
 
-如果需要查看更多关于数据标注的信息，可以查看本机如下目录的 Git 仓库：`D:\CICIEC\datasets\HandLandmarkerFab`
+Train/Val/Test 的原图处理、Palm/MediaPipe 自动标注、ROI 生成、人工 Gold 复核及 canonical JSONL 生成，均由独立仓库 `HandLandmarkerFab` 负责。当前本机权威副本位于：
 
-这里仅作简要介绍：
+```text
+D:\CICIEC\datasets\HandLandmarkerFab
+```
 
-- README_OF_HangLandmarksFab: 对应仓库的 README.md 文件，内容完全相同
-- hand_landmarker_training_workflow: Hand Landmarker 模型的两阶段训练流程介绍，由于本项目时间紧张，没有足够时间来给数量庞大的训练集做精细的人工复核，因此只能采用这种"pretrain-finetuning"的训练流程进行训练
-- dataset_preparation_workflow: 数据集（包含训练集/验证集/测试集）的准备流程与操作步骤手册
-- hand_landmarker_train_dataset_processing: 训练集的详细准备流程
-- hand_landmarker_val_dataset_processing: 验证集的详细准备流程
-- hand_landmarker_test_dataset_processing: 测试集的详细准备流程
-- example/: 下面有三个最终训练/验证/测试集标注文件示例
+需要重新生成 JSONL 或修改 ROI 生成策略时，请直接阅读该仓库的 `README.md` 与 `docs/`。本仓库从 `HAND_TRAIN_ROOT` 下的 `train_pretrain_merged`、`val_merged`、`test_merged` 接收其落盘产物；接口、门禁和训练步骤见 [Pretrain 数据与分阶段训练操作手册](../training_system/data_and_training.md)。
+
+不再在此复制 HandLandmarkerFab 文档，避免两个仓库对同一流程给出不同版本的说明。

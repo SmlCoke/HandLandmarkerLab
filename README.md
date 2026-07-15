@@ -9,7 +9,7 @@ pretrain 分为两个显式阶段：
 
 未经人工复核的 `NEG_*_CANDIDATE` 是 teacher abstention，不是可信无手样本。系统会把它们及其 ROI 持久化到审查包，但 `make pretrain-multitask` 会 fail-closed，绝不会自动把它们作为负例训练。
 
-详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)、[v2 smoke 失败与架构恢复](docs/training_history/2026-07-15_v2_smoke_failure_and_architecture_recovery.md) 和 [preflight 量化失败分析](docs/training_history/2026-07-15_preflight_quantization_failure.md)。
+详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)、[v2 smoke 失败与架构恢复](docs/training_history/2026-07-15_v2_smoke_failure_and_architecture_recovery.md)、[preflight 量化失败分析](docs/training_history/2026-07-15_preflight_quantization_failure.md) 和 [训练来源负例及 ROI 域审计](docs/training_history/2026-07-15_train_source_negative_and_roi_audit.md)。
 
 ## 固定接口
 
@@ -94,6 +94,7 @@ scripts/                    CLI 与数据门禁
 tests/                      数据、路由、导出和模型契约测试
 docs/training_system/       当前操作手册
 docs/training_history/      历史故障证据与恢复记录
+docs/annotation/            仅说明与独立 HandLandmarkerFab 仓库的边界
 preminilary/                冻结 Palm 资产与原始参考实现
 ```
 

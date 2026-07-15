@@ -12,7 +12,6 @@ from .contracts import (
     validate_checkpoint_path_stage,
     validate_model_checkpoint_stage,
 )
-from .evaluation import _runtime_config
 from .io_utils import (
     ensure_bgr,
     image_files,
@@ -22,7 +21,7 @@ from .io_utils import (
     write_json,
     write_jsonl,
 )
-from .runtime import CascadeRunner
+from .runtime import CascadeRunner, normalize_runtime_config
 
 
 def draw_detections(
@@ -95,12 +94,8 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     if str(config.get("task", "infer_folder")).lower() != "infer_folder":
         raise ValueError("Folder inference entry point requires task: infer_folder")
     model_checkpoint_stage = validate_model_checkpoint_stage(config)
-    input_value = config.get("input", {}).get("images_dir") or config.get("paths", {}).get("input_dir")
-    output_value = (
-        config.get("output", {}).get("dir")
-        or config.get("output", {}).get("directory")
-        or config.get("paths", {}).get("output_dir")
-    )
+    input_value = config.get("input", {}).get("images_dir")
+    output_value = config.get("output", {}).get("dir")
     if not input_value or not output_value:
         raise KeyError("Folder inference requires input.images_dir and output.dir")
     input_dir = resolve_path(str(input_value), config)
@@ -115,12 +110,7 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         raise ValueError("output.dir must not be the input directory or one of its descendants")
     output_dir.mkdir(parents=True, exist_ok=True)
     rendered_dir = output_dir / "rendered"
-    threshold = float(
-        config.get("inference", {}).get(
-            "hand_flag_threshold",
-            config.get("pipeline", {}).get("hand", {}).get("presence_threshold", 0.5),
-        )
-    )
+    threshold = float(config.get("inference", {}).get("hand_flag_threshold", 0.5))
     if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise ValueError("inference.hand_flag_threshold must be finite and in [0,1]")
     recursive = bool(config.get("input", {}).get("recursive", True))
@@ -159,7 +149,7 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     summary_path = output_dir / "summary.json"
     if not overwrite and (predictions_path.exists() or summary_path.exists()):
         raise FileExistsError("Inference output already exists; set output.overwrite=true to replace it")
-    runtime_config = _runtime_config(config)
+    runtime_config = normalize_runtime_config(config)
     validate_checkpoint_path_stage(
         config,
         runtime_config.get("hand", {}).get("model_path", ""),
@@ -204,14 +194,11 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
                         "palm": detection.palm.as_dict(image.shape[1], image.shape[0]),
                         "roi": detection.roi.as_dict(),
                         "hand_flag_score": detection.hand.hand_flag_score,
-                        "hand_flag_raw_score": detection.hand.hand_flag_raw_score,
                         "handedness_score": detection.hand.handedness_score,
-                        "handedness_raw_score": detection.hand.handedness_raw_score,
                         "handedness": detection.hand.handedness,
                         "landmarks_roi_norm": [list(point) for point in detection.hand.landmarks_norm],
                         "landmarks_image_px": [list(point) for point in detection.landmarks_image],
                         "landmark_raw_max_abs": detection.hand.landmark_raw_max_abs,
-                        "board_landmark_scale_divisor": detection.hand.board_landmark_scale_divisor,
                         "normalized_out_of_range_coordinate_count": (
                             detection.hand.normalized_out_of_range_coordinate_count
                         ),
@@ -258,9 +245,6 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "maximum_raw_absolute_value": max(
             (float(item["landmark_raw_max_abs"]) for item in hand_rows),
             default=None,
-        ),
-        "board_scale_divisor_256_count": sum(
-            float(item["board_landmark_scale_divisor"]) == 256.0 for item in hand_rows
         ),
         "normalized_out_of_range_hand_count": sum(
             int(item["normalized_out_of_range_coordinate_count"]) > 0 for item in hand_rows

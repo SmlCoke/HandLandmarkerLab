@@ -799,12 +799,9 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
     """Build strict train/validation sequences and a serializable data report."""
 
     cfg = _config_mapping(config)
-    data_value = cfg.get("data")
-    dataset_value = cfg.get("dataset")
-    if isinstance(data_value, Mapping) and isinstance(dataset_value, Mapping):
-        if dict(data_value) != dict(dataset_value):
-            raise DatasetContractError("config.data and config.dataset are both set but differ")
-    dataset_cfg = dict(data_value or dataset_value or {})
+    if "dataset" in cfg:
+        raise DatasetContractError("config.dataset is obsolete; use config.data")
+    dataset_cfg = dict(cfg.get("data") or {})
     root_stage = str(cfg.get("stage") or "")
     data_stage = str(dataset_cfg.get("require_training_stage") or "")
     if root_stage and data_stage and root_stage != data_stage:

@@ -231,7 +231,7 @@ class CanonicalDataContractTests(unittest.TestCase):
                 "task": "train",
                 "stage": "pretrain",
                 "experiment": {"seed": 9},
-                "dataset": dataset,
+                "data": dataset,
                 "model": {"output_order": ["landmarks", "hand_flag", "handedness"]},
                 "targets": {
                     "num_landmarks": 21,
@@ -263,7 +263,7 @@ class CanonicalDataContractTests(unittest.TestCase):
             row = _train_row("a", root / "missing" / "crop.bmp")
             row["source_crop_path"] = str(actual)
             _write_jsonl(labels, [row])
-            config = {"dataset": _dataset_config(labels), "stage": "pretrain", "task": "train"}
+            config = {"data": _dataset_config(labels), "stage": "pretrain", "task": "train"}
             samples, report = audit_canonical_dataset(
                 config,
                 expected_stage="pretrain",
@@ -273,7 +273,7 @@ class CanonicalDataContractTests(unittest.TestCase):
             self.assertEqual([], samples)
             self.assertEqual("failed", report["status"])
 
-            config["dataset"]["data_root"] = str(root)
+            config["data"]["data_root"] = str(root)
             samples, report = audit_canonical_dataset(
                 config,
                 expected_stage="pretrain",
@@ -295,7 +295,7 @@ class CanonicalDataContractTests(unittest.TestCase):
             row["training_stage"] = "finetune"
             row["sampling_weight"] = -1.0
             _write_jsonl(labels, [row])
-            config = {"dataset": _dataset_config(labels), "stage": "pretrain", "task": "train"}
+            config = {"data": _dataset_config(labels), "stage": "pretrain", "task": "train"}
             _, report = audit_canonical_dataset(
                 config,
                 expected_stage="pretrain",
@@ -321,7 +321,7 @@ class CanonicalDataContractTests(unittest.TestCase):
             ]
             _write_jsonl(labels, rows)
             dataset = _dataset_config(labels)
-            config = {"dataset": dataset, "stage": "pretrain", "task": "train"}
+            config = {"data": dataset, "stage": "pretrain", "task": "train"}
             samples, _ = audit_canonical_dataset(
                 config,
                 expected_stage="pretrain",
@@ -724,7 +724,7 @@ class CanonicalDataContractTests(unittest.TestCase):
             config = {
                 "task": "train",
                 "stage": "pretrain",
-                "dataset": _dataset_config(train_labels, root),
+                "data": _dataset_config(train_labels, root),
                 "validation": {"enabled": True, "labels": str(val_labels)},
             }
             report = inspect_config(config, check_images=True, hash_images=True)
@@ -827,7 +827,7 @@ class CanonicalDataContractTests(unittest.TestCase):
             config = {
                 "task": "train",
                 "stage": "pretrain",
-                "dataset": _dataset_config(train_labels, root),
+                "data": _dataset_config(train_labels, root),
                 "validation": {
                     "enabled": True,
                     "labels": str(val_labels),
@@ -890,7 +890,7 @@ class CanonicalDataContractTests(unittest.TestCase):
                 {
                     "task": "train",
                     "stage": "pretrain",
-                    "dataset": _dataset_config(train_labels, root),
+                    "data": _dataset_config(train_labels, root),
                 },
                 compare_labels=[str(test_labels)],
                 check_images=True,

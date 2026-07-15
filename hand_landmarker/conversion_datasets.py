@@ -52,7 +52,7 @@ def conversion_dataset_output_root(config: Mapping[str, Any]) -> Optional[Path]:
         )
     output_root = resolve_path(str(value), config).resolve()
     export_config = config.get("export", {})
-    model_value = export_config.get("model_path") or export_config.get("output")
+    model_value = export_config.get("model_path")
     artifact_paths: List[Path] = []
     if model_value:
         model_path = resolve_path(str(model_value), config).resolve()

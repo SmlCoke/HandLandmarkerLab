@@ -18,10 +18,7 @@ class HandPrediction:
     hand_flag_score: float
     handedness_score: float
     landmark_raw_max_abs: float = 0.0
-    board_landmark_scale_divisor: float = 1.0
     normalized_out_of_range_coordinate_count: int = 0
-    hand_flag_raw_score: float = 0.0
-    handedness_raw_score: float = 0.0
 
     @property
     def handedness(self) -> str:
@@ -37,11 +34,17 @@ class CascadeDetection:
 
 
 def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Normalize the public YAML schema into the compact runtime schema."""
+    """Validate and resolve the single current v2 runtime schema."""
 
     from .config import resolve_path
 
     value = copy.deepcopy(dict(config))
+    obsolete_roots = sorted(set(value) & {"dataset", "paths", "pipeline"})
+    if obsolete_roots:
+        raise ValueError(
+            "Obsolete configuration roots are not supported: {}; use data, palm, "
+            "hand_roi, input, output, and inference".format(obsolete_roots)
+        )
     model_config = value.get("model", {})
     if model_config:
         fixed_values = (
@@ -60,41 +63,17 @@ def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         sizes = model_config.get("output_sizes")
         if sizes is not None and dict(sizes) != {"landmarks": 42, "hand_flag": 1, "handedness": 1}:
             raise ValueError("model.output_sizes must remain landmarks=42, hand_flag=1, handedness=1")
-    pipeline = value.get("pipeline", {})
-    pipeline_palm = pipeline.get("palm", {})
-    pipeline_roi = pipeline.get("roi", {})
-    pipeline_hand = pipeline.get("hand", {})
+        if "checkpoint" in model_config:
+            raise ValueError("model.checkpoint is obsolete; use hand.model_path")
+        if str(model_config.get("version", "v2")).lower() != "v2":
+            raise ValueError("Only model.version: v2 is supported")
 
     hand = value.setdefault("hand", {})
-    if hand.get("model_path") and model_config.get("checkpoint"):
-        hand_path = resolve_path(str(hand["model_path"]), config)
-        checkpoint_path = resolve_path(str(model_config["checkpoint"]), config)
-        if hand_path != checkpoint_path:
-            raise ValueError(
-                "hand.model_path and model.checkpoint refer to different files: {} != {}".format(
-                    hand_path, checkpoint_path
-                )
-            )
-    if not hand.get("model_path") and model_config.get("checkpoint"):
-        hand["model_path"] = model_config["checkpoint"]
     if hand.get("model_path"):
         hand["model_path"] = str(resolve_path(str(hand["model_path"]), config))
     hand.setdefault("backend", "onnx" if str(hand.get("model_path", "")).lower().endswith(".onnx") else "keras")
 
     palm = value.setdefault("palm", {})
-    if not palm.get("model_path") and pipeline_palm.get("model"):
-        palm["model_path"] = pipeline_palm["model"]
-    for source_key, target_key in (
-        ("score_threshold", "score_threshold"),
-        ("nms_iou_threshold", "nms_iou_threshold"),
-        ("cross_head_suppression_iou", "cross_head_suppress_iou"),
-        ("max_detections", "max_detections"),
-    ):
-        if target_key not in palm and source_key in pipeline_palm:
-            palm[target_key] = pipeline_palm[source_key]
-    input_shape = pipeline_palm.get("input_shape") or []
-    if "input_size" not in palm and input_shape:
-        palm["input_size"] = input_shape[-1]
     if palm.get("model_path"):
         palm["model_path"] = str(resolve_path(str(palm["model_path"]), config))
     if palm.get("input_layout", "NCHW") != "NCHW":
@@ -113,14 +92,6 @@ def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             raise ValueError("palm.{} must match the A1 value {}".format(key, expected))
 
     roi = value.setdefault("hand_roi", {})
-    scale = pipeline_roi.get("scale") or []
-    shift = pipeline_roi.get("shift") or []
-    if len(scale) == 2:
-        roi.setdefault("scale_x", scale[0])
-        roi.setdefault("scale_y", scale[1])
-    if len(shift) == 2:
-        roi.setdefault("shift_x", shift[0])
-        roi.setdefault("shift_y", shift[1])
     if int(roi.get("output_size", BOARD_CONTRACT["hand_input_width"])) != 256:
         raise ValueError("hand_roi.output_size must remain 256")
     convention = roi.get("rotation_convention")
@@ -140,8 +111,6 @@ def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     inference.setdefault("batch_size", value.get("evaluation", {}).get("batch_size", 64))
     if int(inference["batch_size"]) <= 0:
         raise ValueError("inference.batch_size must be positive")
-    if "hand_flag_threshold" not in inference and "presence_threshold" in pipeline_hand:
-        inference["hand_flag_threshold"] = pipeline_hand["presence_threshold"]
     return value
 
 
@@ -212,44 +181,37 @@ def decode_hand_outputs(outputs: Any, batch_size: int) -> List[HandPrediction]:
     hand_flag = arrays[1].reshape(batch_size)
     handedness = arrays[2].reshape(batch_size)
 
-    def normalize_score(value: float) -> float:
-        # Mirror HANDLANDMARKER::NormalizeScore. Sigmoid models stay in [0,1],
-        # while this also makes malformed/legacy 8-bit-like outputs auditable.
-        normalized = float(value)
-        if normalized > 1.0 and normalized <= 255.0:
-            normalized /= 255.0
-        return max(0.0, min(1.0, normalized))
-
     decoded = []
     for sample_index in range(batch_size):
         raw = landmarks[sample_index].astype(float)
         raw_max_abs = float(np.max(np.abs(raw)))
-        scale = 256.0 if raw_max_abs > 2.0 else 1.0
-        normalized = raw / scale
         points = tuple(
-            (float(normalized[index * 2]), float(normalized[index * 2 + 1]))
+            (float(raw[index * 2]), float(raw[index * 2 + 1]))
             for index in range(21)
         )
-        out_of_range = int(np.count_nonzero((normalized < 0.0) | (normalized > 1.0)))
+        out_of_range = int(np.count_nonzero((raw < 0.0) | (raw > 1.0)))
         raw_flag = float(hand_flag[sample_index])
         raw_handedness = float(handedness[sample_index])
+        if not 0.0 <= raw_flag <= 1.0:
+            raise ValueError("hand_flag sigmoid output must be in [0,1]; got {}".format(raw_flag))
+        if not 0.0 <= raw_handedness <= 1.0:
+            raise ValueError(
+                "handedness sigmoid output must be in [0,1]; got {}".format(raw_handedness)
+            )
         decoded.append(
             HandPrediction(
                 landmarks_norm=points,
-                hand_flag_score=normalize_score(raw_flag),
-                handedness_score=normalize_score(raw_handedness),
+                hand_flag_score=raw_flag,
+                handedness_score=raw_handedness,
                 landmark_raw_max_abs=raw_max_abs,
-                board_landmark_scale_divisor=scale,
                 normalized_out_of_range_coordinate_count=out_of_range,
-                hand_flag_raw_score=raw_flag,
-                handedness_raw_score=raw_handedness,
             )
         )
     return decoded
 
 
 class KerasHandPredictor:
-    def __init__(self, weights_path: str, model_version: str = "v1", num_iterations: Any = 8) -> None:
+    def __init__(self, weights_path: str, model_version: str = "v2", num_iterations: Any = 8) -> None:
         from models.hand_landmarker.registry import build_model
 
         self.model = build_model(model_version, num_iterations=num_iterations)

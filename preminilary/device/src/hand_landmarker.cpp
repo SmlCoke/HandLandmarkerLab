@@ -224,13 +224,6 @@ float HANDLANDMARKER::NormalizeRadians(float angle) {
     return angle - kTwoPi * std::floor((angle + kPi) / kTwoPi);
 }
 
-float HANDLANDMARKER::NormalizeScore(float value) {
-    if (value > 1.0f && value <= 255.0f) {
-        value /= 255.0f;
-    }
-    return Clamp(value, 0.0f, 1.0f);
-}
-
 const char* HANDLANDMARKER::DTypeName(int dtype) {
     if (dtype == SSNE_UINT8) {
         return "UINT8";
@@ -275,6 +268,10 @@ HANDLANDMARKER::OutputMapping HANDLANDMARKER::MapOutputs(
     std::vector<int> scalar_outputs;
 
     for (int i = 0; i < kHandOutputCount; i++) {
+        if (output_info[i].dtype != SSNE_FLOAT32) {
+            mapping.reason = "all Hand outputs must be FLOAT32";
+            return mapping;
+        }
         if (output_info[i].inferred_elements == kHandLandmarkValues && mapping.landmarks < 0) {
             mapping.landmarks = i;
         } else if (output_info[i].inferred_elements == 1) {
@@ -282,19 +279,7 @@ HANDLANDMARKER::OutputMapping HANDLANDMARKER::MapOutputs(
         }
     }
 
-    if (mapping.landmarks < 0) {
-        for (int i = 0; i < kHandOutputCount; i++) {
-            if (output_info[i].inferred_elements >= kHandLandmarkValues) {
-                mapping.landmarks = i;
-                break;
-            }
-        }
-    }
-
     for (size_t i = 0; i < scalar_outputs.size(); i++) {
-        if (scalar_outputs[i] == mapping.landmarks) {
-            continue;
-        }
         if (mapping.hand_flag < 0) {
             mapping.hand_flag = scalar_outputs[i];
         } else if (mapping.handedness < 0) {
@@ -302,9 +287,11 @@ HANDLANDMARKER::OutputMapping HANDLANDMARKER::MapOutputs(
         }
     }
 
-    mapping.valid = mapping.landmarks >= 0;
-    mapping.reason = mapping.valid ? "matched landmark output by element count"
-                                   : "could not find 42-value landmark output";
+    mapping.valid = mapping.landmarks >= 0 && mapping.hand_flag >= 0 && mapping.handedness >= 0 &&
+                    scalar_outputs.size() == 2;
+    mapping.reason = mapping.valid
+                         ? "matched strict FLOAT32 outputs with element counts 42,1,1"
+                         : "Hand outputs must contain exactly one 42-value tensor and two scalar tensors";
     return mapping;
 }
 
@@ -507,18 +494,22 @@ void HANDLANDMARKER::DecodeOutputs(const OutputMapping& mapping,
     detection->valid = false;
 
     if (mapping.hand_flag >= 0) {
-        detection->hand_flag_score = NormalizeScore(
+        detection->hand_flag_score = Clamp(
             ReadTensorValue(outputs[mapping.hand_flag],
                             output_info[mapping.hand_flag],
-                            0));
+                            0),
+            0.0f,
+            1.0f);
         detection->has_hand_flag = true;
     }
 
     if (mapping.handedness >= 0) {
-        detection->handedness_score = NormalizeScore(
+        detection->handedness_score = Clamp(
             ReadTensorValue(outputs[mapping.handedness],
                             output_info[mapping.handedness],
-                            0));
+                            0),
+            0.0f,
+            1.0f);
         detection->has_handedness = true;
     }
 
@@ -534,7 +525,6 @@ void HANDLANDMARKER::DecodeOutputs(const OutputMapping& mapping,
         max_raw = std::max(max_raw, raw_values[i]);
     }
 
-    const float coord_scale = max_abs > 2.0f ? static_cast<float>(input_shape[0]) : 1.0f;
     const std::array<float, 2>& top_left = rect.corners[0];
     const std::array<float, 2>& top_right = rect.corners[1];
     const std::array<float, 2>& bottom_left = rect.corners[3];
@@ -544,8 +534,8 @@ void HANDLANDMARKER::DecodeOutputs(const OutputMapping& mapping,
     float max_py = std::numeric_limits<float>::lowest();
 
     for (int i = 0; i < kHandNumLandmarks; i++) {
-        const float x = raw_values[i * 2] / coord_scale;
-        const float y = raw_values[i * 2 + 1] / coord_scale;
+        const float x = raw_values[i * 2];
+        const float y = raw_values[i * 2 + 1];
         const float px = top_left[0] +
                          x * (top_right[0] - top_left[0]) +
                          y * (bottom_left[0] - top_left[0]);
@@ -567,7 +557,6 @@ void HANDLANDMARKER::DecodeOutputs(const OutputMapping& mapping,
         std::cout << "[HAND][debug] landmark_raw min=" << min_raw
                   << ", max=" << max_raw
                   << ", max_abs=" << max_abs
-                  << ", coord_scale=" << coord_scale
                   << ", hand_flag=" << (detection->has_hand_flag ? detection->hand_flag_score : -1.0f)
                   << ", handedness=" << (detection->has_handedness ? detection->handedness_score : -1.0f)
                   << std::endl;

@@ -90,8 +90,9 @@ class EvaluationBoundaryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "provided Hand ROIs only"):
                     evaluate_from_config(
                         {
+                            "split": "val",
                             "data": {"labels": str(labels)},
-                            "evaluation": {"split": "val", "mode": "cascade_replay"},
+                            "evaluation": {"mode": "cascade_replay"},
                         }
                     )
 
@@ -100,7 +101,7 @@ class EvaluationBoundaryTests(unittest.TestCase):
             evaluate_from_config(
                 {
                     "split": "test",
-                    "evaluation": {"split": "test", "mode": "hand_roi", "tune_thresholds": True},
+                    "evaluation": {"mode": "roi", "tune_thresholds": True},
                 }
             )
 

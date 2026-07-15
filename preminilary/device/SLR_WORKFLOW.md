@@ -351,7 +351,7 @@ verbose_interval = 50
 
 当 `verbose=false` 时，主循环不打印每帧详细诊断日志，只保留初始化和错误日志。
 
-启用 `--enable_hand` 后，hand landmarker 会额外打印一次轻量诊断信息，包括首个有效 ROI 的四边形、灰度统计、raw landmark 数值范围、`coord_scale` 以及投影后的 landmark bbox。该日志用于判断 hand 骨架偏移或偏小发生在 ROI、模型输出尺度还是坐标投影阶段。
+启用 `--enable_hand` 后，hand landmarker 会额外打印一次轻量诊断信息，包括首个有效 ROI 的四边形、灰度统计、归一化 landmark 原始数值范围以及投影后的 landmark bbox。该日志用于判断 hand 骨架偏移或偏小发生在 ROI、模型输出还是坐标投影阶段。当前 v2 不再猜测输出单位或应用额外坐标缩放。
 
 当临时改成 `verbose=true` 时，程序每 `verbose_interval` 帧通过控制台打印一次 palm 诊断信息。`verbose_interval` 会随 `kInferInterval` 自动调整为最靠近 50 的推理帧间隔，例如 `kInferInterval=1` 时为 50，`kInferInterval=3` 时为 51。
 
@@ -394,7 +394,7 @@ verbose_interval = 50
 5. `src/hand_landmarker.cpp`
    - 先看 `Predict()`：它只在 palm 有检测结果时工作。
    - 再看 `BuildRoiRect()`、`PreprocessRoi()`、`DecodeOutputs()`。
-   - 如果 hand 骨架不准，优先检查一次性 `[HAND][debug]` 日志中的 ROI 参数、hand raw 输出范围、`coord_scale` 和投影 bbox。
+   - 如果 hand 骨架不准，优先检查一次性 `[HAND][debug]` 日志中的 ROI 参数、归一化 hand 输出范围和投影 bbox。
 
 6. `src/utils.cpp`
    - 看 OSD 如何清屏、画框、画关键点。

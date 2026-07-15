@@ -962,12 +962,9 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
                 stage, model_checkpoint_stage
             )
         )
-    data_value = config.get("data")
-    dataset_value = config.get("dataset")
-    if isinstance(data_value, Mapping) and isinstance(dataset_value, Mapping):
-        if dict(data_value) != dict(dataset_value):
-            raise ValueError("config.data and config.dataset are both set but differ")
-    selected_data = data_value or dataset_value or {}
+    if "dataset" in config:
+        raise ValueError("config.dataset is obsolete; use config.data")
+    selected_data = config.get("data", {})
     configured_stage = selected_data.get("require_training_stage") if isinstance(selected_data, Mapping) else None
     if configured_stage not in (None, "") and str(configured_stage).lower() != stage:
         raise ValueError(
@@ -1109,12 +1106,9 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     config_path_value = config.get("_meta", {}).get("config_path")
     config_path = Path(str(config_path_value)).resolve() if config_path_value else None
     repo_root = Path(str(config.get("_meta", {}).get("repo_root", Path.cwd()))).resolve()
-    dataset = config.get("dataset", {})
     data = config.get("data", {})
     validation = config.get("validation", {})
     train_labels = data.get("labels") if isinstance(data, Mapping) else None
-    if train_labels is None and isinstance(dataset, Mapping):
-        train_labels = dataset.get("labels")
     label_hashes = {
         "train": _hash_records(train_labels, config),
         "validation": _hash_records(validation.get("labels"), config),

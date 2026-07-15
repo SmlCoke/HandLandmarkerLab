@@ -433,7 +433,7 @@ def audit_canonical_dataset(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Audit one canonical JSONL and return resolved records plus a report."""
 
-    dataset_cfg: Dict[str, Any] = dict(dataset or config.get("data") or config.get("dataset") or {})
+    dataset_cfg: Dict[str, Any] = dict(dataset or config.get("data") or {})
     labels_value = labels if labels is not None else dataset_cfg.get("labels")
     if not labels_value:
         raise DatasetContractError("data.labels is required")
@@ -745,7 +745,7 @@ def inspect_config(
 ) -> Dict[str, Any]:
     """Inspect the primary configured dataset and configured comparison sets."""
 
-    dataset_cfg = dict(config.get("data") or config.get("dataset") or {})
+    dataset_cfg = dict(config.get("data") or {})
     curation_manifest = verify_curation_manifest(
         config, dataset_cfg, error_type=DatasetContractError
     )

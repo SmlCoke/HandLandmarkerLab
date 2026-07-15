@@ -24,31 +24,15 @@ from .metrics import EvaluationMetrics, threshold_sweep
 from .runtime import create_hand_predictor, normalize_runtime_config
 
 
-def _runtime_config(config: Mapping[str, Any]) -> Dict[str, Any]:
-    """Backward-compatible alias for the public runtime config normalizer."""
-
-    return dict(normalize_runtime_config(config))
-
-
 def _labels_path(config: Mapping[str, Any]) -> Path:
-    value = (
-        config.get("data", {}).get("labels")
-        or config.get("dataset", {}).get("labels")
-        or config.get("paths", {}).get("labels")
-    )
+    value = config.get("data", {}).get("labels")
     if not value:
         raise KeyError("Evaluation config requires data.labels")
     return resolve_path(str(value), config)
 
 
 def _output_dir(config: Mapping[str, Any]) -> Path:
-    value = (
-        config.get("output", {}).get("dir")
-        or config.get("output", {}).get("directory")
-        or config.get("paths", {}).get("output_dir")
-    )
-    if not value and config.get("outputs", {}).get("metrics"):
-        value = str(Path(str(config["outputs"]["metrics"])).parent)
+    value = config.get("output", {}).get("dir")
     if not value:
         raise KeyError("Evaluation config requires output.dir")
     path = resolve_path(str(value), config)
@@ -125,9 +109,6 @@ def _row_metrics(
                 "landmark_raw_max_abs": float(
                     getattr(hand, "landmark_raw_max_abs", fallback_max_abs)
                 ),
-                "board_landmark_scale_divisor": float(
-                    getattr(hand, "board_landmark_scale_divisor", 1.0)
-                ),
                 "normalized_out_of_range_coordinate_count": int(
                     getattr(
                         hand,
@@ -142,7 +123,6 @@ def _row_metrics(
             {
                 "landmarks_roi_norm": None,
                 "landmark_raw_max_abs": None,
-                "board_landmark_scale_divisor": None,
                 "normalized_out_of_range_coordinate_count": None,
             }
         )
@@ -199,23 +179,17 @@ def evaluate_hand_rois(
         # making any supplied provenance fail closed.  The public config entry
         # point below always requires the field.
         model_checkpoint_stage = validate_model_checkpoint_stage(config, required=False)
-    predictor = create_hand_predictor(_runtime_config(config))
+    predictor = create_hand_predictor(normalize_runtime_config(config))
     batch_size = int(config.get("inference", {}).get("batch_size", 64))
     if batch_size <= 0:
         raise ValueError("inference.batch_size must be positive")
-    threshold = float(
-        config.get("evaluation", {}).get(
-            "hand_flag_threshold",
-            config.get("pipeline", {}).get("hand", {}).get("presence_threshold", 0.5),
-        )
-    )
+    threshold = float(config.get("evaluation", {}).get("hand_flag_threshold", 0.5))
     if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise ValueError("evaluation.hand_flag_threshold must be finite and in [0,1]")
     metrics = EvaluationMetrics(config.get("evaluation", {}).get("pck_thresholds", [0.05, 0.10, 0.15]))
     details: List[Dict[str, Any]] = []
     scores: List[Tuple[bool, float]] = []
     raw_max_abs_values: List[float] = []
-    scale_trigger_count = 0
     out_of_range_hand_count = 0
     out_of_range_coordinate_count = 0
 
@@ -263,7 +237,6 @@ def evaluate_hand_rois(
                 default=0.0,
             )
             raw_max_abs = float(getattr(hand, "landmark_raw_max_abs", fallback_max_abs))
-            scale_divisor = float(getattr(hand, "board_landmark_scale_divisor", 1.0))
             out_of_range = int(
                 getattr(
                     hand,
@@ -276,7 +249,6 @@ def evaluate_hand_rois(
                 )
             )
             raw_max_abs_values.append(raw_max_abs)
-            scale_trigger_count += int(scale_divisor == 256.0)
             out_of_range_hand_count += int(out_of_range > 0)
             out_of_range_coordinate_count += out_of_range
             _update_aggregate(metrics, row, hand, threshold, predicted_points)
@@ -296,7 +268,6 @@ def evaluate_hand_rois(
             "prediction_count": len(raw_max_abs_values),
             "non_finite_outputs_rejected": True,
             "maximum_raw_absolute_value": max(raw_max_abs_values) if raw_max_abs_values else None,
-            "board_scale_divisor_256_count": scale_trigger_count,
             "normalized_out_of_range_hand_count": out_of_range_hand_count,
             "normalized_out_of_range_coordinate_count": out_of_range_coordinate_count,
         },
@@ -321,38 +292,21 @@ def evaluate_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         raise ValueError("Unsupported configuration schema_version")
     if str(config.get("task", "evaluate")).lower() != "evaluate":
         raise ValueError("Evaluation entry point requires task: evaluate")
-    split_values = [
-        str(value).lower()
-        for value in (
-            config.get("split"),
-            config.get("evaluation", {}).get("split"),
-            (config.get("data") or config.get("dataset", {})).get("require_split"),
-        )
-        if value not in (None, "")
-    ]
-    if len(set(split_values)) > 1:
-        raise ValueError("Conflicting evaluation split declarations: {}".format(split_values))
-    split = split_values[0] if split_values else "val"
+    split = str(config.get("split", "")).lower()
     if split not in {"val", "test"}:
         raise ValueError("Evaluation split must be val or test; got {!r}".format(split))
     if split == "test" and bool(config.get("evaluation", {}).get("tune_thresholds", False)):
         raise ValueError("Test is locked evaluation and must not tune or sweep thresholds")
-    mode = str(config.get("evaluation", {}).get("mode", "hand_roi")).lower()
-    if mode not in {"hand_roi", "roi", "provided_roi"}:
+    mode = str(config.get("evaluation", {}).get("mode", "")).lower()
+    if mode != "roi":
         raise ValueError(
             "Unsupported evaluation.mode {!r}; Val/Test evaluation accepts provided Hand ROIs only".format(
                 mode
             )
         )
     output_dir = _output_dir(config)
-    predictions_path = resolve_path(
-        str(config.get("outputs", {}).get("predictions") or (output_dir / "predictions.jsonl")),
-        config,
-    )
-    metrics_path = resolve_path(
-        str(config.get("outputs", {}).get("metrics") or (output_dir / "metrics.json")),
-        config,
-    )
+    predictions_path = output_dir / "predictions.jsonl"
+    metrics_path = output_dir / "metrics.json"
     if not bool(config.get("output", {}).get("overwrite", False)):
         existing = [str(path) for path in (predictions_path, metrics_path) if path.exists()]
         if existing:
@@ -362,13 +316,13 @@ def evaluate_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
                 )
             )
     model_checkpoint_stage = validate_model_checkpoint_stage(config)
-    runtime_config = _runtime_config(config)
+    runtime_config = normalize_runtime_config(config)
     validate_checkpoint_path_stage(
         config,
         runtime_config.get("hand", {}).get("model_path", ""),
     )
     labels_path = _labels_path(config)
-    data_config = config.get("data") or config.get("dataset", {})
+    data_config = config.get("data", {})
     rows, data_contract_report = audit_canonical_dataset(
         config,
         dataset=data_config,

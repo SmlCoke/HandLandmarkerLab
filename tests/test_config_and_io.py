@@ -65,16 +65,18 @@ class RuntimeConfigContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scale_x"):
             normalize_runtime_config({"hand_roi": {"scale_x": 2.0}})
 
-    def test_duplicate_hand_model_paths_cannot_conflict(self):
-        with self.assertRaisesRegex(ValueError, "different files"):
-            normalize_runtime_config(
-                {
-                    "model": {"checkpoint": "first.weights.h5"},
-                    "hand": {"model_path": "second.weights.h5"},
-                }
-            )
+    def test_obsolete_runtime_keys_are_rejected(self):
+        for config, message in (
+            ({"model": {"checkpoint": "old.weights.h5"}}, "model.checkpoint"),
+            ({"dataset": {}}, "Obsolete configuration roots"),
+            ({"paths": {}}, "Obsolete configuration roots"),
+            ({"pipeline": {}}, "Obsolete configuration roots"),
+        ):
+            with self.subTest(config=config):
+                with self.assertRaisesRegex(ValueError, message):
+                    normalize_runtime_config(config)
 
-    def test_hand_decode_reports_board_scaling_and_out_of_range_values(self):
+    def test_hand_decode_preserves_normalized_landmarks_and_reports_out_of_range_values(self):
         import numpy as np
 
         landmarks = np.zeros((1, 1, 1, 42), dtype=np.float32)
@@ -87,10 +89,22 @@ class RuntimeConfigContractTests(unittest.TestCase):
             ],
             1,
         )[0]
-        self.assertEqual(256.0, prediction.board_landmark_scale_divisor)
         self.assertEqual(256.0, prediction.landmark_raw_max_abs)
-        self.assertEqual((1.0, 0.0), prediction.landmarks_norm[0])
-        self.assertEqual(0, prediction.normalized_out_of_range_coordinate_count)
+        self.assertEqual((256.0, 0.0), prediction.landmarks_norm[0])
+        self.assertEqual(1, prediction.normalized_out_of_range_coordinate_count)
+
+    def test_hand_decode_rejects_non_sigmoid_scalar_outputs(self):
+        import numpy as np
+
+        with self.assertRaisesRegex(ValueError, "hand_flag sigmoid output"):
+            decode_hand_outputs(
+                [
+                    np.zeros((1, 1, 1, 42), dtype=np.float32),
+                    np.full((1, 1, 1, 1), 128.0, dtype=np.float32),
+                    np.zeros((1, 1, 1, 1), dtype=np.float32),
+                ],
+                1,
+            )
 
     def test_hand_decode_rejects_non_finite_output(self):
         import numpy as np

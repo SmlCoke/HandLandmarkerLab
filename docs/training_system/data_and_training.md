@@ -36,7 +36,7 @@ eval_val.yaml          Val ROI 评估
 eval_test.yaml         锁定 Test ROI 评估
 infer.yaml             外部原图 Palm → ROI → Hand 推理
 export.yaml            v2 融合、ONNX 与转换数据导出
-export_preflight.yaml  训练前随机权重 ONNX 与转换数据预检
+export_preflight.yaml  训练前非零探针权重 ONNX 与转换数据预检
 ```
 
 服务器路径与实验 ID 固定写在 `Makefile` 顶部：
@@ -63,8 +63,8 @@ make paths
         ├── hand_landmarker_inference/
         ├── hand_landmarker_runs/
         ├── hand_landmarker_reviews/       # curate 自动创建的可视化审查工作区
-        ├── peak_train_data/
-        ├── soar_train_data/
+        ├── train_sources/                 # HandLandmarkerFab 生成的各训练来源
+        │   └── <dataset_id>/
         ├── test_merged/
         ├── train_pretrain_merged/
         ├── train_pretrain_curated/
@@ -72,6 +72,8 @@ make paths
 ```
 
 新的数据提纯或训练不得复用已有 ID。建议按 `v2-pretrain-r1`、`v2-pretrain-r2` 递增；系统默认拒绝覆盖非空训练目录。
+
+不同自动标注后端会产生不同类别的待审候选：能暴露低分 Palm proposal 的 AetherSign ONNX 可生成 `NEG_LOW_PALM_CANDIDATE`；MediaPipe official 只有成功输出 landmarks 后才会生成 ROI，因此其失败通常在 ROI 重跑阶段表现为 `NEG_RUNTIME_CANDIDATE`，而不是 low-Palm 候选。判断某来源有没有负例必须查看 `negative_review_queue.jsonl` 或按 `dataset_id × sample_type` 统计，不能只查看其中一个候选类别目录。真实来源审计及 ROI 尺度风险见 [训练来源负例及 ROI 域审计](../training_history/2026-07-15_train_source_negative_and_roi_audit.md)。
 
 ## 3. 持久化提纯产物
 
@@ -306,9 +308,9 @@ v2 的改动：
 - stage 深度固定为 `[2,2,3,4,4,6,6]`，通道为 `[24,32,64,128,192,256,384]`；
 - pointwise、depthwise、stem 和 stride-2 主干均使用训练期 `Conv + BatchNorm`；
 - 每个 residual/downsample 主分支末端 BN 的 gamma 零初始化，使网络初始接近稳定 shortcut，而不是连续累加随机残差；
-- landmark head 使用零 kernel、`0.5` bias，hand flag/handedness 使用零 kernel、零 logits bias；
+- landmark head 使用零 kernel、`0.5` bias；hand flag/handedness 使用极小的确定性非零 kernel、零 logits bias；
 - 导出前把每个 BN 精确折叠为一个带 bias 的 Conv，部署图不携带 BN；
-- 部署图约 230 万参数；导出器按真实 ONNX 文件检查并强制不超过 15 MiB；
+- 当前训练图/部署图约为 195 万/191 万参数，修复候选 ONNX 约 7.309 MiB；导出器按真实 ONNX 文件检查并强制不超过 15 MiB；
 - 输入和三个输出的名称、顺序、shape、数据类型完全不变。
 
 严格导出白名单为：

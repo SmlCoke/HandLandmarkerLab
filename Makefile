@@ -5,8 +5,8 @@ CONDA := conda
 ENV_FILE := environment.yml
 
 # The only experiment inputs that operators edit between runs.
-# HLML-2.0 matches the latest repository tag and isolates this training system
-# from the separate DatasetFab repository under /root/autodl-tmp.
+# HLML-2.0 is the deployed data-layout namespace. It is intentionally stable
+# across repository tags and isolates TrainFab from the separate DatasetFab.
 HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
 HAND_PRETRAIN_ID := v2-pretrain-r1
 export HAND_TRAIN_ROOT HAND_PRETRAIN_ID
@@ -44,7 +44,7 @@ TEST_ARGS ?=
 	test test-unit test-export-preflight compile
 
 help:
-	@echo Hand Landmarker HLML-2.0 pretrain
+	@echo Hand Landmarker v2 pretrain - TrainFab layout HLML-2.0
 	@echo   make paths                       Print the fixed training root and experiment ID
 	@echo   make env-create                  Create the documented Conda environment
 	@echo   make env-update                  Reconcile the documented Conda environment

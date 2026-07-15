@@ -329,7 +329,6 @@ private:
     static float ReadTensorValue(ssne_tensor_t tensor, const TensorDebugInfo& info, size_t index);
     static float Clamp(float value, float low, float high);
     static float NormalizeRadians(float angle);
-    static float NormalizeScore(float value);
     static const char* DTypeName(int dtype);
     static const char* FormatName(int format);
 

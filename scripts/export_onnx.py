@@ -17,17 +17,8 @@ def _apply_cli_overrides(config, args):
     export = config.setdefault("export", {})
     if args.weights_path:
         config.setdefault("hand", {})["model_path"] = args.weights_path
-        if "weights_path" in export:
-            export["weights_path"] = args.weights_path
-        model = config.setdefault("model", {})
-        if "checkpoint" in model:
-            model["checkpoint"] = args.weights_path
     if args.output_path:
         export["model_path"] = args.output_path
-        export.pop("output", None)
-        output = config.get("output")
-        if isinstance(output, dict):
-            output.pop("model_path", None)
     if args.contract_path:
         export["contract_path"] = args.contract_path
     if getattr(args, "conversion_output_dir", None):
