@@ -24,7 +24,7 @@ model:
   input_dtype: float32
   input_scale: 0.00392156862745098
   input_offset: 0.0
-  num_iterations: 8
+  num_iterations: [2, 2, 3, 4, 4, 6, 6]
   output_order: [landmarks, hand_flag, handedness]
   output_sizes:
     landmarks: 42

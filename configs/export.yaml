@@ -7,7 +7,7 @@ model:
   input_shape: [1, 256, 256]
   input_layout: NCHW
   input_dtype: float32
-  num_iterations: 8
+  num_iterations: [2, 2, 3, 4, 4, 6, 6]
   output_order: [landmarks, hand_flag, handedness]
   output_sizes:
     landmarks: 42
@@ -24,9 +24,10 @@ export:
   input_name: inputs
   output_names: [landmarks, hand_flag, handedness]
   dynamic_batch: false
+  maximum_model_size_mb: 15.0
   overwrite: false
   strict_a1_operators: true
-  a1_allowed_operators: [Conv, Add, Relu, MaxPool, Sigmoid, Identity]
+  a1_allowed_operators: [Conv, Add, Relu, MaxPool, Sigmoid, Identity, Reshape]
   metadata:
     input_layout: NCHW
     input_color: grayscale

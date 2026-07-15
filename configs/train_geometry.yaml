@@ -35,7 +35,9 @@ model:
   checkpoint_stage: pretrain
   input_shape: [1, 256, 256]
   input_layout: NCHW
-  num_iterations: 8
+  # Stable v2 depth schedule: wider late stages, fewer residual additions than
+  # the failed 8x7 smoke architecture.
+  num_iterations: [2, 2, 3, 4, 4, 6, 6]
   output_order: [landmarks, hand_flag, handedness]
   output_sizes: {landmarks: 42, hand_flag: 1, handedness: 1}
 

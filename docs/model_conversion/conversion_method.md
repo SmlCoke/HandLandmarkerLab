@@ -131,6 +131,14 @@ datasets/
 
 ## 3. 当前训练系统的自动生成方式
 
+在当前 `HAND_PRETRAIN_ID` 已完成 `make pretrain-curate`，且 Val/Test 已准备好之后、正式训练之前执行：
+
+```bash
+make test
+```
+
+除了单元测试，这会生成固定随机初始化的 `export/preflight/hand_landmarker_v2_untrained.onnx`，并从当前 canonical Train/Val/Test 生成 `export/preflight/model_conversion/datasets.zip`。先把这两个文件提交官方工具链，可以提前发现不支持的算子、shape 或转换器回归，避免训练完成后才发现结构无法转换。该 ONNX 没有精度意义；正式模型仍必须在 geometry/multitask 训练通过后重新导出。
+
 本仓库已把上述输入数据制作集成到 Hand Landmarker 的 ONNX `export` 步骤。默认执行：
 
 ```bash

@@ -336,14 +336,14 @@ class CheckpointStageContractTests(unittest.TestCase):
                             )
                             graph.graph.node = [
                                 SimpleNamespace(
-                                    name="runtime_reshape",
-                                    op_type="Reshape",
+                                    name="runtime_transpose",
+                                    op_type="Transpose",
                                     input=[],
                                     attribute=[],
                                 )
                             ]
-                            strict_output = root / "strict-reshape.onnx"
-                            with self.assertRaisesRegex(ValueError, "Reshape"):
+                            strict_output = root / "strict-transpose.onnx"
+                            with self.assertRaisesRegex(ValueError, "Transpose"):
                                 export_from_config(
                                     {
                                         "model": {"checkpoint_stage": "pretrain"},
@@ -353,7 +353,7 @@ class CheckpointStageContractTests(unittest.TestCase):
                                 )
                             self.assertFalse(strict_output.exists())
 
-                            forced_output = root / "forced-reshape.onnx"
+                            forced_output = root / "forced-transpose.onnx"
                             forced_report = export_from_config(
                                 {
                                     "model": {"checkpoint_stage": "pretrain"},
@@ -379,7 +379,7 @@ class CheckpointStageContractTests(unittest.TestCase):
         self.assertFalse(contract["a1_operator_audit"]["forced"])
         self.assertTrue(contract["a1_operator_audit"]["enforced"])
         self.assertEqual(
-            ["Reshape"], forced_report["a1_operator_audit"]["unsupported"]
+            ["Transpose"], forced_report["a1_operator_audit"]["unsupported"]
         )
         self.assertTrue(forced_contract["a1_operator_audit"]["forced"])
         self.assertFalse(forced_contract["a1_operator_audit"]["enforced"])

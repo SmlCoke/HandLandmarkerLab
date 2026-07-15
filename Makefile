@@ -19,6 +19,7 @@ EVAL_VAL_CONFIG := configs/eval_val.yaml
 EVAL_TEST_CONFIG := configs/eval_test.yaml
 INFER_CONFIG := configs/infer.yaml
 EXPORT_CONFIG := configs/export.yaml
+PREFLIGHT_EXPORT_CONFIG := configs/export_preflight.yaml
 
 CURATE_ARGS ?=
 GEOMETRY_ARGS ?=
@@ -39,7 +40,8 @@ TEST_ARGS ?=
 	check-multitask-data pretrain-multitask \
 	eval-val-geometry eval-test-geometry eval-val-multitask eval-test-multitask \
 	infer-geometry infer-multitask export-geometry export-multitask \
-	conversion-data-geometry conversion-data-multitask test compile
+	conversion-data-geometry conversion-data-multitask \
+	test test-unit test-export-preflight compile
 
 help:
 	@echo Hand Landmarker HLML-2.0 pretrain
@@ -67,7 +69,9 @@ help:
 	@echo   make export-multitask            Fuse and export multitask ONNX
 	@echo   make conversion-data-geometry    Build geometry conversion NPY inputs
 	@echo   make conversion-data-multitask   Build multitask conversion NPY inputs
-	@echo   make test                        Run unit tests
+	@echo   make test                        Run unit tests, then build the untrained ONNX conversion bundle
+	@echo   make test-unit                   Run unit tests only
+	@echo   make test-export-preflight       Build the untrained ONNX conversion bundle only
 	@echo   make compile                     Syntax-check Python sources
 
 paths:
@@ -139,6 +143,13 @@ conversion-data-geometry conversion-data-multitask:
 
 test:
 	$(PYTHON) -B -m unittest discover -s tests -p "test_*.py" $(TEST_ARGS)
+	$(PYTHON) -B scripts/build_export_preflight.py --config "$(PREFLIGHT_EXPORT_CONFIG)"
+
+test-unit:
+	$(PYTHON) -B -m unittest discover -s tests -p "test_*.py" $(TEST_ARGS)
+
+test-export-preflight:
+	$(PYTHON) -B scripts/build_export_preflight.py --config "$(PREFLIGHT_EXPORT_CONFIG)"
 
 compile:
 	$(PYTHON) -B -c "from pathlib import Path; roots=[Path(value) for value in ('hand_landmarker','models','scripts','tests') if Path(value).exists()]; files=[path for root in roots for path in root.rglob('*.py')]; [compile(path.read_bytes(), str(path), 'exec') for path in files]; print('syntax-checked {} Python files'.format(len(files)))"

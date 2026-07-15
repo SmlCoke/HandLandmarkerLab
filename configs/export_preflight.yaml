@@ -1,0 +1,22 @@
+extends: export.yaml
+
+# This wrapper exports deterministic random initialization only.  It proves
+# graph/operator/toolchain compatibility before any expensive training run;
+# it is never an accuracy model.
+experiment:
+  name: hand_landmarker_v2_export_preflight
+  seed: 20260714
+
+hand:
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/export/preflight/untrained.weights.h5"
+
+export:
+  preflight_untrained: true
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/export/preflight/hand_landmarker_v2_untrained.onnx"
+  contract_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/export/preflight/hand_landmarker_v2_untrained.contract.json"
+  overwrite: true
+  metadata:
+    artifact_purpose: converter_compatibility_preflight_untrained
+    accuracy_model: false
+  conversion_datasets:
+    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/export/preflight/model_conversion"

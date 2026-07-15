@@ -25,7 +25,7 @@ Geometry 阶段不是“模型只能训练 landmarks”。它仍保留三个输�
 
 ## 2. 当前文件与固定实验身份
 
-`configs/` 只保留 8 个文件：
+`configs/` 只保留 9 个文件：
 
 ```text
 curate_pretrain.yaml   持久化提纯与负例审查队列
@@ -36,6 +36,7 @@ eval_val.yaml          Val ROI 评估
 eval_test.yaml         锁定 Test ROI 评估
 infer.yaml             外部原图 Palm → ROI → Hand 推理
 export.yaml            v2 融合、ONNX 与转换数据导出
+export_preflight.yaml  训练前随机权重 ONNX 与转换数据预检
 ```
 
 服务器路径与实验 ID 固定写在 `Makefile` 顶部：
@@ -130,7 +131,7 @@ git pull
 conda activate hand-landmarker-tf29
 make paths
 make compile
-make test
+make test-unit
 ```
 
 检查 `make paths` 的数据根、curated ID 和 run ID。若目标目录已经用于旧实验，先修改并提交 Makefile 中的 ID，不要打开 `overwrite` 覆盖旧实验。
@@ -139,7 +140,10 @@ make test
 
 ```bash
 make pretrain-curate
+make test
 ```
+
+`make test` 的导出预检需要刚生成的 curated geometry Train 和已冻结的 Val/Test。若只检查 Python 单测而尚未提纯数据，使用 `make test-unit`。
 
 首先检查：
 
@@ -299,16 +303,18 @@ Geometry 和 multitask 必须各自在 Val 上确定 threshold，不能沿用另
 v2 的改动：
 
 - 所有 `LeakyReLU` 替换为普通 `ReLU`；
-- residual block 在 depthwise 后增加 ReLU，提升非线性表达；
-- pointwise 与 depthwise 主干使用训练期多分支 `Conv + BatchNorm`、辅助分支和可用时的 identity 分支；
-- 导出前把 BN、辅助分支与 identity 精确折叠为一个带 bias 的 Conv；
-- 训练图参数量更大，部署图只保留单分支，因此板端不会携带训练分支和 BN；
+- stage 深度固定为 `[2,2,3,4,4,6,6]`，通道为 `[24,32,64,128,192,256,384]`；
+- pointwise、depthwise、stem 和 stride-2 主干均使用训练期 `Conv + BatchNorm`；
+- 每个 residual/downsample 主分支末端 BN 的 gamma 零初始化，使网络初始接近稳定 shortcut，而不是连续累加随机残差；
+- landmark head 使用零 kernel、`0.5` bias，hand flag/handedness 使用零 kernel、零 logits bias；
+- 导出前把每个 BN 精确折叠为一个带 bias 的 Conv，部署图不携带 BN；
+- 部署图约 230 万参数；导出器按真实 ONNX 文件检查并强制不超过 15 MiB；
 - 输入和三个输出的名称、顺序、shape、数据类型完全不变。
 
 严格导出白名单为：
 
 ```text
-Conv, Add, Relu, MaxPool, Sigmoid, Identity
+Conv, Add, Relu, MaxPool, Sigmoid, Identity, Reshape
 ```
 
 `LeakyRelu` 不再在白名单中。`make export-geometry` 或 `make export-multitask` 会依次验证：
@@ -319,6 +325,13 @@ Conv, Add, Relu, MaxPool, Sigmoid, Identity
 4. ONNX opset 11；
 5. 算子名称和 Conv/MaxPool 属性限制；
 6. 转换校准/评测 NPY 数据集。
+
+`make test` 还会调用 `configs/export_preflight.yaml`，用固定随机种子生成未经训练的 ONNX 和真实转换数据包。这只验证融合、I/O、算子、15 MiB 大小门槛以及官方转换兼容性，绝不能用于精度判断。若只想运行代码单测或只重建预检产物，可分别运行：
+
+```bash
+make test-unit
+make test-export-preflight
+```
 
 融合报告写入 `hand_landmarker_v2.contract.json` 的 `reparameterization_parity`，其中记录训练参数量、部署参数量和逐输出最大误差。只要出现 `LeakyRelu`、未折叠 BN 或其他白名单外算子，默认导出就会失败，不应使用 `--force` 交付官方转换。
 

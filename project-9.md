@@ -46,6 +46,7 @@ A1 NPU 支持的 ONNX 算子及其限制如下：
 | resize	  | 支持nearest |
 | convtranspose2d	| 无特殊限制 |
 | Upsample	| 无特殊限制 |
+| Reshape    | 无特殊限制 |
    
 缩写说明：K=卷积核(Kernel)、S=步长(Stride)、P=补边(Pad)、C=通道(Channel)、w/h=宽/高(Width/Height)
 

@@ -264,6 +264,21 @@ def _guard_export_outputs(output_path: Path, contract_path: Path, overwrite: boo
         )
 
 
+def _validated_model_size(path: Path, maximum_model_size_mb: float):
+    maximum = float(maximum_model_size_mb)
+    if not math.isfinite(maximum) or maximum <= 0.0:
+        raise ValueError("export.maximum_model_size_mb must be a positive finite value")
+    size_bytes = int(path.stat().st_size)
+    size_mb = size_bytes / float(1024 * 1024)
+    if size_mb > maximum:
+        raise ValueError(
+            "Exported ONNX is {:.3f} MiB, exceeding the configured {:.3f} MiB limit".format(
+                size_mb, maximum
+            )
+        )
+    return size_bytes, size_mb
+
+
 def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     from .runtime import normalize_runtime_config
 
@@ -321,6 +336,9 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         raise ValueError("The verified A1 conversion contract requires ONNX opset 11")
     if bool(export_config.get("dynamic_batch", False)):
         raise ValueError("A1 Hand Landmarker export requires static batch 1")
+    maximum_model_size_mb = float(export_config.get("maximum_model_size_mb", 15.0))
+    if not math.isfinite(maximum_model_size_mb) or maximum_model_size_mb <= 0.0:
+        raise ValueError("export.maximum_model_size_mb must be a positive finite value")
     input_name = str(export_config.get("input_name", MODEL_IO["input_name"]))
     if input_name != str(MODEL_IO["input_name"]):
         raise ValueError("export.input_name must remain {!r}".format(MODEL_IO["input_name"]))
@@ -395,6 +413,9 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         )
         graph = onnx.load(str(temporary))
         onnx.checker.check_model(graph)
+        model_size_bytes, model_size_mb = _validated_model_size(
+            temporary, maximum_model_size_mb
+        )
         session = ort.InferenceSession(str(temporary), providers=["CPUExecutionProvider"])
         inputs = [
             {"name": item.name, "shape": _shape_from_onnx(item), "type": item.type.tensor_type.elem_type}
@@ -434,7 +455,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         operators = sorted({node.op_type for node in graph.graph.node})
         allowed_operators = set(
             export_config.get("a1_allowed_operators")
-            or ["Conv", "Add", "Relu", "MaxPool", "Sigmoid", "Identity"]
+            or ["Conv", "Add", "Relu", "MaxPool", "Sigmoid", "Identity", "Reshape"]
         )
         unsupported = sorted(set(operators) - allowed_operators)
         strict_a1 = bool(export_config.get("strict_a1_operators", True))
@@ -464,6 +485,9 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "model_checkpoint_stage": model_checkpoint_stage,
         "model_path": str(output_path),
         "model_sha256": sha256_file(output_path),
+        "model_size_bytes": model_size_bytes,
+        "model_size_mb": model_size_mb,
+        "maximum_model_size_mb": maximum_model_size_mb,
         "weights_path": str(weights_path),
         "weights_sha256": sha256_file(weights_path),
         "model_version": model_version,

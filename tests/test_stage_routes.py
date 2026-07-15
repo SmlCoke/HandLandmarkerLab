@@ -25,6 +25,7 @@ class PretrainConfigRouteTests(unittest.TestCase):
         "eval_test.yaml",
         "infer.yaml",
         "export.yaml",
+        "export_preflight.yaml",
     }
 
     def test_config_surface_is_small_and_pretrain_only(self):
@@ -45,6 +46,7 @@ class PretrainConfigRouteTests(unittest.TestCase):
             "eval_test",
             "infer",
             "export",
+            "export_preflight",
         )
         for name in names:
             with self.subTest(config=name):
@@ -158,6 +160,7 @@ class MakePretrainRouteTests(unittest.TestCase):
             "export-multitask": "configs/export.yaml",
             "conversion-data-geometry": "configs/export.yaml",
             "conversion-data-multitask": "configs/export.yaml",
+            "test-export-preflight": "configs/export_preflight.yaml",
         }
         for target, config in expected.items():
             with self.subTest(target=target):
@@ -185,6 +188,28 @@ class MakePretrainRouteTests(unittest.TestCase):
         self.assertGreater(inspection, gate, result.stdout)
         self.assertGreater(train, inspection, result.stdout)
         self.assertGreater(train, gate, result.stdout)
+
+    def test_v2_depth_and_export_size_contract_are_shared(self):
+        expected_iterations = [2, 2, 3, 4, 4, 6, 6]
+        for name in (
+            "train_geometry.yaml",
+            "eval_val.yaml",
+            "eval_test.yaml",
+            "infer.yaml",
+            "export.yaml",
+        ):
+            with self.subTest(config=name):
+                config = load_config(CONFIGS / name)
+                self.assertEqual(expected_iterations, config["model"]["num_iterations"])
+        export = load_config(CONFIGS / "export.yaml")
+        self.assertEqual(15.0, export["export"]["maximum_model_size_mb"])
+        self.assertIn("Reshape", export["export"]["a1_allowed_operators"])
+        preflight = load_config(CONFIGS / "export_preflight.yaml")
+        self.assertIs(preflight["export"]["preflight_untrained"], True)
+        self.assertIs(preflight["export"]["metadata"]["accuracy_model"], False)
+        result = self._dry_run("test")
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("scripts/build_export_preflight.py", result.stdout)
 
 
 if __name__ == "__main__":

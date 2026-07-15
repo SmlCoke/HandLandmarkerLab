@@ -9,7 +9,7 @@ pretrain 分为两个显式阶段：
 
 未经人工复核的 `NEG_*_CANDIDATE` 是 teacher abstention，不是可信无手样本。系统会把它们及其 ROI 持久化到审查包，但 `make pretrain-multitask` 会 fail-closed，绝不会自动把它们作为负例训练。
 
-详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)。
+详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md) 和 [v2 smoke 失败与架构恢复](docs/training_history/2026-07-15_v2_smoke_failure_and_architecture_recovery.md)。
 
 ## 固定接口
 
@@ -28,9 +28,11 @@ Val/Test 直接读取 canonical 256×256 Hand ROI，只运行 Hand Landmarker。
 当前 registry 只提供 `models/hand_landmarker/v2.py`：
 
 - 使用普通 ReLU，不再产生官方转换工具已拒绝的 LeakyReLU；
-- 训练期使用 Conv+BN 多分支重参数化以增加优化自由度；
-- 导出前把 BN 和辅助分支融合为单个 Conv；
-- ONNX 严格算子集合为 `Conv/Add/Relu/MaxPool/Sigmoid/Identity`；
+- 训练期使用稳定的 Conv+BN 残差块，残差尾部零初始化，避免深层输出爆炸；
+- landmark head 从归一化坐标 `0.5` 起步，两个概率 head 从 `0.5` 起步；
+- 导出前把每个 BN 精确折叠为单个带 bias 的 Conv；
+- ONNX 严格算子集合为 `Conv/Add/Relu/MaxPool/Sigmoid/Identity/Reshape`；
+- 导出器对实际 ONNX 强制执行 `15 MiB` 大小上限；
 - 输入、输出名称、顺序和 shape 不变。
 
 multitask checkpoint 使用 geometry-first 的 `val_multitask_score`，同时考虑 landmark MAE、presence accuracy 和 handedness accuracy，但分类误差只占较小权重。
@@ -46,8 +48,8 @@ git pull
 conda activate hand-landmarker-tf29
 make paths
 make compile
-make test
 make pretrain-curate
+make test
 make doctor
 make inspect-geometry
 make pretrain-geometry-smoke
@@ -55,6 +57,16 @@ make pretrain-geometry
 make eval-val-geometry
 make eval-test-geometry
 make infer-geometry
+```
+
+`make test` 需要当前 ID 的 curated Train 以及已冻结 Val/Test，因此放在 `make pretrain-curate` 之后。它先运行单元测试，再生成一个固定随机初始化、不可用于精度评估的 v2 ONNX 和真实 Train/Val/Test 转换输入。该产物用于在正式训练前提交官方工具链验证结构兼容性：
+
+```text
+hand_landmarker_runs/<HAND_PRETRAIN_ID>/export/preflight/
+├── hand_landmarker_v2_untrained.onnx
+├── hand_landmarker_v2_untrained.contract.json
+├── untrained.weights.h5
+└── model_conversion/datasets.zip
 ```
 
 `make pretrain-curate` 会自动创建 `hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/`。三人分工浏览其中图片，删除所有“有手或不确定”的 ROI，只保留明确无手背景；不要新增、改名、移动或编辑图片。完成后执行：
@@ -74,7 +86,7 @@ Makefile 不再提供 `train`、`pretrain`、`multitask`、`inspect` 等含义�
 ## 配置与目录
 
 ```text
-configs/                    8 个当前 pretrain 配置
+configs/                    9 个当前 pretrain 配置
 hand_landmarker/            数据、训练、评估、推理、导出实现
 models/hand_landmarker/     v2 模型与部署融合
 scripts/                    CLI 与数据门禁

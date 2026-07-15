@@ -3,7 +3,11 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from hand_landmarker.export import _a1_attribute_audit, _guard_export_outputs
+from hand_landmarker.export import (
+    _a1_attribute_audit,
+    _guard_export_outputs,
+    _validated_model_size,
+)
 
 
 class _Helper:
@@ -82,6 +86,18 @@ class A1ExportAuditTests(unittest.TestCase):
             _guard_export_outputs(model_path, contract_path, overwrite=True)
             with self.assertRaisesRegex(ValueError, "must differ"):
                 _guard_export_outputs(model_path, model_path, overwrite=True)
+
+    def test_actual_onnx_size_is_hard_limited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.onnx"
+            path.write_bytes(b"x" * 2048)
+            size_bytes, size_mb = _validated_model_size(path, 1.0)
+            self.assertEqual(2048, size_bytes)
+            self.assertAlmostEqual(2048 / float(1024 * 1024), size_mb)
+            with self.assertRaisesRegex(ValueError, "exceeding"):
+                _validated_model_size(path, 0.001)
+            with self.assertRaisesRegex(ValueError, "positive finite"):
+                _validated_model_size(path, 0.0)
 
 
 if __name__ == "__main__":
