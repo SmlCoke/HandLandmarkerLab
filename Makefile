@@ -8,7 +8,7 @@ ENV_FILE := environment.yml
 # HLML-2.0 is the deployed data-layout namespace. It is intentionally stable
 # across repository tags and isolates TrainFab from the separate DatasetFab.
 HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
-HAND_PRETRAIN_ID := v2-pretrain-r2
+HAND_PRETRAIN_ID := v2-pretrain-r3
 export HAND_TRAIN_ROOT HAND_PRETRAIN_ID
 
 CURATE_CONFIG := configs/curate_pretrain.yaml
