@@ -16,4 +16,6 @@
 
 路径根和实验 ID 由 Makefile 顶部的 `HAND_TRAIN_ROOT`、`HAND_PRETRAIN_ID` 固定。`HAND_PRETRAIN_PHASE` 只由明确的 Make 目标设置为 `geometry` 或 `multitask`，不应手工修改 YAML 来混用阶段。
 
+`curate_pretrain.yaml` 的 `source.crop_root` 是唯一训练 ROI 根目录。Curate 产生的 JSONL 保留该目录下的直接 `crop_path`，提纯目录本身只写入索引和审计文件。
+
 当前配置模式只接受 `data`、`hand.model_path`、`output.dir`、`export.model_path` 等现行字段。旧的 `dataset`、`model.checkpoint`、`paths`、`pipeline`、`output.directory` 与 `export.output` 不再兼容。

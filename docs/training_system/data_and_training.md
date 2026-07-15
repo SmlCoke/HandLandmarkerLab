@@ -87,8 +87,6 @@ ${HAND_TRAIN_ROOT}/train_pretrain_merged/05_labels/hand_training_labels_pretrain
 
 ```text
 train_pretrain_curated/<HAND_PRETRAIN_ID>/
-├── images/                         # 真正允许进入训练的独立 ROI
-├── review_images/                  # 冻结后的待审负例 ROI，不参与训练
 ├── 05_labels/
 │   ├── hand_training_labels_pretrain_landmarks.jsonl
 │   ├── hand_training_labels_pretrain_multitask.jsonl
@@ -105,9 +103,11 @@ train_pretrain_curated/<HAND_PRETRAIN_ID>/
     └── sha256_manifest.json
 ```
 
-`landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。`train_pretrain_curated/.../review_images` 是冻结的内部审计副本，`hand_landmarker_reviews/.../negative_candidates` 才是人工删除式复核工作区。人工完成后，程序仅把工作区中仍存在、manifest 匹配且 SHA-256 未改变的图片写成 `CONFIRMED_NEGATIVE`；自动重叠门禁仍可拒绝其中存在冲突的样本。
+`landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。这些 JSONL 的 `crop_path` 直接指向 `${HAND_TRAIN_ROOT}/train_sources/` 中由 HLMF 交付的 Hand ROI。curate 目录只保存训练索引、决策目录、审计清单和报告，不再另建 ROI 图片目录。
 
-训练入口会验证 labels、materialized ROI 和 manifest 的 SHA-256。提纯不是训练时的内存过滤，因此训练结束后仍能复核当时真正使用的 JSONL 和图片。
+提纯时会校验每个源 `crop_path` 都是 `source.crop_root` 下真实存在的文件，并将每张 ROI 的 SHA-256 写入标签和 manifest。训练 loader 会重新计算图片哈希并逐条比对；复核完成后重建 curated 索引时，还会确认源 ROI 的成员集和字节从首次提纯起未变。因此 `train_sources/` 必须视为当次实验的只读输入；如果需要重生或修改 ROI，应使用新的 `HAND_PRETRAIN_ID` 重新提纯。
+
+`hand_landmarker_reviews/.../negative_candidates` 是唯一会另行写入图片的地方。它是为了让人工通过“删掉有手图、保留明确背景图”快速完成负例复核而生成的工作区。该工作区不是训练数据源；训练仍从 `train_sources/` 读取 ROI。程序只把工作区中仍存在、manifest 匹配且 SHA-256 未改变的图片写成 `CONFIRMED_NEGATIVE`；自动重叠门禁仍可拒绝其中存在冲突的样本。
 
 执行命令 `make pretrain-curate` 还会自动创建负样本人工复核工作区：
 
@@ -153,7 +153,6 @@ make test
 <curated_root>/qc/curation_report.json
 <curated_root>/audit/negative_review_queue.jsonl
 <curated_root>/audit/review_image_manifest.jsonl
-<curated_root>/review_images/
 ${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/
 ${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json
 ```
@@ -200,7 +199,7 @@ make check-multitask-data
 
 门槛写在 `configs/train_multitask.yaml`，变更门槛必须作为一次明确的配置变更提交，不能通过删掉 gate 绕过。数量不足时仍可训练 geometry，但不可启动 multitask。
 
-`hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json` 记录原候选数、保留确认数和删除数；`qc/sha256_manifest.json` 与 `qc/curation_report.json` 记录自动生成 decisions 文件的路径、SHA-256 和决策数。确认后的 multitask JSONL 和图片全部保留在磁盘。
+`hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json` 记录原候选数、保留确认数和删除数；`qc/sha256_manifest.json` 与 `qc/curation_report.json` 记录自动生成 decisions 文件的路径、SHA-256 和决策数。确认后的 multitask JSONL 保留在 curated 目录，其 `crop_path` 仍指向 `train_sources/` 中的唯一 ROI 数据。
 
 ### 4.5 Geometry 阶段
 

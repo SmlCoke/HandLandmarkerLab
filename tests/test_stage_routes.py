@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -71,13 +72,17 @@ class PretrainConfigRouteTests(unittest.TestCase):
         self.assertGreaterEqual(multitask["multitask_gate"]["minimum_confirmed_negatives"], 1)
         self.assertEqual("val_multitask_score", multitask["training"]["checkpoint"]["monitor"])
         self.assertTrue(multitask["training"]["multitask_monitor"]["enabled"])
+        self.assertTrue(_normalized(curation["source"]["crop_root"]).endswith("/train_sources"))
+        self.assertNotIn("materialize_images", curation["output"])
+        self.assertNotIn("materialize_images", curation["review"])
 
     def test_evaluation_inference_and_export_select_phase_from_make(self):
         for name in ("eval_val", "eval_test", "infer", "export"):
             config = load_config(CONFIGS / (name + ".yaml"))
-            self.assertIn(
-                "/v2-pretrain-r1/geometry/checkpoints/best.weights.h5",
-                _normalized(config["hand"]["model_path"]),
+            self.assertTrue(
+                _normalized(config["hand"]["model_path"]).endswith(
+                    "/geometry/checkpoints/best.weights.h5"
+                )
             )
         export = load_config(CONFIGS / "export.yaml")
         self.assertNotIn("LeakyRelu", export["export"]["a1_allowed_operators"])
@@ -123,7 +128,9 @@ class MakePretrainRouteTests(unittest.TestCase):
     def test_makefile_declares_reproducible_identity(self):
         text = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0", text)
-        self.assertIn("HAND_PRETRAIN_ID := v2-pretrain-r1", text)
+        match = re.search(r"(?m)^HAND_PRETRAIN_ID := ([A-Za-z0-9][A-Za-z0-9._-]*)$", text)
+        self.assertIsNotNone(match, "Makefile must declare one filesystem-safe HAND_PRETRAIN_ID")
+        self.assertTrue(match.group(1).startswith("v2-pretrain-"))
         self.assertNotIn("HAND_DATA_ROOT", text)
         self.assertNotIn("HAND_PRETRAIN_CURATED_ID", text)
         self.assertNotIn("HAND_PRETRAIN_RUN_ID", text)

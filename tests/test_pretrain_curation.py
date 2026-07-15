@@ -97,7 +97,10 @@ class PretrainCurationTests(unittest.TestCase):
         review_root = self.root / "reviews" / Path(output).name
         return {
             "task": "curate_pretrain",
-            "source": {"labels": str(self.labels)},
+            "source": {
+                "labels": str(self.labels),
+                "crop_root": str(self.images),
+            },
             "curation": {
                 "allowed_positive_quality_tiers": ["HIGH", "MEDIUM"],
                 "normalized_coordinate_range": [0.0, 1.0],
@@ -110,11 +113,9 @@ class PretrainCurationTests(unittest.TestCase):
                 "decisions_file": str(review_root / "negative_review_decisions.jsonl"),
                 "candidates_subdir": "negative_candidates",
                 "reviewer": "unit-test-team",
-                "materialize_images": "copy",
             },
             "output": {
                 "dir": str(output),
-                "materialize_images": "copy",
                 "overwrite": False,
             },
         }
@@ -134,10 +135,13 @@ class PretrainCurationTests(unittest.TestCase):
         )
         self.assertEqual({"pos-runtime", "pos-low"}, {row["crop_id"] for row in landmarks})
         for row in landmarks:
-            materialized = Path(row["crop_path"])
-            self.assertTrue(materialized.is_file())
-            self.assertTrue(str(materialized).startswith(str(output)))
-            self.assertEqual("copy", row["pretrain_curation"]["materialization_method"])
+            source = Path(row["crop_path"])
+            self.assertTrue(source.is_file())
+            self.assertTrue(str(source).startswith(str(self.images)))
+            self.assertEqual(
+                "train_sources_reference",
+                row["pretrain_curation"]["image_storage"],
+            )
             self.assertEqual(self.source_hash, row["pretrain_curation"]["source_labels_sha256"])
         smoke = read_jsonl(
             output / "05_labels" / "hand_training_labels_pretrain_smoke.jsonl"
@@ -150,9 +154,9 @@ class PretrainCurationTests(unittest.TestCase):
         queue = read_jsonl(output / "audit" / "negative_review_queue.jsonl")
         by_id = {row["crop_id"]: row for row in queue}
         for row in queue:
-            review_crop = Path(row["review_crop_path"])
+            review_crop = Path(row["crop_path"])
             self.assertTrue(review_crop.is_file())
-            self.assertTrue(str(review_crop).startswith(str(output / "review_images")))
+            self.assertTrue(str(review_crop).startswith(str(self.images)))
             self.assertEqual(
                 sha256_file(review_crop), row["pretrain_curation"]["review_image_sha256"]
             )
@@ -169,7 +173,10 @@ class PretrainCurationTests(unittest.TestCase):
         self.assertTrue((output / "qc" / "sha256_manifest.json").is_file())
         with (output / "qc" / "sha256_manifest.json").open(encoding="utf-8") as handle:
             manifest = json.load(handle)
-        self.assertEqual(2, manifest["review_images"]["count"])
+        self.assertEqual("train_sources_reference", manifest["images"]["storage"])
+        self.assertEqual(2, manifest["review_candidates"]["count"])
+        self.assertFalse((output / "images").exists())
+        self.assertFalse((output / "review_images").exists())
         review_root = self.root / "reviews" / output.name
         review_manifest = read_jsonl(review_root / "review_manifest.jsonl")
         self.assertEqual(2, len(review_manifest))
@@ -192,6 +199,36 @@ class PretrainCurationTests(unittest.TestCase):
         self.assertEqual(self.source_hash, sha256_file(self.labels))
         with self.assertRaises(FileExistsError):
             curate_pretrain_from_config(self._config(output))
+
+    def test_snapshot_references_train_sources_and_only_copies_review_candidates(self):
+        output = self.root / "referenced"
+        curate_pretrain_from_config(self._config(output))
+
+        landmarks = read_jsonl(
+            output / "05_labels" / "hand_training_labels_pretrain_landmarks.jsonl"
+        )
+        source_by_id = {row["crop_id"]: Path(row["crop_path"]) for row in self.rows}
+        for row in landmarks:
+            self.assertEqual(source_by_id[row["crop_id"]].resolve(), Path(row["crop_path"]))
+
+        self.assertFalse((output / "images").exists())
+        self.assertFalse((output / "review_images").exists())
+        review_root = self.root / "reviews" / output.name
+        review_manifest = read_jsonl(review_root / "review_manifest.jsonl")
+        for row in review_manifest:
+            candidate = review_root / "negative_candidates" / row["candidate_relative_path"]
+            source = Path(row["source_crop_path"])
+            self.assertTrue(candidate.is_file())
+            self.assertEqual(source.read_bytes(), candidate.read_bytes())
+            self.assertFalse(source.samefile(candidate))
+
+    def test_source_crop_must_be_inside_configured_train_sources_root(self):
+        outside = self.root / "outside.png"
+        outside.write_bytes(Path(self.rows[0]["crop_path"]).read_bytes())
+        self.rows[0]["crop_path"] = str(outside)
+        write_jsonl(self.labels, self.rows)
+        with self.assertRaisesRegex(ValueError, "under source.crop_root"):
+            curate_pretrain_from_config(self._config(self.root / "outside-source"))
 
     def test_only_retained_non_conflicting_negative_enters_multitask(self):
         output = self.root / "reviewed"
@@ -274,7 +311,18 @@ class PretrainCurationTests(unittest.TestCase):
                 config, overwrite=True, finalize_review=True
             )
 
-    def test_overlap_is_scoped_to_dataset_and_materialized_hash_is_checked(self):
+    def test_review_finalize_rejects_changed_train_source_roi(self):
+        output = self.root / "modified-source-image"
+        config = self._config(output)
+        curate_pretrain_from_config(config)
+        positive = next(row for row in self.rows if row["crop_id"] == "pos-runtime")
+        Path(positive["crop_path"]).write_bytes(b"modified-source")
+        with self.assertRaisesRegex(RuntimeError, "Source ROI bytes changed"):
+            curate_pretrain_from_config(
+                config, overwrite=True, finalize_review=True
+            )
+
+    def test_overlap_is_scoped_to_dataset_and_source_hash_is_checked(self):
         for row in self.rows:
             if row["crop_id"] == "neg-overlap":
                 row["dataset_id"] = "dataset-b"
@@ -303,7 +351,7 @@ class PretrainCurationTests(unittest.TestCase):
             for message in item.get("errors", [])
         ]
         self.assertIn(
-            "materialized image hash does not match pretrain_curation.image_sha256",
+            "source image hash does not match pretrain_curation.image_sha256",
             messages,
         )
 

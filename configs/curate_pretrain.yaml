@@ -3,6 +3,7 @@ task: curate_pretrain
 
 source:
   labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl"
+  crop_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_sources"
 
 curation:
   # LOW handedness confidence does not invalidate otherwise useful geometry;
@@ -25,11 +26,7 @@ review:
   decisions_file: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_reviews/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/negative_review_decisions.jsonl"
   candidates_subdir: negative_candidates
   reviewer: hlml-visual-review-team
-  materialize_images: hardlink_or_copy
 
 output:
   dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}"
-  # Byte-isolated snapshot: later edits to source crops cannot change the
-  # images that were actually reviewed and trained.
-  materialize_images: copy
   overwrite: false

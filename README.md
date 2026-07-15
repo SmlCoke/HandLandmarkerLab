@@ -70,6 +70,8 @@ hand_landmarker_runs/<HAND_PRETRAIN_ID>/export/preflight/
 └── model_conversion/datasets.zip
 ```
 
+Curate 生成的训练 JSONL 直接引用 `${HAND_TRAIN_ROOT}/train_sources/` 中的 ROI；`train_pretrain_curated/` 只保存索引、决策、哈希清单和报告。人工审查工作区中的候选图是唯一额外产生的 ROI 文件，不作为训练输入。
+
 `make pretrain-curate` 会自动创建 `hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/`。三人分工浏览其中图片，删除所有“有手或不确定”的 ROI，只保留明确无手背景；不要新增、改名、移动或编辑图片。完成后执行：
 
 ```bash

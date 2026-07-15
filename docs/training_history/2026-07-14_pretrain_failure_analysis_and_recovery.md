@@ -216,7 +216,7 @@ smoke subset                 128
 
 实际数字必须以生成后的 `qc/curation_report.json` 为准。
 
-训练 loader 还会读取 `qc/sha256_manifest.json`，验证本次 labels 位于该 snapshot 内且 SHA-256 完全一致；数据审计还会将每张 materialized ROI 的实际 SHA-256 与标签中已认证的哈希逐一比较。训练时不能悄悄替换、追加、换图或内存过滤数据。
+训练 loader 还会读取 `qc/sha256_manifest.json`，验证本次 labels 属于该 curated 索引且 SHA-256 完全一致；数据审计还会将 `train_sources/` 中每张源 ROI 的实际 SHA-256 与标签中已认证的哈希逐一比较。训练时不能悄悄替换、追加、换图或内存过滤数据。
 
 ### 4. geometry-first pretrain
 

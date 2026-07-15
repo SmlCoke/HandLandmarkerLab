@@ -1,9 +1,9 @@
 """Persistent, auditable curation for pseudo-labelled pretrain data.
 
-Teacher abstentions are candidates, not verified background.  This module
-materializes a positive landmark snapshot and keeps every rejected or
-unverified row in an on-disk audit catalog instead of filtering at training
-time.
+Teacher abstentions are candidates, not verified background. This module
+persists curated labels and image hashes while keeping canonical ROI paths in
+``train_sources``. Every rejected or unverified row remains in an on-disk
+audit catalog instead of being filtered only in training memory.
 """
 
 from __future__ import annotations
@@ -361,28 +361,15 @@ def _negative_review_paths(
     }
 
 
-def _materialize_review_candidate(source: Path, destination: Path, mode: str) -> str:
+def _copy_review_candidate(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    used_mode = mode
-    if mode in {"hardlink", "hardlink_or_copy"}:
-        try:
-            os.link(str(source), str(destination))
-            return "hardlink"
-        except OSError:
-            if mode == "hardlink":
-                raise
-            used_mode = "copy"
-    if used_mode == "copy":
-        shutil.copy2(str(source), str(destination))
-        return "copy"
-    raise ValueError("review.materialize_images must be copy, hardlink, or hardlink_or_copy")
+    shutil.copy2(str(source), str(destination))
 
 
 def _prepare_negative_review_workspace(
     config: Mapping[str, Any],
     review: Mapping[str, Any],
     snapshot_root: Path,
-    final_output_root: Path,
     source_labels_sha256: str,
 ) -> Dict[str, Any]:
     paths = _negative_review_paths(config, review)
@@ -402,29 +389,24 @@ def _prepare_negative_review_workspace(
         candidates_subdir = paths["candidates_dir"].relative_to(workspace)
         queue = read_jsonl(snapshot_root / "audit" / "negative_review_queue.jsonl")
         manifest_rows: List[Dict[str, Any]] = []
-        mode = str(review.get("materialize_images") or "hardlink_or_copy")
         seen_relative = set()
         for row in queue:
-            final_review_path = Path(str(row.get("review_crop_path") or ""))
-            try:
-                snapshot_relative = final_review_path.relative_to(final_output_root)
-            except ValueError as exc:
-                raise ValueError(
-                    "Review crop is outside the configured curation output: {}".format(
-                        final_review_path
-                    )
-                ) from exc
-            source = snapshot_root / snapshot_relative
+            source = Path(str(row.get("crop_path") or ""))
             if not source.is_file():
-                raise FileNotFoundError("Materialized review crop is missing: {}".format(source))
+                raise FileNotFoundError("Negative review source crop is missing: {}".format(source))
             sample_type = _safe_path_component(row.get("sample_type"))
             dataset_id = _safe_path_component(row.get("dataset_id"))
-            candidate_relative = Path(sample_type) / dataset_id / source.name
+            digest = hashlib.sha256(
+                str(row.get("crop_id")).encode("utf-8")
+            ).hexdigest()[:20]
+            candidate_relative = (
+                Path(sample_type) / dataset_id / (digest + "__" + source.name)
+            )
             if candidate_relative.as_posix() in seen_relative:
                 raise ValueError("Duplicate review candidate path: {}".format(candidate_relative))
             seen_relative.add(candidate_relative.as_posix())
             destination = temporary / candidates_subdir / candidate_relative
-            used_mode = _materialize_review_candidate(source, destination, mode)
+            _copy_review_candidate(source, destination)
             expected_hash = str(
                 ((row.get("pretrain_curation") or {}).get("review_image_sha256") or "")
             )
@@ -445,7 +427,7 @@ def _prepare_negative_review_workspace(
                     "automatic_reasons": list(
                         (row.get("pretrain_curation") or {}).get("reasons") or []
                     ),
-                    "materialization_method": used_mode,
+                    "source_crop_path": str(source.resolve()),
                 }
             )
         manifest_rows.sort(key=lambda row: str(row["crop_id"]))
@@ -617,117 +599,102 @@ def _stable_smoke_subset(
     return selected
 
 
-def _materialize_crop(
+def _reference_crop(
     row: Mapping[str, Any],
-    temporary_root: Path,
-    final_root: Path,
-    mode: str,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     source = Path(str(row.get("crop_path") or ""))
     if not source.is_file():
         raise FileNotFoundError("Canonical crop does not exist: {}".format(source))
-    digest = hashlib.sha256(str(row.get("crop_id")).encode("utf-8")).hexdigest()[:20]
-    dataset_id = "".join(
-        character if character.isalnum() or character in {"-", "_"} else "_"
-        for character in str(row.get("dataset_id") or "unknown")
-    )
-    suffix = source.suffix.lower() or ".png"
-    relative = Path("images") / dataset_id / (digest + "__" + source.stem + suffix)
-    temporary = temporary_root / relative
-    final = final_root / relative
-    temporary.parent.mkdir(parents=True, exist_ok=True)
-    used_mode = mode
-    if mode in {"hardlink", "hardlink_or_copy"}:
-        try:
-            os.link(str(source), str(temporary))
-            used_mode = "hardlink"
-        except OSError:
-            if mode == "hardlink":
-                raise
-            shutil.copy2(str(source), str(temporary))
-            used_mode = "copy"
-    elif mode == "copy":
-        shutil.copy2(str(source), str(temporary))
-    else:
-        raise ValueError("materialize_images must be copy, hardlink, or hardlink_or_copy")
-    image_sha256 = sha256_file(temporary)
+    source = source.resolve()
+    image_sha256 = sha256_file(source)
     value = dict(row)
-    value["crop_path"] = str(final)
+    value["crop_path"] = str(source)
     value["pretrain_curation"] = dict(value["pretrain_curation"])
     value["pretrain_curation"].update(
         {
-            "original_crop_path": str(source.resolve()),
-            "materialized_crop_path": str(final),
-            "materialization_method": used_mode,
+            "image_storage": "train_sources_reference",
             "image_sha256": image_sha256,
         }
     )
+    review = value["pretrain_curation"].get("review") or {}
+    reviewed_hash = str(review.get("review_image_sha256") or "")
+    if reviewed_hash and image_sha256 != reviewed_hash:
+        raise RuntimeError(
+            "Reviewed source crop changed after visual review: {}".format(source)
+        )
     manifest = {
         "crop_id": str(row.get("crop_id")),
-        "relative_path": relative.as_posix(),
-        "source_path": str(source.resolve()),
+        "path": str(source),
         "sha256": image_sha256,
-        "size_bytes": int(temporary.stat().st_size),
-        "materialization_method": used_mode,
+        "size_bytes": int(source.stat().st_size),
+        "storage": "train_sources_reference",
     }
     return value, manifest
 
 
-def _materialize_review_crop(
+def _reference_review_crop(
     row: Mapping[str, Any],
-    temporary_root: Path,
-    final_root: Path,
-    mode: str,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Freeze a held candidate for later human review without training it."""
-
+    """Record a held source crop for later workspace generation."""
     source = Path(str(row.get("crop_path") or ""))
     if not source.is_file():
         raise FileNotFoundError("Negative review crop does not exist: {}".format(source))
-    digest = hashlib.sha256(str(row.get("crop_id")).encode("utf-8")).hexdigest()[:20]
-    dataset_id = "".join(
-        character if character.isalnum() or character in {"-", "_"} else "_"
-        for character in str(row.get("dataset_id") or "unknown")
-    )
-    suffix = source.suffix.lower() or ".png"
-    relative = Path("review_images") / dataset_id / (digest + "__" + source.stem + suffix)
-    temporary = temporary_root / relative
-    final = final_root / relative
-    temporary.parent.mkdir(parents=True, exist_ok=True)
-    used_mode = mode
-    if mode in {"hardlink", "hardlink_or_copy"}:
-        try:
-            os.link(str(source), str(temporary))
-            used_mode = "hardlink"
-        except OSError:
-            if mode == "hardlink":
-                raise
-            shutil.copy2(str(source), str(temporary))
-            used_mode = "copy"
-    elif mode == "copy":
-        shutil.copy2(str(source), str(temporary))
-    else:
-        raise ValueError("materialize_images must be copy, hardlink, or hardlink_or_copy")
-    digest_value = sha256_file(temporary)
+    source = source.resolve()
+    digest_value = sha256_file(source)
     value = dict(row)
-    value["review_crop_path"] = str(final)
+    value["crop_path"] = str(source)
     value["pretrain_curation"] = dict(value["pretrain_curation"])
     value["pretrain_curation"].update(
         {
-            "review_original_crop_path": str(source.resolve()),
-            "review_materialized_crop_path": str(final),
-            "review_materialization_method": used_mode,
+            "review_image_storage": "train_sources_reference",
             "review_image_sha256": digest_value,
         }
     )
     return value, {
         "crop_id": str(row.get("crop_id")),
-        "relative_path": relative.as_posix(),
-        "source_path": str(source.resolve()),
+        "path": str(source),
         "sha256": digest_value,
-        "size_bytes": int(temporary.stat().st_size),
-        "materialization_method": used_mode,
+        "size_bytes": int(source.stat().st_size),
+        "storage": "train_sources_reference",
     }
+
+
+def _verify_existing_source_snapshot(
+    output_dir: Path,
+    image_manifest: Sequence[Mapping[str, Any]],
+    review_manifest: Sequence[Mapping[str, Any]],
+) -> None:
+    """Fail if source ROI bytes changed between curation and review finalization."""
+
+    if not output_dir.exists():
+        return
+    old_rows: List[Mapping[str, Any]] = []
+    for relative in (
+        Path("audit") / "image_manifest.jsonl",
+        Path("audit") / "review_image_manifest.jsonl",
+    ):
+        path = output_dir / relative
+        if not path.is_file():
+            raise ValueError("Existing curation snapshot lacks {}".format(path))
+        old_rows.extend(read_jsonl(path))
+    old_hashes = {str(row.get("crop_id")): str(row.get("sha256")) for row in old_rows}
+    new_hashes = {
+        str(row.get("crop_id")): str(row.get("sha256"))
+        for row in [*image_manifest, *review_manifest]
+    }
+    if old_hashes.keys() != new_hashes.keys():
+        raise RuntimeError("Source ROI membership changed after the initial curation snapshot")
+    changed = sorted(
+        crop_id
+        for crop_id, digest in old_hashes.items()
+        if new_hashes.get(crop_id) != digest
+    )
+    if changed:
+        raise RuntimeError(
+            "Source ROI bytes changed after the initial curation snapshot: {}".format(
+                changed[:10]
+            )
+        )
 
 
 def _counter_dict(values: Iterable[Any]) -> Dict[str, int]:
@@ -739,7 +706,7 @@ def curate_pretrain_from_config(
     overwrite: Optional[bool] = None,
     finalize_review: bool = False,
 ) -> Dict[str, Any]:
-    """Create an immutable-on-success curated pretrain snapshot on disk."""
+    """Create an authenticated curated pretrain index on disk."""
 
     cfg = _config_mapping(config)
     if str(cfg.get("task")) != "curate_pretrain":
@@ -751,6 +718,12 @@ def curate_pretrain_from_config(
     source_labels = resolve_path(source_cfg.get("labels", ""), cfg)
     if not source_labels.is_file():
         raise FileNotFoundError("Source pretrain labels not found: {}".format(source_labels))
+    source_crop_root_value = source_cfg.get("crop_root")
+    if not str(source_crop_root_value or "").strip():
+        raise ValueError("source.crop_root is required")
+    source_crop_root = resolve_path(str(source_crop_root_value), cfg)
+    if not source_crop_root.is_dir():
+        raise FileNotFoundError("Configured train source ROI root not found: {}".format(source_crop_root))
     output_dir = resolve_path(output_cfg.get("dir", ""), cfg)
     if not str(output_cfg.get("dir", "")):
         raise ValueError("output.dir is required")
@@ -777,6 +750,17 @@ def curate_pretrain_from_config(
     if duplicates:
         raise ValueError("Duplicate crop_id values in source labels: {}".format(duplicates[:10]))
     source_crops = [Path(str(row.get("crop_path") or "")) for row in records]
+    outside_source_root = [
+        str(path)
+        for path in source_crops
+        if not path.is_file() or not _is_within(path, source_crop_root)
+    ]
+    if outside_source_root:
+        raise ValueError(
+            "Every source crop must be an existing file under source.crop_root {}: {}".format(
+                source_crop_root, outside_source_root[:10]
+            )
+        )
     _guard_curation_output(
         output_dir, source_labels, source_crops, allow_overwrite
     )
@@ -905,39 +889,37 @@ def curate_pretrain_from_config(
     )
     try:
         assert temporary_dir is not None
-        materialization_mode = str(output_cfg.get("materialize_images", "hardlink_or_copy"))
-        materialized_by_id: Dict[str, Dict[str, Any]] = {}
+        referenced_by_id: Dict[str, Dict[str, Any]] = {}
         image_manifest: List[Dict[str, Any]] = []
         for row in included_positive_source + confirmed_negative_source:
-            value, image_entry = _materialize_crop(
-                row, temporary_dir, output_dir, materialization_mode
-            )
-            materialized_by_id[str(row["crop_id"])] = value
+            value, image_entry = _reference_crop(row)
+            referenced_by_id[str(row["crop_id"])] = value
             image_manifest.append(image_entry)
-        review_materialized: List[Dict[str, Any]] = []
+        review_referenced: List[Dict[str, Any]] = []
         review_image_manifest: List[Dict[str, Any]] = []
         for row in negative_review_queue:
-            value, image_entry = _materialize_review_crop(
-                row, temporary_dir, output_dir, materialization_mode
-            )
-            review_materialized.append(value)
+            value, image_entry = _reference_review_crop(row)
+            review_referenced.append(value)
             review_image_manifest.append(image_entry)
-        negative_review_queue = review_materialized
+        negative_review_queue = review_referenced
         ending_source_hash = sha256_file(source_labels)
         if ending_source_hash != source_hash:
             raise RuntimeError(
                 "Source labels changed while the curation snapshot was being built"
             )
         included_landmarks = [
-            materialized_by_id[str(row["crop_id"])] for row in included_positive_source
+            referenced_by_id[str(row["crop_id"])] for row in included_positive_source
         ]
         multitask = included_landmarks + [
-            materialized_by_id[str(row["crop_id"])] for row in confirmed_negative_source
+            referenced_by_id[str(row["crop_id"])] for row in confirmed_negative_source
         ]
         included_landmarks.sort(key=lambda row: str(row["crop_id"]))
         multitask.sort(key=lambda row: str(row["crop_id"]))
         image_manifest.sort(key=lambda row: str(row["crop_id"]))
         review_image_manifest.sort(key=lambda row: str(row["crop_id"]))
+        _verify_existing_source_snapshot(
+            output_dir, image_manifest, review_image_manifest
+        )
         smoke_count = int(rules.get("smoke_subset_size", 128))
         smoke = _stable_smoke_subset(
             included_landmarks,
@@ -998,7 +980,7 @@ def curate_pretrain_from_config(
         }
         image_aggregate = hashlib.sha256(
             "".join(
-                "{}:{}\n".format(row["relative_path"], row["sha256"])
+                "{}:{}\n".format(row["path"], row["sha256"])
                 for row in image_manifest
             ).encode("utf-8")
         ).hexdigest()
@@ -1013,6 +995,7 @@ def curate_pretrain_from_config(
             "source": {
                 "labels": str(source_labels),
                 "labels_sha256": source_hash,
+                "crop_root": str(source_crop_root.resolve()),
                 "record_count": len(records),
             },
             "negative_review_decisions": review_source,
@@ -1030,16 +1013,18 @@ def curate_pretrain_from_config(
                 "count": len(image_manifest),
                 "aggregate_sha256": image_aggregate,
                 "manifest": "audit/image_manifest.jsonl",
+                "storage": "train_sources_reference",
             },
-            "review_images": {
+            "review_candidates": {
                 "count": len(review_image_manifest),
                 "manifest": "audit/review_image_manifest.jsonl",
                 "aggregate_sha256": hashlib.sha256(
                     "".join(
-                        "{}:{}\n".format(row["relative_path"], row["sha256"])
+                        "{}:{}\n".format(row["path"], row["sha256"])
                         for row in review_image_manifest
                     ).encode("utf-8")
                 ).hexdigest(),
+                "storage": "train_sources_reference",
             },
         }
         manifest_path = qc_dir / "sha256_manifest.json"
@@ -1049,6 +1034,7 @@ def curate_pretrain_from_config(
             "schema_version": CURATION_SCHEMA,
             "source_labels": str(source_labels),
             "source_labels_sha256": source_hash,
+            "source_crop_root": str(source_crop_root.resolve()),
             "negative_review_decisions": review_source,
             "negative_review_workspace": None,
             "output_dir": str(output_dir),
@@ -1090,7 +1076,6 @@ def curate_pretrain_from_config(
                 cfg,
                 review_cfg,
                 temporary_dir,
-                output_dir,
                 source_hash,
             )
         write_json(report_path, report)

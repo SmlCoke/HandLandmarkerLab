@@ -629,7 +629,7 @@ def audit_canonical_dataset(
                 )
                 if expected_image_hash and image_hash != str(expected_image_hash):
                     row_errors.append(
-                        "materialized image hash does not match pretrain_curation.image_sha256"
+                        "source image hash does not match pretrain_curation.image_sha256"
                     )
             except OSError as exc:
                 row_errors.append("could not hash image: {}".format(exc))
