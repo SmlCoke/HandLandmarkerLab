@@ -31,6 +31,7 @@ BN_EPSILON = 1.0e-5
 BN_MOMENTUM = 0.9
 STAGE_CHANNELS = (24, 32, 64, 128, 192, 256, 384)
 DEFAULT_STAGE_ITERATIONS = (2, 2, 3, 4, 4, 6, 6)
+MAX_DEPTHWISE_CHANNELS = 128
 
 
 def _fuse_conv_bn(kernel, bn: BatchNormalization, depthwise: bool = False):
@@ -178,13 +179,22 @@ def _normalize_stage_iterations(num_iterations) -> Tuple[int, ...]:
     raise ValueError("num_iterations must be an int or a list/tuple of 7 positive ints")
 
 
+def _bottleneck_channels(filters: int) -> int:
+    """Keep depthwise groups within the previously converted A1 envelope."""
+
+    return min(max(8, int(filters) // 2), MAX_DEPTHWISE_CHANNELS)
+
+
 def _residual_blocks(x, filters: int, iterations: int, prefix: str, deploy: bool):
     for index in range(iterations):
         block = "{}_{}".format(prefix, index + 1)
         x = ReLU(name=block + "_input_relu")(x)
         shortcut = x
         x = RepConv2D(
-            filters // 2, kernel_size=1, padding="valid", deploy=deploy,
+            _bottleneck_channels(filters),
+            kernel_size=1,
+            padding="valid",
+            deploy=deploy,
             name=block + "_reduce",
         )(x)
         x = ReLU(name=block + "_reduce_relu")(x)
@@ -210,7 +220,11 @@ def _downsample_block(x, filters: int, channel_align: bool, prefix: str, deploy:
             name=prefix + "_shortcut_align",
         )(shortcut)
     x = RepConv2D(
-        filters // 2, kernel_size=2, strides=2, padding="valid", deploy=deploy,
+        _bottleneck_channels(filters),
+        kernel_size=2,
+        strides=2,
+        padding="valid",
+        deploy=deploy,
         name=prefix + "_downsample",
     )(x)
     x = ReLU(name=prefix + "_downsample_relu")(x)
@@ -258,7 +272,9 @@ def hand_landmark_2d_model(
         kernel_size=2,
         padding="valid",
         use_bias=True,
-        kernel_initializer="zeros",
+        kernel_initializer=tf.keras.initializers.RandomNormal(
+            mean=0.0, stddev=0.001, seed=20260715
+        ),
         bias_initializer="zeros",
         name="conv_handflag",
     )(x)
@@ -268,7 +284,9 @@ def hand_landmark_2d_model(
         kernel_size=2,
         padding="valid",
         use_bias=True,
-        kernel_initializer="zeros",
+        kernel_initializer=tf.keras.initializers.RandomNormal(
+            mean=0.0, stddev=0.001, seed=20260716
+        ),
         bias_initializer="zeros",
         name="conv_handedness",
     )(x)

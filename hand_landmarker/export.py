@@ -75,12 +75,17 @@ def _numeric_parity(
         "random_samples": int(random_samples),
         "cases": {},
     }
+    collected_onnx_outputs: List[List[Any]] = []
     for name, tensor in cases.items():
         keras_values = model(tensor, training=False)
         if not isinstance(keras_values, (list, tuple)):
             keras_values = [keras_values]
         keras_arrays = [np.asarray(value) for value in keras_values]
         onnx_arrays = [np.asarray(value) for value in session.run(None, {input_name: tensor})]
+        if not collected_onnx_outputs:
+            collected_onnx_outputs = [[] for _value in onnx_arrays]
+        for output_index, value in enumerate(onnx_arrays):
+            collected_onnx_outputs[output_index].append(value.reshape(-1))
         if len(keras_arrays) != len(onnx_arrays):
             raise ValueError("ONNX output count differs from Keras")
         maximums = []
@@ -155,6 +160,19 @@ def _numeric_parity(
             "keras_output_ranges": keras_ranges,
             "onnx_output_ranges": onnx_ranges,
         }
+    report["aggregate_onnx_output_ranges"] = []
+    for values in collected_onnx_outputs:
+        combined = np.concatenate(values).astype(np.float64)
+        minimum = float(np.min(combined))
+        maximum = float(np.max(combined))
+        report["aggregate_onnx_output_ranges"].append(
+            {
+                "minimum": minimum,
+                "maximum": maximum,
+                "dynamic_range": maximum - minimum,
+                "standard_deviation": float(np.std(combined)),
+            }
+        )
     return report
 
 
@@ -248,6 +266,79 @@ def _a1_attribute_audit(graph, onnx_module) -> Dict[str, Any]:
             if not kernel or any(int(value) <= 0 or int(value) > 8 for value in kernel):
                 add(node, "MaxPool kernel dimensions must be in [1,8]", kernel)
     return {"checked_nodes": checked, "violations": violations}
+
+
+def _quantization_readiness_audit(
+    graph, onnx_module, maximum_depthwise_group: int = 128
+) -> Dict[str, Any]:
+    """Reject graph degeneracies known to break the A1 INT8 quantizer."""
+
+    import numpy as np
+
+    maximum_group = int(maximum_depthwise_group)
+    if maximum_group < 1:
+        raise ValueError("export.maximum_depthwise_group must be positive")
+    initializers = {
+        item.name: onnx_module.numpy_helper.to_array(item)
+        for item in graph.graph.initializer
+    }
+    violations: List[Dict[str, Any]] = []
+    checked_conv_count = 0
+    grouped_conv_count = 0
+    observed_maximum_group = 1
+    for node in graph.graph.node:
+        if node.op_type != "Conv":
+            continue
+        checked_conv_count += 1
+        weights = initializers.get(node.input[1]) if len(node.input) > 1 else None
+        if weights is None:
+            violations.append(
+                {
+                    "node": str(node.name or "<unnamed>"),
+                    "rule": "Conv weights must be a static initializer for quantization",
+                    "value": None,
+                }
+            )
+            continue
+        if not np.all(np.isfinite(weights)):
+            violations.append(
+                {
+                    "node": str(node.name or "<unnamed>"),
+                    "rule": "Conv weights must be finite",
+                    "value": None,
+                }
+            )
+        elif not np.any(weights != 0.0):
+            violations.append(
+                {
+                    "node": str(node.name or "<unnamed>"),
+                    "rule": "Conv weight tensor must not be entirely zero",
+                    "value": list(weights.shape),
+                }
+            )
+        attributes = {
+            item.name: onnx_module.helper.get_attribute_value(item)
+            for item in node.attribute
+        }
+        group = int(attributes.get("group", 1))
+        observed_maximum_group = max(observed_maximum_group, group)
+        if group > 1:
+            grouped_conv_count += 1
+        if group > maximum_group:
+            violations.append(
+                {
+                    "node": str(node.name or "<unnamed>"),
+                    "rule": "Depthwise/grouped Conv group exceeds verified A1 envelope",
+                    "value": group,
+                }
+            )
+    return {
+        "checked_conv_count": checked_conv_count,
+        "grouped_conv_count": grouped_conv_count,
+        "maximum_depthwise_group": maximum_group,
+        "observed_maximum_group": observed_maximum_group,
+        "violations": violations,
+    }
 
 
 def _guard_export_outputs(output_path: Path, contract_path: Path, overwrite: bool) -> None:
@@ -472,6 +563,38 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
                     attribute_audit["violations"]
                 )
             )
+        quantization_audit = _quantization_readiness_audit(
+            graph,
+            onnx,
+            maximum_depthwise_group=int(
+                export_config.get("maximum_depthwise_group", 128)
+            ),
+        )
+        if quantization_audit["violations"]:
+            raise ValueError(
+                "ONNX is not ready for A1 INT8 quantization: {}".format(
+                    quantization_audit["violations"]
+                )
+            )
+        minimum_output_range = float(
+            export_config.get("minimum_quantization_output_range", 1.0e-6)
+        )
+        if not math.isfinite(minimum_output_range) or minimum_output_range <= 0.0:
+            raise ValueError(
+                "export.minimum_quantization_output_range must be positive and finite"
+            )
+        inactive_outputs = [
+            index
+            for index, value in enumerate(
+                parity.get("aggregate_onnx_output_ranges", [])
+            )
+            if float(value.get("dynamic_range", 0.0)) < minimum_output_range
+        ]
+        if inactive_outputs:
+            raise ValueError(
+                "ONNX output head(s) {} are constant across quantization probes; "
+                "refusing a degenerate INT8 preflight".format(inactive_outputs)
+            )
         # Build conversion inputs only after the temporary ONNX has passed all
         # interface, operator, and parity checks.  A dataset failure therefore
         # cannot replace the final ONNX artifact.
@@ -503,6 +626,13 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "forced": force_a1_operator_export,
             "enforced": enforce_a1_operator_contract,
             "attributes": attribute_audit,
+        },
+        "quantization_readiness": {
+            "graph": quantization_audit,
+            "minimum_output_range": minimum_output_range,
+            "aggregate_output_ranges": parity.get(
+                "aggregate_onnx_output_ranges", []
+            ),
         },
         "numeric_parity": parity,
         "reparameterization_parity": fusion_parity,

@@ -1,8 +1,9 @@
 extends: export.yaml
 
-# This wrapper exports deterministic random initialization only.  It proves
-# graph/operator/toolchain compatibility before any expensive training run;
-# it is never an accuracy model.
+# This wrapper exports disposable deterministic nonzero quantization-probe
+# weights. It proves graph/operator/INT8-toolchain compatibility before any
+# expensive training run; it never changes training initialization and is not
+# an accuracy model.
 experiment:
   name: hand_landmarker_v2_export_preflight
   seed: 20260714

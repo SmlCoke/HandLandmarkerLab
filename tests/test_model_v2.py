@@ -26,6 +26,28 @@ class V2StaticContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TENSORFLOW, "TensorFlow is available only in the server environment")
 class V2TensorFlowContractTests(unittest.TestCase):
+    def test_preflight_quantization_probe_removes_training_stability_zeros(self):
+        import numpy as np
+
+        from models.hand_landmarker.registry import build_model
+        from scripts.build_export_preflight import prepare_quantization_probe_weights
+
+        model = build_model("v2", num_iterations=[1, 1, 1, 1, 1, 1, 1])
+        report = prepare_quantization_probe_weights(model, seed=20260714)
+        self.assertGreater(report["activated_batch_norm_count"], 0)
+        self.assertEqual(
+            ["convld_21_2d", "conv_handflag", "conv_handedness"],
+            report["activated_heads"],
+        )
+        for name in report["activated_heads"]:
+            kernel, _bias = model.get_layer(name).get_weights()
+            self.assertTrue(np.any(kernel != 0.0))
+        for layer in model.layers:
+            batch_norm = getattr(layer, "train_bn", None)
+            if batch_norm is not None:
+                gamma = batch_norm.get_weights()[0]
+                self.assertTrue(np.any(gamma != 0.0))
+
     def test_interface_and_branch_fusion_parity(self):
         import numpy as np
 
@@ -45,8 +67,9 @@ class V2TensorFlowContractTests(unittest.TestCase):
         tensor = np.random.RandomState(7).uniform(0, 1, (1, 1, 256, 256)).astype("float32")
         initial = training_model(tensor, training=False)
         self.assertTrue(np.allclose(initial[0], 0.5))
-        self.assertTrue(np.allclose(initial[1], 0.5))
-        self.assertTrue(np.allclose(initial[2], 0.5))
+        for scalar_head in initial[1:]:
+            self.assertTrue(np.all(np.isfinite(scalar_head)))
+            self.assertLess(float(np.max(np.abs(scalar_head - 0.5))), 0.1)
 
         # Make every folded BN and all three heads non-trivial so parity cannot
         # pass merely because the initial head kernels are zero.

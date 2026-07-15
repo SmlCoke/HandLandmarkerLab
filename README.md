@@ -9,7 +9,7 @@ pretrain 分为两个显式阶段：
 
 未经人工复核的 `NEG_*_CANDIDATE` 是 teacher abstention，不是可信无手样本。系统会把它们及其 ROI 持久化到审查包，但 `make pretrain-multitask` 会 fail-closed，绝不会自动把它们作为负例训练。
 
-详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md) 和 [v2 smoke 失败与架构恢复](docs/training_history/2026-07-15_v2_smoke_failure_and_architecture_recovery.md)。
+详细的分阶段原理、删除式负例复核和逐步命令见 [Pretrain 数据与分阶段训练操作手册](docs/training_system/data_and_training.md)。历史故障证据见 [两次 pretrain 失败分析与恢复方案](docs/training_history/2026-07-14_pretrain_failure_analysis_and_recovery.md)、[v2 smoke 失败与架构恢复](docs/training_history/2026-07-15_v2_smoke_failure_and_architecture_recovery.md) 和 [preflight 量化失败分析](docs/training_history/2026-07-15_preflight_quantization_failure.md)。
 
 ## 固定接口
 
@@ -29,10 +29,11 @@ Val/Test 直接读取 canonical 256×256 Hand ROI，只运行 Hand Landmarker。
 
 - 使用普通 ReLU，不再产生官方转换工具已拒绝的 LeakyReLU；
 - 训练期使用稳定的 Conv+BN 残差块，残差尾部零初始化，避免深层输出爆炸；
-- landmark head 从归一化坐标 `0.5` 起步，两个概率 head 从 `0.5` 起步；
+- landmark head 从归一化坐标 `0.5` 起步，两个概率 head 使用极小的确定性权重、从接近 `0.5` 起步；
 - 导出前把每个 BN 精确折叠为单个带 bias 的 Conv；
+- depthwise/grouped Conv 的 group 保守限制为不超过 128；
 - ONNX 严格算子集合为 `Conv/Add/Relu/MaxPool/Sigmoid/Identity/Reshape`；
-- 导出器对实际 ONNX 强制执行 `15 MiB` 大小上限；
+- 导出器拒绝全零 Conv、恒定输出和超过 group 上限的图，并对实际 ONNX 强制执行 `15 MiB` 大小上限；
 - 输入、输出名称、顺序和 shape 不变。
 
 multitask checkpoint 使用 geometry-first 的 `val_multitask_score`，同时考虑 landmark MAE、presence accuracy 和 handedness accuracy，但分类误差只占较小权重。
@@ -59,7 +60,7 @@ make eval-test-geometry
 make infer-geometry
 ```
 
-`make test` 需要当前 ID 的 curated Train 以及已冻结 Val/Test，因此放在 `make pretrain-curate` 之后。它先运行单元测试，再生成一个固定随机初始化、不可用于精度评估的 v2 ONNX 和真实 Train/Val/Test 转换输入。该产物用于在正式训练前提交官方工具链验证结构兼容性：
+`make test` 需要当前 ID 的 curated Train 以及已冻结 Val/Test，因此放在 `make pretrain-curate` 之后。它先运行单元测试，再生成一个不可用于精度评估的 v2 ONNX 和真实 Train/Val/Test 转换输入。preflight 使用确定性的非零量化探针权重，避免“全零卷积、恒定输出”让 INT8 工具无法计算量化点；这些一次性权重不会改变正式训练初始化。该产物用于在正式训练前提交官方工具链验证结构兼容性：
 
 ```text
 hand_landmarker_runs/<HAND_PRETRAIN_ID>/export/preflight/

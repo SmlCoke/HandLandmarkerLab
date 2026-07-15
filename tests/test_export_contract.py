@@ -3,9 +3,12 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 from hand_landmarker.export import (
     _a1_attribute_audit,
     _guard_export_outputs,
+    _quantization_readiness_audit,
     _validated_model_size,
 )
 
@@ -21,8 +24,24 @@ def _attribute(name, value):
 
 
 def _graph(nodes, weights):
-    initializers = [SimpleNamespace(name=name, dims=dims) for name, dims in weights.items()]
+    initializers = [
+        SimpleNamespace(name=name, dims=value.shape, array=value)
+        for name, value in weights.items()
+    ]
     return SimpleNamespace(graph=SimpleNamespace(node=nodes, initializer=initializers))
+
+
+def _weights(**shapes):
+    return {
+        name: np.ones(shape, dtype=np.float32)
+        for name, shape in shapes.items()
+    }
+
+
+ONNX_STUB = SimpleNamespace(
+    helper=_Helper,
+    numpy_helper=SimpleNamespace(to_array=lambda item: item.array),
+)
 
 
 class A1ExportAuditTests(unittest.TestCase):
@@ -47,7 +66,7 @@ class A1ExportAuditTests(unittest.TestCase):
             SimpleNamespace(name="activation", op_type="Relu", input=["x"], attribute=[]),
         ]
         report = _a1_attribute_audit(
-            _graph(nodes, {"w": [16, 8, 3, 3]}), SimpleNamespace(helper=_Helper)
+            _graph(nodes, _weights(w=(16, 8, 3, 3))), SimpleNamespace(helper=_Helper)
         )
         self.assertEqual(report["violations"], [])
 
@@ -67,13 +86,41 @@ class A1ExportAuditTests(unittest.TestCase):
             ),
         ]
         report = _a1_attribute_audit(
-            _graph(nodes, {"w": [16, 300, 3, 3]}), SimpleNamespace(helper=_Helper)
+            _graph(nodes, _weights(w=(16, 300, 3, 3))), SimpleNamespace(helper=_Helper)
         )
         rules = [item["rule"] for item in report["violations"]]
         self.assertTrue(any("stride" in value for value in rules))
         self.assertTrue(any("2048" in value for value in rules))
         self.assertTrue(any("MaxPool" in value for value in rules))
         self.assertEqual({"Conv", "MaxPool"}, set(report["checked_nodes"]))
+
+    def test_quantization_readiness_rejects_zero_weights_and_excessive_group(self):
+        node = SimpleNamespace(
+            name="depthwise",
+            op_type="Conv",
+            input=["x", "w"],
+            attribute=[_attribute("group", 192)],
+        )
+        graph = _graph(
+            [node], {"w": np.zeros((192, 1, 3, 3), dtype=np.float32)}
+        )
+        report = _quantization_readiness_audit(graph, ONNX_STUB)
+        rules = [item["rule"] for item in report["violations"]]
+        self.assertTrue(any("entirely zero" in rule for rule in rules))
+        self.assertTrue(any("exceeds" in rule for rule in rules))
+        self.assertEqual(192, report["observed_maximum_group"])
+
+    def test_quantization_readiness_accepts_nonzero_group_128(self):
+        node = SimpleNamespace(
+            name="depthwise",
+            op_type="Conv",
+            input=["x", "w"],
+            attribute=[_attribute("group", 128)],
+        )
+        graph = _graph([node], _weights(w=(128, 1, 3, 3)))
+        report = _quantization_readiness_audit(graph, ONNX_STUB)
+        self.assertEqual([], report["violations"])
+        self.assertEqual(128, report["observed_maximum_group"])
 
     def test_contract_and_onnx_share_the_same_overwrite_guard(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -25,6 +25,8 @@ export:
   output_names: [landmarks, hand_flag, handedness]
   dynamic_batch: false
   maximum_model_size_mb: 15.0
+  maximum_depthwise_group: 128
+  minimum_quantization_output_range: 1.0e-6
   overwrite: false
   strict_a1_operators: true
   a1_allowed_operators: [Conv, Add, Relu, MaxPool, Sigmoid, Identity, Reshape]

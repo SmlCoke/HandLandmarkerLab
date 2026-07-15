@@ -72,6 +72,7 @@ multitask 完成后使用 `make export-multitask`。目标名直接决定 checkp
 - 输出元素数、语义顺序和 shape 检查；
 - A1 算子白名单及属性检查；
 - zeros/ones/random 输入的 Keras↔ONNX 数值比对；
+- INT8 量化准备检查：所有 Conv 权重必须有限且不能整张量为零，group 不得超过 128，三个输出均须对探针输入产生非零动态范围；
 - 输出 `.contract.json`，把配置的 `model.checkpoint_stage` 记为 `model_checkpoint_stage`，并包含权重/ONNX SHA-256、operators、属性审计、I/O、数值误差和输出范围。
 
 属性门禁来自当前 A1 project-9 约束，不只检查算子名称：
@@ -87,11 +88,11 @@ multitask 完成后使用 `make export-multitask`。目标名直接决定 checkp
 make export-geometry EXPORT_ARGS=--force
 ```
 
-该参数只绕过 A1 算子名称与属性门禁。`onnx.checker`、固定 I/O/类型/shape、静态 batch、opset 11、Keras↔ONNX 数值比对、转换数据检查和覆盖保护仍然执行。contract 的 `a1_operator_audit` 会保留 `unsupported` 与属性违规，并记录 `strict: true`、`forced: true`、`enforced: false`。若目标产物已存在，仍需单独、显式追加 `--overwrite`。
+该参数只绕过 A1 算子名称与属性门禁。`onnx.checker`、固定 I/O/类型/shape、静态 batch、opset 11、Keras↔ONNX 数值比对、量化准备检查、转换数据检查和覆盖保护仍然执行。全零 Conv、恒定输出或 group 超限不能用 `--force` 绕过。contract 的 `a1_operator_audit` 会保留 `unsupported` 与属性违规，并记录 `strict: true`、`forced: true`、`enforced: false`。若目标产物已存在，仍需单独、显式追加 `--overwrite`。
 
 目标优化图应只包含 `Conv/Add/Relu/MaxPool/Sigmoid/Reshape`（允许无语义的 Identity）。`Reshape` 已确认属于当前官方白名单；`LeakyRelu` 已被当前官方转换工具拒绝。训练期 BatchNormalization 必须在导出前折叠；若最终 ONNX 仍出现 BatchNormalization、LeakyRelu、Transpose、动态 shape、Div、Softmax 等，严格导出会失败，不应继续送入 A1 工具链。
 
-默认 parity 探针是 1 个全零、1 个全一和 4 个固定随机种子的 `[0,1]` 输入。契约报告对每个探针、每个输出 head 分别记录最大绝对/相对误差，并同时记录 Keras 与 ONNX 的 minimum、maximum、max-abs；landmark 输出还记录按板端规则推导的 scale divisor。验收使用配置中的 `atol=1e-5`、`rtol=1e-4` 做逐元素 `allclose`，任一 case/head 失败即中止导出。这里验证的是 Keras 与 ONNX 的数值等价及合成输入下的输出健康度，不是数据集精度，也不是 `.m1model` 板端实测。
+默认 parity 探针是 1 个全零、1 个全一和 4 个固定随机种子的 `[0,1]` 输入。契约报告对每个探针、每个输出 head 分别记录最大绝对/相对误差，并同时记录 Keras 与 ONNX 的 minimum、maximum、max-abs；还会聚合每个输出的动态范围和标准差。landmark 输出另记录按板端规则推导的 scale divisor。验收使用配置中的 `atol=1e-5`、`rtol=1e-4` 做逐元素 `allclose`，任一 case/head 失败即中止导出；任一输出聚合动态范围小于 `1e-6` 也会中止。这里验证的是 Keras 与 ONNX 的数值等价及合成输入下的输出健康度，不是数据集精度，也不是 `.m1model` 板端实测。
 
 默认产物按 checkpoint 阶段隔离：
 
@@ -113,7 +114,7 @@ ${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/export/preflight/
 └── model_conversion/datasets.zip
 ```
 
-它采用固定随机初始化，只用于提前提交 A1 官方转换工具验证结构和算子，不能用于推理效果或精度评估。正式 checkpoint 和 preflight 都执行真实 ONNX `maximum_model_size_mb: 15.0` 门禁；contract 记录 `model_size_bytes/model_size_mb`。
+它采用确定性的、非零的 disposable 量化探针权重，只用于提前提交 A1 官方转换工具验证结构、算子和 INT8 量化路径，不能用于推理效果或精度评估。正式训练仍使用模型定义中的稳定初始化；preflight 不会回写或改变训练配置。正式 checkpoint 和 preflight 都执行真实 ONNX `maximum_model_size_mb: 15.0` 门禁；contract 记录 `model_size_bytes/model_size_mb` 和 `quantization_readiness`。当前 group=128 是根据旧 v1 已经到达算子检查阶段的图所设置的保守兼容边界，不代表厂商公开宣称的硬件极限。
 
 `export` 还会自动制作模型转换输入：从当前阶段 Train 以稳定 SHA-256 分层抽取 100 个校准 ROI，从 Val/Test 各抽取 25 个评测 ROI。所有文件都是经 `uint8/255` 得到的 `float32 (1,1,256,256)` NCHW Hand ROI；不会运行 Palm、读取原图或写入模型输出。严格的 `datasets/` 树、可直接交付的 `datasets.zip` 以及树外的来源 manifest/report 位于同阶段 `model_conversion/`。详细格式见[模型转换数据制作说明](../model_conversion/conversion_method.md)。
 

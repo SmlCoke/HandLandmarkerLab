@@ -16,6 +16,50 @@ from hand_landmarker.config import load_config, resolve_path
 from hand_landmarker.io_utils import write_json
 
 
+def prepare_quantization_probe_weights(model, seed):
+    """Replace training-stability zeros with deterministic non-degenerate probes.
+
+    The trainable model intentionally starts residual tails and heads at zero.
+    Exporting that exact initialization creates all-zero Conv tensors and a
+    constant-output graph, which cannot exercise an INT8 quantizer.  These
+    disposable weights are used only by the converter preflight.
+    """
+
+    import numpy as np
+
+    random = np.random.RandomState(int(seed) + 101)
+    activated_batch_norms = []
+    for layer in model.layers:
+        batch_norm = getattr(layer, "train_bn", None)
+        if batch_norm is None:
+            continue
+        gamma, beta, moving_mean, moving_variance = batch_norm.get_weights()
+        if np.all(gamma == 0.0):
+            gamma = random.uniform(0.04, 0.06, gamma.shape).astype("float32")
+            batch_norm.set_weights([gamma, beta, moving_mean, moving_variance])
+            activated_batch_norms.append(layer.name)
+
+    activated_heads = []
+    for name in ("convld_21_2d", "conv_handflag", "conv_handedness"):
+        layer = model.get_layer(name)
+        kernel, bias = layer.get_weights()
+        kernel = random.normal(0.0, 0.002, kernel.shape).astype("float32")
+        layer.set_weights([kernel, bias])
+        activated_heads.append(name)
+
+    if not activated_batch_norms or len(activated_heads) != 3:
+        raise ValueError(
+            "Preflight expected zero-initialized residual tails and all three heads"
+        )
+    return {
+        "method": "deterministic_nonzero_quantization_probe_weights",
+        "activated_batch_norm_count": len(activated_batch_norms),
+        "activated_heads": activated_heads,
+        "residual_gamma_range": [0.04, 0.06],
+        "head_kernel_stddev": 0.002,
+    }
+
+
 def build_preflight_bundle(config):
     export_config = config.get("export", {})
     if export_config.get("preflight_untrained") is not True:
@@ -52,6 +96,7 @@ def build_preflight_bundle(config):
         num_iterations=model_config.get("num_iterations"),
     )
     _assert_model_interface(training_model)
+    quantization_probe = prepare_quantization_probe_weights(training_model, seed)
     weights_path.parent.mkdir(parents=True, exist_ok=True)
     training_model.save_weights(str(weights_path), overwrite=True)
 
@@ -61,6 +106,7 @@ def build_preflight_bundle(config):
         "accuracy_model": False,
         "purpose": "A1 converter graph/operator compatibility before training",
         "seed": seed,
+        "quantization_probe": quantization_probe,
     }
     write_json(Path(str(report["contract_path"])), report)
     return report

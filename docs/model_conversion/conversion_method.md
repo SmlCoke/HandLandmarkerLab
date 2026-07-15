@@ -137,7 +137,9 @@ datasets/
 make test
 ```
 
-除了单元测试，这会生成固定随机初始化的 `export/preflight/hand_landmarker_v2_untrained.onnx`，并从当前 canonical Train/Val/Test 生成 `export/preflight/model_conversion/datasets.zip`。先把这两个文件提交官方工具链，可以提前发现不支持的算子、shape 或转换器回归，避免训练完成后才发现结构无法转换。该 ONNX 没有精度意义；正式模型仍必须在 geometry/multitask 训练通过后重新导出。
+除了单元测试，这会生成使用确定性非零量化探针权重的 `export/preflight/hand_landmarker_v2_untrained.onnx`，并从当前 canonical Train/Val/Test 生成 `export/preflight/model_conversion/datasets.zip`。这些 disposable 权重只负责让每个卷积和输出 head 都能真正走过 INT8 校准，不会改变正式训练初始化。先把这两个文件提交官方工具链，可以提前发现不支持的算子、shape、量化器或转换器回归，避免训练完成后才发现结构无法转换。该 ONNX 没有精度意义；正式模型仍必须在 geometry/multitask 训练通过后重新导出。
+
+preflight contract 中必须同时满足：`quantization_readiness.graph.violations` 为空、`observed_maximum_group <= 128`，三个 `aggregate_output_ranges[].dynamic_range` 均大于等于 `1e-6`。若不满足，导出器会在生成交付物前失败，不能用 `--force` 绕过。
 
 本仓库已把上述输入数据制作集成到 Hand Landmarker 的 ONNX `export` 步骤。默认执行：
 

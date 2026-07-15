@@ -260,10 +260,11 @@ class CheckpointStageContractTests(unittest.TestCase):
 
             def __call__(self, _tensor, training=False):
                 del training
+                value = float(np.mean(_tensor))
                 return [
-                    np.zeros((1, 1, 1, 42), dtype=np.float32),
-                    np.zeros((1, 1, 1, 1), dtype=np.float32),
-                    np.zeros((1, 1, 1, 1), dtype=np.float32),
+                    np.full((1, 1, 1, 42), value, dtype=np.float32),
+                    np.full((1, 1, 1, 1), value, dtype=np.float32),
+                    np.full((1, 1, 1, 1), value, dtype=np.float32),
                 ]
 
         class FakeSession:
@@ -274,10 +275,11 @@ class CheckpointStageContractTests(unittest.TestCase):
                 return [SimpleNamespace(name="inputs")]
 
             def run(self, _outputs, _feeds):
+                value = float(np.mean(next(iter(_feeds.values()))))
                 return [
-                    np.zeros((1, 42, 1, 1), dtype=np.float32),
-                    np.zeros((1, 1, 1, 1), dtype=np.float32),
-                    np.zeros((1, 1, 1, 1), dtype=np.float32),
+                    np.full((1, 42, 1, 1), value, dtype=np.float32),
+                    np.full((1, 1, 1, 1), value, dtype=np.float32),
+                    np.full((1, 1, 1, 1), value, dtype=np.float32),
                 ]
 
         def convert_from_keras(_model, input_signature, opset, output_path):

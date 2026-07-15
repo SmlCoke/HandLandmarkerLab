@@ -203,6 +203,10 @@ class MakePretrainRouteTests(unittest.TestCase):
                 self.assertEqual(expected_iterations, config["model"]["num_iterations"])
         export = load_config(CONFIGS / "export.yaml")
         self.assertEqual(15.0, export["export"]["maximum_model_size_mb"])
+        self.assertEqual(128, export["export"]["maximum_depthwise_group"])
+        self.assertEqual(
+            1.0e-6, export["export"]["minimum_quantization_output_range"]
+        )
         self.assertIn("Reshape", export["export"]["a1_allowed_operators"])
         preflight = load_config(CONFIGS / "export_preflight.yaml")
         self.assertIs(preflight["export"]["preflight_untrained"], True)

@@ -44,7 +44,7 @@ commit `9411d6f56ff3289c63759410252f4dc8b7a276d9` 的 geometry smoke **没有通
 - 移除对 1x1 pointwise 没有新增感受野的重复辅助分支；
 - 保留可折叠的 Conv+BN，部署时精确融合为单 Conv；
 - residual/downsample 主分支末端 BN gamma 零初始化；
-- landmark head 初始恒为 0.5，hand flag/handedness 初始概率也为 0.5；
+- landmark head 初始恒为 0.5，hand flag/handedness 使用极小非零 kernel、初始概率接近 0.5；
 - 所有训练、评估、推理和导出配置共享同一个深度表；
 - ONNX 实际大小硬门禁设为 15 MiB；
 - `make test` 增加训练前 untrained ONNX + 真实转换数据包预检。
@@ -58,6 +58,8 @@ commit `9411d6f56ff3289c63759410252f4dc8b7a276d9` 的 geometry smoke **没有通
 | 序列化 ONNX | 8.787 MiB |
 | 融合最大误差 | 0 |
 | ONNX 算子 | Conv/Add/Relu/MaxPool/Sigmoid/Identity/Reshape |
+
+该表记录的是 smoke 架构恢复后的第一版候选。它随后在官方 INT8 preflight 中暴露出全零 Conv、恒定输出及 group=192 的量化兼容风险；当前实现已进一步收敛为最大 group=128、约 7.309 MiB 且无全零 Conv。后续证据与复验要求见 [preflight INT8 量化失败分析](2026-07-15_preflight_quantization_failure.md)。
 
 单批 32 张 ROI 的纯内存优化探针在 30 个更新步内把训练态 MAE 从 0.1201 降到 0.00826。这证明新结构能够接收有效梯度，但不替代完整 128 张、顺序推理态 smoke gate。
 
