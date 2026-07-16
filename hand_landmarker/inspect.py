@@ -8,6 +8,7 @@ records to a dataset.
 from __future__ import annotations
 
 import math
+import os
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
@@ -45,6 +46,22 @@ EVALUATION_WEIGHT_FIELDS = (
 
 class DatasetContractError(ValueError):
     """Raised when canonical labels cannot safely be consumed."""
+
+
+def verify_dataset_curation_manifest(
+    config: Mapping[str, Any],
+    dataset: Mapping[str, Any],
+    error_type=DatasetContractError,
+) -> Dict[str, Any]:
+    """Dispatch to the stage-specific authenticated curation contract."""
+
+    stage = str(dataset.get("require_training_stage") or config.get("stage") or "")
+    schema = str(dataset.get("require_curation_schema") or "")
+    if stage == "finetune" or schema == "finetune_curation_v1":
+        from .finetune_curation import verify_finetune_curation_manifest
+
+        return verify_finetune_curation_manifest(config, dataset, error_type=error_type)
+    return verify_curation_manifest(config, dataset, error_type=error_type)
 
 
 def _record_id(row: Mapping[str, Any]) -> str:
@@ -89,10 +106,15 @@ def configured_image_roots(dataset: Mapping[str, Any], config: Mapping[str, Any]
     values: List[Path] = []
     values.extend(_as_path_list(dataset.get("image_roots"), config))
     values.extend(_as_path_list(dataset.get("crop_image_roots"), config))
-    values.extend(_as_path_list(dataset.get("data_root"), config))
+    # ``data_root`` is only a compatibility fallback.  Once dedicated image
+    # roots are declared, indexing the (usually much broader) data root both
+    # wastes time and weakens the allowed-root boundary.
+    if not values:
+        values.extend(_as_path_list(dataset.get("data_root"), config))
     unique: Dict[str, Path] = {}
     for path in values:
-        unique.setdefault(str(path.resolve()), path.resolve())
+        lexical = Path(os.path.abspath(os.fspath(path.expanduser())))
+        unique.setdefault(os.path.normcase(str(lexical)), lexical)
     return list(unique.values())
 
 
@@ -112,7 +134,96 @@ class CanonicalPathResolver:
         self.labels_path = Path(labels_path).resolve()
         self.config = config
         self.roots = configured_image_roots(dataset, config)
+        self.allowed_roots = _as_path_list(dataset.get("allowed_crop_roots"), config)
+        self._allowed_root_cache: Optional[List[Tuple[Path, Path]]] = None
         self._basename_index: Optional[Dict[str, List[Path]]] = None
+
+    @staticmethod
+    def _lexical_absolute(path: Path) -> Path:
+        """Normalize ``.``/``..`` without following filesystem links."""
+
+        return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+    @staticmethod
+    def _symlink_component(path: Path) -> Optional[Path]:
+        """Return the first symlink in an absolute path, including parents."""
+
+        absolute = CanonicalPathResolver._lexical_absolute(path)
+        current = Path(absolute.anchor)
+        for part in absolute.parts[1:]:
+            current = current / part
+            if current.is_symlink():
+                return current
+        return None
+
+    def _resolved_allowed_roots(self) -> List[Tuple[Path, Path]]:
+        if self._allowed_root_cache is not None:
+            return list(self._allowed_root_cache)
+        values: List[Tuple[Path, Path]] = []
+        for configured in self.allowed_roots:
+            lexical = self._lexical_absolute(configured)
+            if not lexical.is_dir():
+                raise DatasetContractError(
+                    "Configured allowed_crop_root is not a readable directory: {}".format(lexical)
+                )
+            linked = self._symlink_component(lexical)
+            if linked is not None:
+                raise DatasetContractError(
+                    "Configured allowed_crop_root contains a symlink component: {}".format(linked)
+                )
+            values.append((lexical, lexical.resolve(strict=True)))
+        self._allowed_root_cache = values
+        return list(values)
+
+    def _validate_allowed_path(self, path: Path, *, require_file: bool) -> Path:
+        """Resolve a path strictly and enforce containment plus no-symlink rules."""
+
+        lexical = self._lexical_absolute(path)
+        try:
+            resolved = lexical.resolve(strict=True)
+        except (FileNotFoundError, OSError) as exc:
+            raise FileNotFoundError("Canonical image path is unreadable: {}".format(lexical)) from exc
+        if require_file and not resolved.is_file():
+            raise FileNotFoundError("Canonical image path is not a file: {}".format(lexical))
+        if not require_file and not resolved.is_dir():
+            raise DatasetContractError("Configured image root is not a directory: {}".format(lexical))
+
+        if not self.allowed_roots:
+            return resolved
+
+        allowed_pairs = self._resolved_allowed_roots()
+        lexical_matches: List[Tuple[Path, Path]] = []
+        for allowed_lexical, allowed_resolved in allowed_pairs:
+            try:
+                lexical.relative_to(allowed_lexical)
+            except ValueError:
+                continue
+            lexical_matches.append((allowed_lexical, allowed_resolved))
+        if not lexical_matches:
+            raise DatasetContractError(
+                "Canonical path escapes allowed_crop_roots: {}".format(lexical)
+            )
+
+        for allowed_lexical, _ in lexical_matches:
+            current = allowed_lexical
+            for part in lexical.relative_to(allowed_lexical).parts:
+                current = current / part
+                if current.is_symlink():
+                    raise DatasetContractError(
+                        "Canonical path contains a symlink component: {}".format(current)
+                    )
+
+        for _, allowed_resolved in lexical_matches:
+            try:
+                resolved.relative_to(allowed_resolved)
+                return resolved
+            except ValueError:
+                continue
+        raise DatasetContractError(
+            "Resolved canonical path escapes allowed_crop_roots: {} -> {}".format(
+                lexical, resolved
+            )
+        )
 
     def _index(self) -> Dict[str, List[Path]]:
         if self._basename_index is None:
@@ -121,7 +232,10 @@ class CanonicalPathResolver:
             if not valid_roots:
                 suffix = "; configured roots missing: {}".format(missing_roots) if missing_roots else ""
                 raise FileNotFoundError("No configured image root is readable{}".format(suffix))
-            self._basename_index = build_basename_index(valid_roots)
+            validated_roots = [
+                self._validate_allowed_path(path, require_file=False) for path in valid_roots
+            ]
+            self._basename_index = build_basename_index(validated_roots)
         return self._basename_index
 
     def resolve(self, row: Mapping[str, Any]) -> Tuple[Path, str]:
@@ -144,13 +258,14 @@ class CanonicalPathResolver:
                 continue
             seen.add(key)
             if candidate.is_file():
-                return candidate.resolve(), "canonical"
+                return self._validate_allowed_path(candidate, require_file=True), "canonical"
 
         basename = canonical.name
         if not basename:
             raise FileNotFoundError("Record {} has an invalid {}".format(_record_id(row), self.path_key))
         matches = list(self._index().get(basename, []))
-        unique = sorted({str(path.resolve()): path.resolve() for path in matches}.values(), key=str)
+        checked = [self._validate_allowed_path(path, require_file=True) for path in matches]
+        unique = sorted({str(path): path for path in checked}.values(), key=str)
         if not unique:
             raise FileNotFoundError(
                 "Canonical image {} for {} was not found under configured roots".format(
@@ -746,7 +861,7 @@ def inspect_config(
     """Inspect the primary configured dataset and configured comparison sets."""
 
     dataset_cfg = dict(config.get("data") or {})
-    curation_manifest = verify_curation_manifest(
+    curation_manifest = verify_dataset_curation_manifest(
         config, dataset_cfg, error_type=DatasetContractError
     )
     task = str(config.get("task", ""))
@@ -767,6 +882,20 @@ def inspect_config(
     validation_cfg = config.get("validation", {})
     if task == "train" and validation_cfg.get("enabled", False) and validation_cfg.get("labels"):
         val_dataset = dict(dataset_cfg)
+        for key in (
+            "data_root",
+            "labels",
+            "ignored_labels",
+            "crop_path_key",
+            "path_policy",
+            "crop_image_roots",
+            "allowed_crop_roots",
+            "image_size",
+            "channels",
+            "color_mode",
+        ):
+            if key in validation_cfg:
+                val_dataset[key] = validation_cfg[key]
         val_dataset["labels"] = validation_cfg["labels"]
         if validation_cfg.get("ignored_labels"):
             val_dataset["ignored_labels"] = validation_cfg["ignored_labels"]

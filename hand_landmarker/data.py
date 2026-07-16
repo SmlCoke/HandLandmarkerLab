@@ -7,6 +7,8 @@ inherits its real ``keras.utils.Sequence`` class.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections import Counter, defaultdict
 from fractions import Fraction
@@ -17,9 +19,14 @@ import numpy as np
 
 from .config import load_config
 from .contracts import effective_head_weights
-from .inspect import EVALUATION_SCHEMA, DatasetContractError, audit_canonical_dataset, leakage_report
+from .inspect import (
+    EVALUATION_SCHEMA,
+    DatasetContractError,
+    audit_canonical_dataset,
+    leakage_report,
+    verify_dataset_curation_manifest,
+)
 from .io_utils import read_image, to_uint8_gray
-from .pretrain_curation import verify_curation_manifest
 
 
 try:  # Keep ``make inspect`` independent of TensorFlow by importing this module only for training.
@@ -183,7 +190,12 @@ def augment_image_and_targets(
 
 
 class WeightedStratifiedSampler:
-    """Exact per-batch tier/type quotas, then weighted rows inside each cell."""
+    """Deterministic tier/type quotas, then weighted rows inside each cell.
+
+    Pretrain retains its exact per-batch sample-type contract.  Finetune can
+    opt into tier-specific, epoch-level sample-type quotas so genuinely rare
+    Gold cells can appear a few times per epoch instead of zero-or-every-batch.
+    """
 
     def __init__(
         self,
@@ -194,6 +206,9 @@ class WeightedStratifiedSampler:
         gold_fraction: Optional[float] = None,
         supervision_fractions: Optional[Mapping[str, Any]] = None,
         sample_type_fractions: Optional[Mapping[str, Any]] = None,
+        sample_type_fractions_by_tier: Optional[Mapping[str, Any]] = None,
+        missing_cell_policy: Optional[Mapping[str, Any]] = None,
+        rare_cell_policy: Optional[Mapping[str, Any]] = None,
         tier_key: str = "supervision_tier",
         bucket_key: str = "sampling_bucket",
         sample_type_key: str = "sample_type",
@@ -209,6 +224,9 @@ class WeightedStratifiedSampler:
         self.seed = int(seed)
         self.weight_key = str(weight_key)
         self.gold_fraction = None if gold_fraction is None else float(gold_fraction)
+        self.uses_epoch_type_plan = bool(
+            self.stage == "finetune" and sample_type_fractions_by_tier is not None
+        )
         self.tier_key = str(tier_key)
         self.bucket_key = str(bucket_key)
         self.sample_type_key = str(sample_type_key)
@@ -224,30 +242,57 @@ class WeightedStratifiedSampler:
         self.supervision_fractions = {
             str(key): float(value) for key, value in dict(supervision_fractions or {}).items()
         }
-        if sample_type_fractions is None:
-            raise DatasetContractError("sampling.sample_type_fractions is required")
-        try:
-            raw_sample_type_fractions = {
-                str(key): Fraction(str(value))
-                for key, value in dict(sample_type_fractions).items()
-            }
-        except (TypeError, ValueError, ZeroDivisionError) as exc:
-            raise DatasetContractError(
-                "sampling.sample_type_fractions must contain finite numeric values"
-            ) from exc
-        if set(raw_sample_type_fractions) != set(CANONICAL_SAMPLE_TYPES):
-            raise DatasetContractError(
-                "sampling.sample_type_fractions must define exactly {}".format(
-                    list(CANONICAL_SAMPLE_TYPES)
+        def parse_fractions(value: Mapping[str, Any], label: str) -> Dict[str, Fraction]:
+            try:
+                parsed = {
+                    str(key): Fraction(str(item))
+                    for key, item in dict(value).items()
+                }
+            except (TypeError, ValueError, ZeroDivisionError) as exc:
+                raise DatasetContractError(
+                    "{} must contain finite numeric values".format(label)
+                ) from exc
+            if set(parsed) != set(CANONICAL_SAMPLE_TYPES):
+                raise DatasetContractError(
+                    "{} must define exactly {}".format(label, list(CANONICAL_SAMPLE_TYPES))
                 )
+            if any(item < 0 for item in parsed.values()):
+                raise DatasetContractError("{} must be non-negative".format(label))
+            if sum(parsed.values(), Fraction(0, 1)) != Fraction(1, 1):
+                raise DatasetContractError("{} must sum exactly to 1".format(label))
+            return {name: parsed[name] for name in CANONICAL_SAMPLE_TYPES}
+
+        self.sample_type_fractions_by_tier: Dict[str, Dict[str, Fraction]] = {}
+        if self.uses_epoch_type_plan:
+            raw_by_tier = dict(sample_type_fractions_by_tier or {})
+            if set(raw_by_tier) != {"gold", "pseudo"}:
+                raise DatasetContractError(
+                    "sampling.sample_type_fractions_by_tier must define gold and pseudo"
+                )
+            self.sample_type_fractions_by_tier = {
+                tier: parse_fractions(
+                    dict(raw_by_tier[tier]),
+                    "sampling.sample_type_fractions_by_tier.{}".format(tier),
+                )
+                for tier in ("gold", "pseudo")
+            }
+            self.sample_type_fractions = dict(self.sample_type_fractions_by_tier["pseudo"])
+        else:
+            if sample_type_fractions is None:
+                raise DatasetContractError("sampling.sample_type_fractions is required")
+            self.sample_type_fractions = parse_fractions(
+                sample_type_fractions, "sampling.sample_type_fractions"
             )
-        if any(value < 0 for value in raw_sample_type_fractions.values()):
-            raise DatasetContractError("sampling.sample_type_fractions must be non-negative")
-        if sum(raw_sample_type_fractions.values(), Fraction(0, 1)) != Fraction(1, 1):
-            raise DatasetContractError("sampling.sample_type_fractions must sum exactly to 1")
-        self.sample_type_fractions = {
-            name: raw_sample_type_fractions[name] for name in CANONICAL_SAMPLE_TYPES
+            if self.stage == "finetune":
+                self.sample_type_fractions_by_tier = {
+                    "gold": dict(self.sample_type_fractions),
+                    "pseudo": dict(self.sample_type_fractions),
+                }
+        self.missing_cell_policy = {
+            str(key): str(value) for key, value in dict(missing_cell_policy or {}).items()
         }
+        self.rare_cell_policy = dict(rare_cell_policy or {})
+        self.last_epoch_plan: Optional[Dict[str, Any]] = None
         self.groups: Dict[str, Dict[str, List[int]]] = defaultdict(lambda: defaultdict(list))
         try:
             self.weights = np.asarray([float(row[self.weight_key]) for row in records], dtype=np.float64)
@@ -291,21 +336,22 @@ class WeightedStratifiedSampler:
         if np.any(~np.isfinite(self.weights)) or np.any(self.weights < 0.0):
             raise DatasetContractError("sampling_weight must be finite and non-negative")
         for tier in self._tier_order():
+            fractions = self.sample_type_fractions_by_tier.get(
+                tier, self.sample_type_fractions
+            )
             for sample_type in CANONICAL_SAMPLE_TYPES:
-                if self.sample_type_fractions[sample_type] <= 0:
+                if fractions[sample_type] <= 0:
                     continue
                 indices = self.groups[tier].get(sample_type, [])
-                if not indices:
+                has_weight = bool(indices) and float(np.sum(self.weights[indices])) > 0.0
+                if not indices or not has_weight:
+                    policy = self.missing_cell_policy.get(tier, "fail")
+                    if self.uses_epoch_type_plan and policy == "redistribute_within_tier":
+                        continue
                     raise DatasetContractError(
                         "Missing canonical sampling cell supervision_tier={!r}, sample_type={!r}; "
-                        "configured positive fractions require every active tier x sample_type cell".format(
-                            tier, sample_type
-                        )
-                    )
-                if float(np.sum(self.weights[indices])) <= 0.0:
-                    raise DatasetContractError(
-                        "Sampling cell supervision_tier={!r}, sample_type={!r} has no positive {}".format(
-                            tier, sample_type, self.weight_key
+                        "policy={!r}".format(
+                            tier, sample_type, policy
                         )
                     )
 
@@ -427,6 +473,415 @@ class WeightedStratifiedSampler:
             quota[last_tier] = dict(remaining_types)
         return quota
 
+    def resolve_auto_epoch_size(
+        self,
+        batch_size: int,
+        upper_bound: int,
+        max_average_draws: float,
+        max_expected_row_draws: float,
+    ) -> Tuple[int, Dict[str, Any]]:
+        """Choose the largest safe whole-batch epoch for pretrain sampling.
+
+        The calculation deliberately calls :meth:`batch_quota` instead of
+        estimating from floating-point fractions, so the gate and the actual
+        sampler share the same integer rounding behavior.
+        """
+
+        if self.stage != "pretrain":
+            raise DatasetContractError("sampling.epoch_size=auto is only supported for pretrain")
+        if isinstance(batch_size, bool) or int(batch_size) <= 0:
+            raise DatasetContractError("training.batch_size must be positive")
+        if isinstance(upper_bound, bool) or int(upper_bound) < int(batch_size):
+            raise DatasetContractError(
+                "sampling.epoch_size_upper_bound must be at least one batch"
+            )
+        limits = (float(max_average_draws), float(max_expected_row_draws))
+        if any(not math.isfinite(value) or value <= 0.0 for value in limits):
+            raise DatasetContractError(
+                "sampling repetition limits must be finite and positive"
+            )
+
+        batch_size = int(batch_size)
+        maximum_batches = int(upper_bound) // batch_size
+        one_batch = self.batch_quota(batch_size)
+        feasible: List[Tuple[int, Dict[str, Any]]] = []
+        rejected: List[Dict[str, Any]] = []
+        for batch_count in range(1, maximum_batches + 1):
+            cell_reports: Dict[str, Dict[str, Any]] = {}
+            all_safe = True
+            limiting: Optional[Dict[str, Any]] = None
+            for tier in self._tier_order():
+                for sample_type in CANONICAL_SAMPLE_TYPES:
+                    draws = int(one_batch[tier][sample_type]) * batch_count
+                    if draws <= 0:
+                        continue
+                    indices = np.asarray(self.groups[tier].get(sample_type, []), dtype=np.int64)
+                    if len(indices) == 0:
+                        raise DatasetContractError(
+                            "Resolved positive quota for missing sampling cell {}:{}".format(
+                                tier, sample_type
+                            )
+                        )
+                    weights = self.weights[indices]
+                    weight_total = float(np.sum(weights))
+                    average = float(draws) / float(len(indices))
+                    normalized = weights / weight_total
+                    max_offset = int(np.argmax(normalized))
+                    max_expected = float(draws) * float(normalized[max_offset])
+                    record = self.records[int(indices[max_offset])]
+                    cell_key = "{}:{}".format(tier, sample_type)
+                    cell_report = {
+                        "draws": draws,
+                        "unique_records": int(len(indices)),
+                        "average_draws_per_unique_record": average,
+                        "max_expected_row_draws": max_expected,
+                        "limiting_record_id": str(
+                            record.get("global_crop_id") or record.get("crop_id") or indices[max_offset]
+                        ),
+                        "limiting_record_normalized_weight": float(normalized[max_offset]),
+                    }
+                    cell_reports[cell_key] = cell_report
+                    ratio = max(
+                        average / limits[0],
+                        max_expected / limits[1],
+                    )
+                    if limiting is None or ratio > float(limiting["limit_ratio"]):
+                        limiting = dict(cell_report, cell=cell_key, limit_ratio=ratio)
+                    if average > limits[0] + 1.0e-12 or max_expected > limits[1] + 1.0e-12:
+                        all_safe = False
+            candidate = {
+                "epoch_size": batch_count * batch_size,
+                "batch_count": batch_count,
+                "cell_reports": cell_reports,
+                "limiting": limiting,
+            }
+            if all_safe:
+                feasible.append((int(candidate["epoch_size"]), candidate))
+            else:
+                rejected.append(candidate)
+
+        if not feasible:
+            raise DatasetContractError(
+                "No whole-batch epoch_size satisfies sampling repetition limits"
+            )
+        resolved, selected = feasible[-1]
+        return int(resolved), {
+            "mode": "auto_exact_batch_quota",
+            "resolved_epoch_size": int(resolved),
+            "batch_size": batch_size,
+            "epoch_size_upper_bound": int(upper_bound),
+            "max_average_cell_draws_per_unique_record": limits[0],
+            "max_expected_row_draws_per_epoch": limits[1],
+            "limiting_cell": (selected.get("limiting") or {}).get("cell"),
+            "limiting_record_id": (selected.get("limiting") or {}).get("limiting_record_id"),
+            "limiting_record_normalized_weight": (selected.get("limiting") or {}).get(
+                "limiting_record_normalized_weight"
+            ),
+            "max_expected_row_draws": (selected.get("limiting") or {}).get(
+                "max_expected_row_draws"
+            ),
+            "cell_reports": selected["cell_reports"],
+            "first_rejected_above_resolved": next(
+                (
+                    value
+                    for value in rejected
+                    if int(value["epoch_size"]) > int(resolved)
+                ),
+                None,
+            ),
+        }
+
+    def _effective_epoch_fractions(
+        self, tier: str
+    ) -> Tuple[Dict[str, Fraction], List[str], Dict[str, Any]]:
+        configured = self.sample_type_fractions_by_tier[tier]
+        missing = []
+        available = []
+        for sample_type in CANONICAL_SAMPLE_TYPES:
+            if configured[sample_type] <= 0:
+                continue
+            indices = self.groups[tier].get(sample_type, [])
+            if indices and float(np.sum(self.weights[indices])) > 0.0:
+                available.append(sample_type)
+            else:
+                missing.append(sample_type)
+        policy = self.missing_cell_policy.get(tier, "fail")
+        if missing and policy != "redistribute_within_tier":
+            raise DatasetContractError(
+                "Missing finetune sampling cells {} for tier {!r}; policy={!r}".format(
+                    missing, tier, policy
+                )
+            )
+        total = sum((configured[name] for name in available), Fraction(0, 1))
+        if total <= 0:
+            raise DatasetContractError(
+                "Finetune tier {!r} has no available positive-fraction sampling cell".format(tier)
+            )
+        effective = {
+            name: (configured[name] / total if name in available else Fraction(0, 1))
+            for name in CANONICAL_SAMPLE_TYPES
+        }
+        return effective, missing, {
+            "policy": policy,
+            "missing": list(missing),
+            "configured": {name: float(configured[name]) for name in CANONICAL_SAMPLE_TYPES},
+            "effective_before_rare_cap": {
+                name: float(effective[name]) for name in CANONICAL_SAMPLE_TYPES
+            },
+        }
+
+    def _cell_repetition(self, tier: str, sample_type: str, draws: int) -> Dict[str, Any]:
+        indices = np.asarray(self.groups[tier].get(sample_type, []), dtype=np.int64)
+        if draws <= 0:
+            return {
+                "draws": 0,
+                "unique_records": int(len(indices)),
+                "average_draws_per_unique_record": 0.0,
+                "max_expected_row_draws": 0.0,
+                "limiting_record_id": None,
+                "limiting_record_normalized_weight": None,
+            }
+        if len(indices) == 0:
+            raise DatasetContractError(
+                "Positive epoch quota targets missing cell {}:{}".format(tier, sample_type)
+            )
+        weights = self.weights[indices]
+        total = float(np.sum(weights))
+        normalized = weights / total
+        offset = int(np.argmax(normalized))
+        row = self.records[int(indices[offset])]
+        return {
+            "draws": int(draws),
+            "unique_records": int(len(indices)),
+            "average_draws_per_unique_record": float(draws) / float(len(indices)),
+            "max_expected_row_draws": float(draws) * float(normalized[offset]),
+            "limiting_record_id": str(
+                row.get("global_crop_id") or row.get("crop_id") or indices[offset]
+            ),
+            "limiting_record_normalized_weight": float(normalized[offset]),
+        }
+
+    def _apply_rare_cell_limits(
+        self,
+        tier: str,
+        quotas: Dict[str, int],
+        effective: Mapping[str, Fraction],
+    ) -> Tuple[Dict[str, int], Dict[str, Any]]:
+        max_average_value = self.rare_cell_policy.get(
+            "max_average_draws_per_unique_record"
+        )
+        max_row_value = self.rare_cell_policy.get("max_expected_row_draws_per_epoch")
+        if max_average_value is None or max_row_value is None:
+            return dict(quotas), {"policy": "disabled", "caps": {}}
+        max_average = float(max_average_value)
+        max_row = float(max_row_value)
+        if any(not math.isfinite(value) or value <= 0.0 for value in (max_average, max_row)):
+            raise DatasetContractError("finetune rare-cell limits must be finite and positive")
+        policy = str(self.rare_cell_policy.get(tier, "fail"))
+        adjusted = dict(quotas)
+        caps: Dict[str, Any] = {}
+        removed = 0
+        for sample_type in CANONICAL_SAMPLE_TYPES:
+            draws = int(adjusted[sample_type])
+            repetition = self._cell_repetition(tier, sample_type, draws)
+            if (
+                repetition["average_draws_per_unique_record"] <= max_average + 1.0e-12
+                and repetition["max_expected_row_draws"] <= max_row + 1.0e-12
+            ):
+                continue
+            if policy != "cap_fraction_then_redistribute_within_tier":
+                raise DatasetContractError(
+                    "Finetune sampling cell {}:{} exceeds rare-cell limits".format(
+                        tier, sample_type
+                    )
+                )
+            indices = np.asarray(self.groups[tier][sample_type], dtype=np.int64)
+            weights = self.weights[indices]
+            max_probability = float(np.max(weights / float(np.sum(weights))))
+            cap = int(
+                math.floor(
+                    min(
+                        max_average * float(len(indices)),
+                        max_row / max_probability,
+                    )
+                    + 1.0e-12
+                )
+            )
+            cap = max(0, min(draws, cap))
+            adjusted[sample_type] = cap
+            removed += draws - cap
+            caps[sample_type] = {
+                "configured_draws": draws,
+                "capped_draws": cap,
+                "before": repetition,
+            }
+        if removed:
+            recipients = [
+                name
+                for name in ("POS_RUNTIME", "POS_LOW_PALM")
+                if effective[name] > 0
+                and self.groups[tier].get(name)
+                and name not in caps
+            ]
+            if not recipients:
+                raise DatasetContractError(
+                    "Rare-cell quota cannot be redistributed to an uncapped Gold positive cell"
+                )
+            total = sum((effective[name] for name in recipients), Fraction(0, 1))
+            fractions = {name: effective[name] / total for name in recipients}
+            additions = self._largest_remainder_counts(removed, fractions, recipients)
+            for name, value in additions.items():
+                adjusted[name] += int(value)
+        if sum(adjusted.values()) != sum(quotas.values()):
+            raise DatasetContractError("Rare-cell quota redistribution did not conserve tier draws")
+        after = {
+            name: self._cell_repetition(tier, name, adjusted[name])
+            for name in CANONICAL_SAMPLE_TYPES
+            if adjusted[name] > 0
+        }
+        for name, repetition in after.items():
+            if (
+                repetition["average_draws_per_unique_record"] > max_average + 1.0e-12
+                or repetition["max_expected_row_draws"] > max_row + 1.0e-12
+            ):
+                raise DatasetContractError(
+                    "Finetune sampling cell {}:{} remains above rare-cell limits after redistribution".format(
+                        tier, name
+                    )
+                )
+        return adjusted, {
+            "policy": policy,
+            "max_average_draws_per_unique_record": max_average,
+            "max_expected_row_draws_per_epoch": max_row,
+            "caps": caps,
+            "redistributed_draws": removed,
+            "after": after,
+        }
+
+    @staticmethod
+    def _balanced_type_stream(quotas: Mapping[str, int]) -> List[str]:
+        total = int(sum(int(value) for value in quotas.values()))
+        used = {name: 0 for name in CANONICAL_SAMPLE_TYPES}
+        stream: List[str] = []
+        for position in range(total):
+            candidates = [
+                name
+                for name in CANONICAL_SAMPLE_TYPES
+                if used[name] < int(quotas.get(name, 0))
+            ]
+            selected = max(
+                candidates,
+                key=lambda name: (
+                    Fraction((position + 1) * int(quotas[name]), max(total, 1))
+                    - used[name],
+                    -CANONICAL_SAMPLE_TYPES.index(name),
+                ),
+            )
+            used[selected] += 1
+            stream.append(selected)
+        if used != {name: int(quotas.get(name, 0)) for name in CANONICAL_SAMPLE_TYPES}:
+            raise DatasetContractError("Balanced epoch type stream did not conserve quotas")
+        return stream
+
+    def _sample_cells(
+        self,
+        cells: Sequence[Tuple[str, str]],
+        rng: np.random.RandomState,
+    ) -> np.ndarray:
+        result = np.empty((len(cells),), dtype=np.int64)
+        for position, (tier, sample_type) in enumerate(cells):
+            indices = np.asarray(self.groups[tier][sample_type], dtype=np.int64)
+            row_weights = self.weights[indices]
+            result[position] = int(
+                rng.choice(indices, p=row_weights / float(np.sum(row_weights)))
+            )
+        return result
+
+    def sample_epoch(self, batch_sizes: Sequence[int], epoch: int = 0) -> np.ndarray:
+        """Sample a complete epoch, preserving per-batch tier counts."""
+
+        sizes = [int(value) for value in batch_sizes]
+        if any(value <= 0 for value in sizes):
+            raise ValueError("batch_sizes must be positive")
+        if not self.uses_epoch_type_plan:
+            batches = [
+                self.sample(size, epoch=epoch, stream=index)
+                for index, size in enumerate(sizes)
+            ]
+            self.last_epoch_plan = None
+            return np.concatenate(batches) if batches else np.empty((0,), dtype=np.int64)
+
+        tier_counts_by_batch = [self._tier_counts(size) for size in sizes]
+        tier_totals = {
+            tier: sum(int(value[tier]) for value in tier_counts_by_batch)
+            for tier in self._tier_order()
+        }
+        quotas_by_tier: Dict[str, Dict[str, int]] = {}
+        missing_reports: Dict[str, Any] = {}
+        rare_reports: Dict[str, Any] = {}
+        for tier in self._tier_order():
+            effective, _missing, missing_report = self._effective_epoch_fractions(tier)
+            quota = self._largest_remainder_counts(
+                tier_totals[tier], effective, CANONICAL_SAMPLE_TYPES
+            )
+            quota, rare_report = self._apply_rare_cell_limits(tier, quota, effective)
+            quotas_by_tier[tier] = quota
+            missing_reports[tier] = missing_report
+            rare_reports[tier] = rare_report
+
+        streams = {
+            tier: self._balanced_type_stream(quotas_by_tier[tier])
+            for tier in self._tier_order()
+        }
+        offsets = {tier: 0 for tier in self._tier_order()}
+        batches: List[np.ndarray] = []
+        batch_cell_quotas: List[Dict[str, int]] = []
+        schedule_cells: List[str] = []
+        for batch_index, (size, tier_counts) in enumerate(zip(sizes, tier_counts_by_batch)):
+            cells: List[Tuple[str, str]] = []
+            for tier in self._tier_order():
+                count = int(tier_counts[tier])
+                start = offsets[tier]
+                selected_types = streams[tier][start : start + count]
+                offsets[tier] += count
+                cells.extend((tier, sample_type) for sample_type in selected_types)
+            rng = np.random.RandomState(
+                (self.seed + int(epoch) * 1000003 + batch_index * 9176) % (2 ** 32 - 1)
+            )
+            rng.shuffle(cells)
+            batches.append(self._sample_cells(cells, rng))
+            counter = Counter("{}:{}".format(tier, sample_type) for tier, sample_type in cells)
+            batch_cell_quotas.append(dict(sorted(counter.items())))
+            schedule_cells.extend("{}:{}".format(tier, sample_type) for tier, sample_type in cells)
+            if len(cells) != size:
+                raise DatasetContractError("Finetune batch plan size mismatch")
+        if any(offsets[tier] != tier_totals[tier] for tier in offsets):
+            raise DatasetContractError("Finetune epoch plan did not consume every tier slot")
+
+        result = np.concatenate(batches) if batches else np.empty((0,), dtype=np.int64)
+        actual = Counter(int(index) for index in result)
+        actual_repetition = {
+            "maximum": max(actual.values()) if actual else 0,
+            "unique_records": len(actual),
+        }
+        self.last_epoch_plan = {
+            "quota_scope": {
+                "supervision_tier": "per_batch_half_up",
+                "sample_type": "per_epoch_largest_remainder",
+            },
+            "batch_sizes": sizes,
+            "batch_tier_quota": tier_counts_by_batch,
+            "epoch_draw_quota_by_tier_type": quotas_by_tier,
+            "configured_and_effective_fractions": missing_reports,
+            "rare_cell_quota_cap": rare_reports,
+            "batch_cell_quotas": batch_cell_quotas,
+            "batch_type_schedule_sha256": hashlib.sha256(
+                json.dumps(schedule_cells, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "actual_repetition": actual_repetition,
+        }
+        return result
+
     def sample(self, count: int, epoch: int = 0, stream: int = 0) -> np.ndarray:
         if count <= 0:
             return np.empty((0,), dtype=np.int64)
@@ -461,9 +916,30 @@ class WeightedStratifiedSampler:
             "sample_type_fractions": {
                 name: float(self.sample_type_fractions[name]) for name in CANONICAL_SAMPLE_TYPES
             },
-            "sample_type_fraction_scope": "per_batch_largest_remainder",
+            "sample_type_fractions_by_tier": (
+                {
+                    tier: {
+                        name: float(fractions[name])
+                        for name in CANONICAL_SAMPLE_TYPES
+                    }
+                    for tier, fractions in sorted(
+                        self.sample_type_fractions_by_tier.items()
+                    )
+                }
+                if self.uses_epoch_type_plan
+                else None
+            ),
+            "sample_type_fraction_scope": (
+                "per_epoch_largest_remainder"
+                if self.uses_epoch_type_plan
+                else "per_batch_largest_remainder"
+            ),
             "quota_tie_break": list(CANONICAL_SAMPLE_TYPES),
-            "cross_bucket_policy": "require_every_positive_type_in_every_active_tier",
+            "cross_bucket_policy": (
+                dict(self.missing_cell_policy)
+                if self.uses_epoch_type_plan
+                else "require_every_positive_type_in_every_active_tier"
+            ),
             "row_sampling": "sampling_weight_within_selected_tier_and_sample_type_only",
             "tiers": {
                 tier: {sample_type: len(indices) for sample_type, indices in sorted(types.items())}
@@ -561,22 +1037,8 @@ class CanonicalSequence(_KerasSequence):
         self.cache_enabled = bool(self.dataset_config.get("cache", False))
         self._cache: Dict[str, np.ndarray] = {}
         self.epoch = 0
-        configured_epoch_size = self.sampling_config.get("epoch_size")
-        if steps_per_epoch not in (None, 0):
-            self.steps = int(steps_per_epoch)
-            self.epoch_size = self.steps * self.batch_size
-        else:
-            self.epoch_size = (
-                int(configured_epoch_size)
-                if configured_epoch_size not in (None, 0)
-                else len(self.records)
-            )
-            self.steps = int(math.ceil(self.epoch_size / float(self.batch_size)))
-        if self.steps <= 0:
-            raise ValueError("steps_per_epoch must be positive")
-        if self.epoch_size <= 0:
-            raise ValueError("sampling.epoch_size must be positive")
         self.sampler: Optional[WeightedStratifiedSampler] = None
+        self.epoch_resolution: Optional[Dict[str, Any]] = None
         if self.training:
             if self.sampling_config.get("enabled", True) is not True:
                 raise DatasetContractError("sampling.enabled must remain true for canonical training")
@@ -586,6 +1048,20 @@ class CanonicalSequence(_KerasSequence):
                 raise DatasetContractError("sampling.honor_record_sampling_weight must remain true")
             if self.sampling_config.get("quota_rounding", "largest_remainder") != "largest_remainder":
                 raise DatasetContractError("sampling.quota_rounding must be largest_remainder")
+            if self.stage == "finetune" and self.sampling_config.get(
+                "sample_type_fractions_by_tier"
+            ) is not None:
+                if dict(self.sampling_config.get("quota_scope") or {}) != {
+                    "supervision_tier": "per_batch_half_up",
+                    "sample_type": "per_epoch_largest_remainder",
+                }:
+                    raise DatasetContractError(
+                        "finetune sampling.quota_scope must declare per-batch tier and per-epoch type quotas"
+                    )
+                if self.sampling_config.get("batch_distribution") != "deterministic_balanced_deficit":
+                    raise DatasetContractError(
+                        "finetune sampling.batch_distribution must be deterministic_balanced_deficit"
+                    )
             configured_strata = self.sampling_config.get("stratify_by")
             if configured_strata is not None:
                 expected_strata = [
@@ -612,6 +1088,11 @@ class CanonicalSequence(_KerasSequence):
                     "supervision_fractions", self.training_config.get("supervision_fractions")
                 ),
                 sample_type_fractions=self.sampling_config.get("sample_type_fractions"),
+                sample_type_fractions_by_tier=self.sampling_config.get(
+                    "sample_type_fractions_by_tier"
+                ),
+                missing_cell_policy=self.sampling_config.get("missing_cell_policy"),
+                rare_cell_policy=self.sampling_config.get("rare_cell_policy"),
                 tier_key=str(self.sampling_config.get("tier_key", "supervision_tier")),
                 bucket_key=str(self.sampling_config.get("bucket_key", "sampling_bucket")),
                 sample_type_key=str(self.sampling_config.get("sample_type_key", "sample_type")),
@@ -622,8 +1103,86 @@ class CanonicalSequence(_KerasSequence):
                     "require_all_tier_sample_type_cells", True
                 ),
             )
+
+        configured_epoch_size = self.sampling_config.get("epoch_size")
+        if steps_per_epoch not in (None, 0):
+            if configured_epoch_size == "auto":
+                raise DatasetContractError(
+                    "training.steps_per_epoch and sampling.epoch_size=auto are mutually exclusive"
+                )
+            self.steps = int(steps_per_epoch)
+            self.epoch_size = self.steps * self.batch_size
+        elif configured_epoch_size == "auto":
+            if not self.training or self.sampler is None:
+                raise DatasetContractError(
+                    "sampling.epoch_size=auto requires weighted training"
+                )
+            required = (
+                "epoch_size_upper_bound",
+                "max_average_cell_draws_per_unique_record",
+                "max_expected_row_draws_per_epoch",
+            )
+            missing = [name for name in required if self.sampling_config.get(name) is None]
+            if missing:
+                raise DatasetContractError(
+                    "sampling.epoch_size=auto requires {}".format(missing)
+                )
+            self.epoch_size, self.epoch_resolution = self.sampler.resolve_auto_epoch_size(
+                batch_size=self.batch_size,
+                upper_bound=int(self.sampling_config["epoch_size_upper_bound"]),
+                max_average_draws=float(
+                    self.sampling_config["max_average_cell_draws_per_unique_record"]
+                ),
+                max_expected_row_draws=float(
+                    self.sampling_config["max_expected_row_draws_per_epoch"]
+                ),
+            )
+            self.steps = int(self.epoch_size // self.batch_size)
+        else:
+            try:
+                self.epoch_size = (
+                    int(configured_epoch_size)
+                    if configured_epoch_size not in (None, 0)
+                    else len(self.records)
+                )
+            except (TypeError, ValueError) as exc:
+                raise DatasetContractError(
+                    "sampling.epoch_size must be a positive integer, null, or auto"
+                ) from exc
+            self.steps = int(math.ceil(self.epoch_size / float(self.batch_size)))
+        if self.steps <= 0:
+            raise ValueError("steps_per_epoch must be positive")
+        if self.epoch_size <= 0:
+            raise ValueError("sampling.epoch_size must be positive")
+
+        self.tail_batch_size = int(self.epoch_size % self.batch_size)
+        self.tail_batch_policy = str(
+            self.sampling_config.get("tail_batch_policy") or "full_batches_only"
+        )
+        if self.tail_batch_policy not in {
+            "full_batches_only",
+            "allow_smaller_final_batch",
+        }:
+            raise DatasetContractError(
+                "sampling.tail_batch_policy must be full_batches_only or allow_smaller_final_batch"
+            )
+        if (
+            self.training
+            and self.stage == "finetune"
+            and self.sampling_config.get("sample_type_fractions_by_tier") is not None
+            and self.tail_batch_size
+            and self.tail_batch_policy != "allow_smaller_final_batch"
+        ):
+            raise DatasetContractError(
+                "A non-divisible finetune epoch requires "
+                "sampling.tail_batch_policy=allow_smaller_final_batch"
+            )
+
+        if self.training:
+            assert self.sampler is not None
             self.set_epoch(0)
         else:
+            self.epoch_size = len(self.records)
             self.steps = int(math.ceil(len(self.records) / float(self.batch_size)))
             self.epoch_indices = np.arange(len(self.records), dtype=np.int64)
 
@@ -646,15 +1205,13 @@ class CanonicalSequence(_KerasSequence):
     def _sample_epoch_indices(self, epoch: int) -> np.ndarray:
         if self.sampler is None:
             raise RuntimeError("Training sampler is not initialized")
-        batches: List[np.ndarray] = []
+        batch_sizes: List[int] = []
         remaining = self.epoch_size
-        batch_number = 0
         while remaining > 0:
             current_size = min(self.batch_size, remaining)
-            batches.append(self.sampler.sample(current_size, epoch=epoch, stream=batch_number))
+            batch_sizes.append(current_size)
             remaining -= current_size
-            batch_number += 1
-        return np.concatenate(batches) if batches else np.empty((0,), dtype=np.int64)
+        return self.sampler.sample_epoch(batch_sizes, epoch=epoch)
 
     def batch_record_indices(self, batch_index: int) -> np.ndarray:
         if batch_index < 0 or batch_index >= len(self):
@@ -761,29 +1318,52 @@ class CanonicalSequence(_KerasSequence):
                     )
                 )
             )
-            per_batch_cross_cells.append(
-                {
-                    "{}:{}".format(tier, sample_type): int(value)
-                    for tier, type_counts in self.sampler.batch_quota(len(batch_indices)).items()
-                    for sample_type, value in type_counts.items()
-                }
-            )
+            if self.sampler.last_epoch_plan is not None:
+                per_batch_cross_cells.append(
+                    dict(self.sampler.last_epoch_plan["batch_cell_quotas"][batch_index])
+                )
+            else:
+                per_batch_cross_cells.append(
+                    {
+                        "{}:{}".format(tier, sample_type): int(value)
+                        for tier, type_counts in self.sampler.batch_quota(len(batch_indices)).items()
+                        for sample_type, value in type_counts.items()
+                    }
+                )
         return {
             "mode": "weighted_stratified",
             "absolute_epoch": self.epoch,
             "draws_per_epoch": len(indices),
+            "tail_batch_policy": self.tail_batch_policy,
+            "tail_batch_size": self.tail_batch_size,
             "drawn_supervision_tiers": dict(Counter(str(self.records[index].get("supervision_tier")) for index in indices)),
             "drawn_sample_types": dict(Counter(str(self.records[index].get("sample_type")) for index in indices)),
             "drawn_supervision_tiers_per_batch": per_batch_tiers,
             "drawn_sample_types_per_batch": per_batch_sample_types,
             "tier_sample_type_quota_per_batch": per_batch_cross_cells,
+            "epoch_size_resolution": self.epoch_resolution,
+            "epoch_type_plan": self.sampler.last_epoch_plan,
             "definition": self.sampler.report(),
         }
 
 
 def _validation_dataset_config(config: Mapping[str, Any], dataset: Mapping[str, Any]) -> Dict[str, Any]:
     value = dict(dataset)
-    validation = config.get("validation", {})
+    validation = dict(config.get("validation", {}))
+    for key in (
+        "data_root",
+        "labels",
+        "ignored_labels",
+        "crop_path_key",
+        "path_policy",
+        "crop_image_roots",
+        "allowed_crop_roots",
+        "image_size",
+        "channels",
+        "color_mode",
+    ):
+        if key in validation:
+            value[key] = validation[key]
     value["labels"] = validation["labels"]
     if validation.get("ignored_labels"):
         value["ignored_labels"] = validation["ignored_labels"]
@@ -818,7 +1398,7 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
     sampling_cfg = dict(cfg.get("sampling", {}))
     experiment_cfg = dict(cfg.get("experiment", {}))
     seed = int(experiment_cfg.get("seed", 0))
-    curation_manifest = verify_curation_manifest(
+    curation_manifest = verify_dataset_curation_manifest(
         cfg, dataset_cfg, error_type=DatasetContractError
     )
     train_records, train_report = audit_canonical_dataset(

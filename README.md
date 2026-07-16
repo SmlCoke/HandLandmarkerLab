@@ -1,6 +1,8 @@
 # Hand Landmarker Training System
 
-本仓库训练 AetherSign Hand Landmarker。当前交付范围是 v2 pretrain，不包含 finetune，也不训练 Palm Detector。
+本仓库训练 AetherSign Hand Landmarker。当前交付范围覆盖 v2 `pretrain-geometry → pretrain-multitask → finetune`、评估、推理与 ONNX 导出；Palm Detector 仍是冻结的外部资产，不在本仓库训练。
+
+项目从 HLMF 数据制作、pretrain、multitask 到 finetune 的最高级操作规范见 [HLMF + HLML Hand Landmarker 完整训练流程 v1.0](docs/training_system/end_to_end_training_workflow_v1_0.md)；理解完整流程后，日常执行可直接使用[简易操作手册 v1.0](docs/training_system/end_to_end_training_quick_runbook_v1_0.md)。对应的内部开发依据见 [程序、代码与配置更新计划 v1.0](docs/training_system/end_to_end_training_implementation_plan_v1_0.md)。实际命令和依赖链以本仓库 Makefile 为最终权威。
 
 ## I. 两阶段训练流程总览
 
@@ -20,7 +22,7 @@
 | 数据集 | 当前规模（以 Hand ROI 计） | 标签质量 | 是否更新模型参数 | 主要用途 |
 |---|---:|---|---|---|
 | Train pseudo | 10w 张左右 | Google MediaPipe 伪标签，存在噪声 | 是，第一阶段 | 学习教师行为和数据域多样性 |
-| Train gold | 未制作 | 人工复核的近似金标准 | 是，第二阶段 | 纠正伪标签偏差和困难样本 |
+| Train gold | 按 finetune ID 制作 | HLMF 严格导入并认证的人工金标准 | 是，第二阶段 | 纠正伪标签偏差和困难样本 |
 | Val | 1000 张左右 | 人工金标准 | 否 | 选 checkpoint、调 presence 阈值、early stopping |
 | Test | 1000 张左右 | 人工金标准 | 否 | 最终冻结方案的独立评测 |
 
@@ -45,7 +47,7 @@ pretrain 分为两个显式阶段：
 | 输出 2 | `handedness` sigmoid，Left=0、Right=1 |
 | 外部原图 ROI | `scale=(1.8,1.8)`、`shift=(0,-0.1)`、wrist→middle MCP 旋转 |
 
-Val/Test 直接读取 canonical 256×256 Hand ROI，只运行 Hand Landmarker。只有 `make infer-geometry` 或 `make infer-multitask` 才对外部原图执行 Palm → rotated ROI → Hand。
+Val/Test 直接读取 canonical 256×256 Hand ROI，只运行 Hand Landmarker。`make infer-geometry`、`make infer-multitask` 和 `make infer-finetune` 才对外部原图执行 Palm → rotated ROI → Hand。
 
 ## III. 模型定义
 
@@ -82,7 +84,6 @@ make inspect-geometry
 make pretrain-geometry-smoke
 make pretrain-geometry
 make eval-val-geometry
-make eval-test-geometry
 make infer-geometry
 ```
 
@@ -105,17 +106,35 @@ make pretrain-curate-reviewed
 make check-multitask-data
 make pretrain-multitask
 make eval-val-multitask
-make eval-test-multitask
 make infer-multitask
 make export-multitask
 ```
 
-Makefile 不再提供 `train`、`pretrain`、`multitask`、`inspect` 等含义不完整的别名；每个公开目标都显式标出 pretrain 子阶段和动作。
+multitask 完成并冻结 best checkpoint 后，按完整流程在 HLML 生成高价值 Gold 请求和 replay，在 HLMF 完成 CVAT 人工标注、严格导入与 Gold 聚合，再回到 HLML 执行：
+
+```bash
+make prepare-finetune-sources
+# 切换到 HLMF 完成 export/import/finalize；详见两份操作手册
+make check-finetune-sources
+make finetune-curate
+make check-finetune-data
+make inspect-finetune
+make finetune-smoke
+make finetune-train
+make eval-val-finetune
+make infer-finetune
+make export-finetune
+make conversion-data-finetune
+```
+
+只有最终方案冻结后才运行 `make eval-test-finetune`。`finetune-train` 同时依赖数据、Train/Val/Test inspection 和已完成的 finetune smoke gate，不能绕过。Val/Test、整图推理、ONNX 导出与转换数据共用通用配置，由 `eval-*-(geometry|multitask|finetune)`、`infer-*`、`export-*` 和 `conversion-data-*` 这些明确的 Make 目标注入实验 ID、phase、模型 stage 与训练配置；不要直接调用通用 YAML 后手工拼接 checkpoint。
+
+Makefile 不提供 `train`、`pretrain`、`multitask`、`finetune`、`inspect` 等含义不完整的别名；每个公开目标都显式标出阶段和动作。
 
 ## V. 配置与目录
 
 ```text
-configs/                    9 个当前 pretrain 配置
+configs/                    9 个 pretrain/通用配置 + 4 个 finetune 配置
 hand_landmarker/            数据、训练、评估、推理、导出实现
 models/hand_landmarker/     v2 模型与部署融合
 scripts/                    CLI 与数据门禁

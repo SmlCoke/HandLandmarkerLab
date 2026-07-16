@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
-from .config import resolve_path
+from .config import load_config, resolve_path
 from .contracts import (
     BOARD_CONTRACT,
     MODEL_IO,
@@ -345,6 +345,62 @@ def _guard_export_outputs(output_path: Path, contract_path: Path, overwrite: boo
         )
 
 
+def _finetune_training_provenance(config: Mapping[str, Any]) -> Dict[str, Any]:
+    """Authenticate the finetune inputs that produced an exported checkpoint."""
+
+    conversion = ((config.get("export") or {}).get("conversion_datasets") or {})
+    sets = conversion.get("sets") or {}
+    calibration = sets.get("calibrate_datasets") or {}
+    train_source = (calibration.get("sources") or {}).get("train") or {}
+    config_value = train_source.get("config_path")
+    if not config_value:
+        raise ValueError(
+            "Finetune export requires the train calibration source config_path"
+        )
+    train_config_path = resolve_path(str(config_value), config)
+    if not train_config_path.is_file() or train_config_path.is_symlink():
+        raise FileNotFoundError(
+            "Finetune training config is missing or a symlink: {}".format(
+                train_config_path
+            )
+        )
+    train_config = load_config(train_config_path)
+    if (
+        str(train_config.get("task")) != "train"
+        or str(train_config.get("stage")) != "finetune"
+        or validate_model_checkpoint_stage(train_config) != "finetune"
+    ):
+        raise ValueError(
+            "Finetune export calibration must use a finetune training config"
+        )
+
+    def authenticated_file(value: Any, label: str) -> Dict[str, Any]:
+        if value in (None, ""):
+            raise ValueError("Finetune training config requires {}".format(label))
+        path = resolve_path(str(value), train_config)
+        if not path.is_file() or path.is_symlink():
+            raise FileNotFoundError(
+                "Finetune {} is missing or a symlink: {}".format(label, path)
+            )
+        return {"path": str(path.resolve(strict=True)), "sha256": sha256_file(path)}
+
+    return {
+        "schema_version": "finetune_export_provenance_v1",
+        "training_config": {
+            "path": str(train_config_path.resolve(strict=True)),
+            "sha256": sha256_file(train_config_path),
+        },
+        "curation_manifest": authenticated_file(
+            (train_config.get("data") or {}).get("curation_manifest"),
+            "curation manifest",
+        ),
+        "initial_multitask_checkpoint": authenticated_file(
+            (train_config.get("training") or {}).get("initial_checkpoint"),
+            "initial multitask checkpoint",
+        ),
+    }
+
+
 def _validated_model_size(path: Path, maximum_model_size_mb: float):
     maximum = float(maximum_model_size_mb)
     if not math.isfinite(maximum) or maximum <= 0.0:
@@ -435,6 +491,11 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     validate_checkpoint_path_stage(config, weights_path)
     if not weights_path.is_file():
         raise FileNotFoundError("Weights not found: {}".format(weights_path))
+    training_provenance = (
+        _finetune_training_provenance(config)
+        if model_checkpoint_stage == "finetune"
+        else None
+    )
     if output_path.suffix.lower() != ".onnx":
         raise ValueError("export.model_path must end in .onnx")
     contract_value = export_config.get("contract_path") or str(
@@ -589,6 +650,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "maximum_model_size_mb": maximum_model_size_mb,
         "weights_path": str(weights_path),
         "weights_sha256": sha256_file(weights_path),
+        "training_provenance": training_provenance,
         "model_version": model_version,
         "opset": int(export_config.get("opset", 11)),
         "inputs": inputs,

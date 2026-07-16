@@ -9,12 +9,17 @@ ENV_FILE := environment.yml
 # across repository tags and isolates TrainFab from the separate DatasetFab.
 HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
 HAND_PRETRAIN_ID := v2-pretrain-r3
-export HAND_TRAIN_ROOT HAND_PRETRAIN_ID
+HAND_FINETUNE_ID ?= v2-finetune-r1
+export HAND_TRAIN_ROOT HAND_PRETRAIN_ID HAND_FINETUNE_ID
 
 CURATE_CONFIG := configs/curate_pretrain.yaml
 GEOMETRY_CONFIG := configs/train_geometry.yaml
 SMOKE_CONFIG := configs/train_smoke.yaml
 MULTITASK_CONFIG := configs/train_multitask.yaml
+PREPARE_FINETUNE_CONFIG := configs/prepare_finetune_sources.yaml
+FINETUNE_CURATE_CONFIG := configs/curate_finetune.yaml
+FINETUNE_CONFIG := configs/train_finetune.yaml
+FINETUNE_SMOKE_CONFIG := configs/train_finetune_smoke.yaml
 EVAL_VAL_CONFIG := configs/eval_val.yaml
 EVAL_TEST_CONFIG := configs/eval_test.yaml
 INFER_CONFIG := configs/infer.yaml
@@ -27,6 +32,13 @@ MULTITASK_ARGS ?=
 SMOKE_TRAIN_ARGS ?=
 SMOKE_GATE_ARGS ?=
 MULTITASK_GATE_ARGS ?=
+PREPARE_FINETUNE_ARGS ?=
+CURATE_FINETUNE_ARGS ?=
+FINETUNE_SOURCE_GATE_ARGS ?=
+FINETUNE_DATA_GATE_ARGS ?=
+FINETUNE_TRAIN_ARGS ?=
+FINETUNE_SMOKE_TRAIN_ARGS ?=
+FINETUNE_SMOKE_GATE_ARGS ?=
 EVAL_ARGS ?=
 INFER_ARGS ?=
 EXPORT_ARGS ?=
@@ -38,14 +50,18 @@ TEST_ARGS ?=
 	inspect-geometry inspect-geometry-smoke inspect-multitask \
 	pretrain-geometry-smoke check-geometry-smoke pretrain-geometry \
 	check-multitask-data pretrain-multitask \
+	prepare-finetune-sources check-finetune-sources finetune-curate \
+	check-finetune-data finetune-smoke check-finetune-smoke \
+	inspect-finetune finetune-train \
 	eval-val-geometry eval-test-geometry eval-val-multitask eval-test-multitask \
+	eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune \
 	infer-geometry infer-multitask export-geometry export-multitask \
 	conversion-data-geometry conversion-data-multitask \
 	test test-unit test-export-preflight compile
 
 help:
-	@echo Hand Landmarker v2 pretrain - TrainFab layout HLML-2.0
-	@echo   make paths                       Print the fixed training root and experiment ID
+	@echo Hand Landmarker v2 pretrain + finetune - TrainFab layout HLML-2.0
+	@echo   make paths                       Print the fixed training root and both experiment IDs
 	@echo   make env-create                  Create the documented Conda environment
 	@echo   make env-update                  Reconcile the documented Conda environment
 	@echo   make doctor                      Verify Python, TensorFlow and GPU
@@ -59,6 +75,14 @@ help:
 	@echo   make check-multitask-data        Verify human-confirmed negative evidence
 	@echo   make inspect-multitask           Audit multitask Train, Val and locked Test
 	@echo   make pretrain-multitask          Train multitask from geometry best
+	@echo   make prepare-finetune-sources    Select hard/disagreement Gold requests and replay
+	@echo   make check-finetune-sources      Authenticate HLMF Gold sources and aggregate
+	@echo   make finetune-curate             Merge authenticated Gold with replay
+	@echo   make check-finetune-data         Verify the immutable finetune snapshot and mix
+	@echo   make finetune-smoke              Train and verify the 256-ROI finetune smoke gate
+	@echo   make check-finetune-smoke        Recheck an existing finetune smoke run
+	@echo   make inspect-finetune             Audit finetune Train, Val and locked Test
+	@echo   make finetune-train               Train finetune after the smoke gate
 	@echo   make eval-val-geometry           Evaluate geometry on Val
 	@echo   make eval-test-geometry          Evaluate geometry on locked Test
 	@echo   make eval-val-multitask          Evaluate multitask on Val
@@ -69,6 +93,11 @@ help:
 	@echo   make export-multitask            Fuse and export multitask ONNX
 	@echo   make conversion-data-geometry    Build geometry conversion NPY inputs
 	@echo   make conversion-data-multitask   Build multitask conversion NPY inputs
+	@echo   make eval-val-finetune            Evaluate finetune on Val
+	@echo   make eval-test-finetune           Evaluate finetune on locked Test
+	@echo   make infer-finetune               Palm + finetune Hand inference
+	@echo   make export-finetune              Fuse and export finetune ONNX
+	@echo   make conversion-data-finetune     Build finetune conversion NPY inputs
 	@echo   make test                        Run unit tests, then build the untrained ONNX conversion bundle
 	@echo   make test-unit                   Run unit tests only
 	@echo   make test-export-preflight       Build the untrained ONNX conversion bundle only
@@ -77,8 +106,11 @@ help:
 paths:
 	@echo HAND_TRAIN_ROOT=$(HAND_TRAIN_ROOT)
 	@echo HAND_PRETRAIN_ID=$(HAND_PRETRAIN_ID)
+	@echo HAND_FINETUNE_ID=$(HAND_FINETUNE_ID)
 	@echo CURATED_ROOT=$(HAND_TRAIN_ROOT)/train_pretrain_curated/$(HAND_PRETRAIN_ID)
 	@echo RUN_ROOT=$(HAND_TRAIN_ROOT)/hand_landmarker_runs/$(HAND_PRETRAIN_ID)
+	@echo FINETUNE_WORKSPACE=$(HAND_TRAIN_ROOT)/finetune/$(HAND_FINETUNE_ID)
+	@echo FINETUNE_RUN_ROOT=$(HAND_TRAIN_ROOT)/hand_landmarker_runs/$(HAND_FINETUNE_ID)
 
 env-create:
 	$(CONDA) env create -f "$(ENV_FILE)"
@@ -120,25 +152,59 @@ inspect-multitask:
 pretrain-multitask: check-multitask-data inspect-multitask
 	$(PYTHON) -B scripts/train.py --config "$(MULTITASK_CONFIG)" $(MULTITASK_ARGS)
 
-eval-val-geometry eval-test-geometry infer-geometry export-geometry conversion-data-geometry: export HAND_PRETRAIN_PHASE := geometry
-export-geometry conversion-data-geometry: export HAND_PRETRAIN_CALIBRATION_CONFIG := configs/train_geometry.yaml
+prepare-finetune-sources:
+	$(PYTHON) -B scripts/prepare_finetune_sources.py --config "$(PREPARE_FINETUNE_CONFIG)" $(PREPARE_FINETUNE_ARGS)
 
-eval-val-multitask eval-test-multitask infer-multitask export-multitask conversion-data-multitask: export HAND_PRETRAIN_PHASE := multitask
-export-multitask conversion-data-multitask: export HAND_PRETRAIN_CALIBRATION_CONFIG := configs/train_multitask.yaml
+check-finetune-sources:
+	$(PYTHON) -B scripts/check_finetune_sources.py --config "$(FINETUNE_CURATE_CONFIG)" $(FINETUNE_SOURCE_GATE_ARGS)
 
-eval-val-geometry eval-val-multitask:
+finetune-curate: check-finetune-sources
+	$(PYTHON) -B scripts/curate_finetune.py --config "$(FINETUNE_CURATE_CONFIG)" $(CURATE_FINETUNE_ARGS)
+
+check-finetune-data:
+	$(PYTHON) -B scripts/check_finetune_data.py --config "$(FINETUNE_CONFIG)" $(FINETUNE_DATA_GATE_ARGS)
+
+finetune-smoke: check-finetune-data inspect-finetune
+	$(PYTHON) -B scripts/train.py --config "$(FINETUNE_SMOKE_CONFIG)" $(FINETUNE_SMOKE_TRAIN_ARGS)
+	$(PYTHON) -B scripts/check_finetune_smoke.py --smoke-config "$(FINETUNE_SMOKE_CONFIG)" --full-config "$(FINETUNE_CONFIG)" $(FINETUNE_SMOKE_GATE_ARGS)
+
+check-finetune-smoke:
+	$(PYTHON) -B scripts/check_finetune_smoke.py --smoke-config "$(FINETUNE_SMOKE_CONFIG)" --full-config "$(FINETUNE_CONFIG)" $(FINETUNE_SMOKE_GATE_ARGS)
+
+inspect-finetune: check-finetune-data
+	$(PYTHON) -B scripts/inspect_dataset.py --config "$(FINETUNE_CONFIG)"
+
+finetune-train: check-finetune-data inspect-finetune check-finetune-smoke
+	$(PYTHON) -B scripts/train.py --config "$(FINETUNE_CONFIG)" $(FINETUNE_TRAIN_ARGS)
+
+eval-val-geometry eval-test-geometry infer-geometry export-geometry conversion-data-geometry: export HAND_EXPERIMENT_ID := $(HAND_PRETRAIN_ID)
+eval-val-geometry eval-test-geometry infer-geometry export-geometry conversion-data-geometry: export HAND_RUN_PHASE := geometry
+eval-val-geometry eval-test-geometry infer-geometry export-geometry conversion-data-geometry: export HAND_MODEL_STAGE := pretrain
+export-geometry conversion-data-geometry: export HAND_TRAIN_CONFIG := configs/train_geometry.yaml
+
+eval-val-multitask eval-test-multitask infer-multitask export-multitask conversion-data-multitask: export HAND_EXPERIMENT_ID := $(HAND_PRETRAIN_ID)
+eval-val-multitask eval-test-multitask infer-multitask export-multitask conversion-data-multitask: export HAND_RUN_PHASE := multitask
+eval-val-multitask eval-test-multitask infer-multitask export-multitask conversion-data-multitask: export HAND_MODEL_STAGE := pretrain
+export-multitask conversion-data-multitask: export HAND_TRAIN_CONFIG := configs/train_multitask.yaml
+
+eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune: export HAND_EXPERIMENT_ID := $(HAND_FINETUNE_ID)
+eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune: export HAND_RUN_PHASE := finetune
+eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune: export HAND_MODEL_STAGE := finetune
+export-finetune conversion-data-finetune: export HAND_TRAIN_CONFIG := configs/train_finetune.yaml
+
+eval-val-geometry eval-val-multitask eval-val-finetune:
 	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_VAL_CONFIG)" $(EVAL_ARGS)
 
-eval-test-geometry eval-test-multitask:
+eval-test-geometry eval-test-multitask eval-test-finetune:
 	$(PYTHON) -B scripts/evaluate.py --config "$(EVAL_TEST_CONFIG)" $(EVAL_ARGS)
 
-infer-geometry infer-multitask:
+infer-geometry infer-multitask infer-finetune:
 	$(PYTHON) -B scripts/infer_folder.py --config "$(INFER_CONFIG)" $(INFER_ARGS)
 
-export-geometry export-multitask:
+export-geometry export-multitask export-finetune:
 	$(PYTHON) -B scripts/export_onnx.py --config "$(EXPORT_CONFIG)" $(EXPORT_ARGS)
 
-conversion-data-geometry conversion-data-multitask:
+conversion-data-geometry conversion-data-multitask conversion-data-finetune:
 	$(PYTHON) -B scripts/build_conversion_datasets.py --config "$(EXPORT_CONFIG)" $(CONVERSION_ARGS)
 
 test:

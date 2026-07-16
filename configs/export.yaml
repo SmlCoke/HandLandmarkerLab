@@ -3,7 +3,7 @@ task: export_onnx
 
 model:
   version: v2
-  checkpoint_stage: pretrain
+  checkpoint_stage: "${HAND_MODEL_STAGE:-pretrain}"
   input_shape: [1, 256, 256]
   input_layout: NCHW
   input_dtype: float32
@@ -16,10 +16,10 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/${HAND_PRETRAIN_PHASE:-geometry}/checkpoints/best.weights.h5"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/${HAND_RUN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 export:
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/export/${HAND_PRETRAIN_PHASE:-geometry}/hand_landmarker_v2.onnx"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/export/${HAND_RUN_PHASE:-geometry}/hand_landmarker_v2.onnx"
   opset: 11
   input_name: inputs
   output_names: [landmarks, hand_flag, handedness]
@@ -51,7 +51,7 @@ export:
   # are opened read-only and are never copied back into Train/Val/Test roots.
   conversion_datasets:
     enabled: true
-    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/export/${HAND_PRETRAIN_PHASE:-geometry}/model_conversion"
+    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/export/${HAND_RUN_PHASE:-geometry}/model_conversion"
     selection_salt: hand_landmarker_v2_conversion_inputs_v1
     input:
       shape: [1, 1, 256, 256]
@@ -63,7 +63,7 @@ export:
         minimum_count: 20
         sources:
           train:
-            config_path: "${HAND_PRETRAIN_CALIBRATION_CONFIG:-configs/train_geometry.yaml}"
+            config_path: "${HAND_TRAIN_CONFIG:-configs/train_geometry.yaml}"
             count: 100
             stratify_by: [sample_type, dataset_id]
       evaluate_datasets:

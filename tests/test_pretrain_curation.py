@@ -1,7 +1,9 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hand_landmarker.inspect import DatasetContractError, audit_canonical_dataset
 from hand_landmarker.io_utils import read_jsonl, sha256_file, write_jsonl
@@ -112,6 +114,13 @@ class PretrainCurationTests(unittest.TestCase):
             "review": {
                 "decisions_file": str(review_root / "negative_review_decisions.jsonl"),
                 "candidates_subdir": "negative_candidates",
+                "reviewed_subdir": "negative_reviewed",
+                "removed_subdir": "negative_removed",
+                "quarantine_subdir": "negative_quarantine",
+                "removed_manifest_file": "negative_removed_manifest.jsonl",
+                "quarantine_manifest_file": "negative_quarantine_manifest.jsonl",
+                "cleanup_candidates_after_success": True,
+                "retain_reviewed_evidence": True,
                 "reviewer": "unit-test-team",
             },
             "output": {
@@ -119,6 +128,20 @@ class PretrainCurationTests(unittest.TestCase):
                 "overwrite": False,
             },
         }
+
+    def _review_candidates(self, output, crop_ids):
+        review_root = self.root / "reviews" / Path(output).name
+        manifest = read_jsonl(review_root / "review_manifest.jsonl")
+        selected = set(crop_ids)
+        for row in manifest:
+            if row["crop_id"] not in selected:
+                continue
+            relative = Path(row["candidate_relative_path"])
+            source = review_root / "negative_candidates" / relative
+            destination = review_root / "negative_reviewed" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        return manifest
 
     def test_positive_snapshot_and_negative_quarantine_are_persisted(self):
         output = self.root / "curated"
@@ -235,14 +258,18 @@ class PretrainCurationTests(unittest.TestCase):
         config = self._config(output)
         curate_pretrain_from_config(config)
         review_root = self.root / "reviews" / output.name
-        review_manifest = read_jsonl(review_root / "review_manifest.jsonl")
-        overlap = next(row for row in review_manifest if row["crop_id"] == "neg-overlap")
-        (review_root / "negative_candidates" / overlap["candidate_relative_path"]).unlink()
+        self._review_candidates(output, {"neg-clean"})
 
         report = curate_pretrain_from_config(
             config, overwrite=True, finalize_review=True
         )
         self.assertEqual(1, report["counts"]["included_confirmed_negatives"])
+        self.assertEqual(2, report["counts"]["negative_review_expected"])
+        self.assertEqual(1, report["counts"]["negative_reviewed"])
+        self.assertEqual(1, report["counts"]["negative_admitted"])
+        self.assertEqual(1, report["counts"]["negative_removed"])
+        self.assertEqual(0, report["counts"]["negative_quarantine"])
+        self.assertFalse((review_root / "negative_candidates").exists())
         decisions = review_root / "negative_review_decisions.jsonl"
         self.assertEqual(sha256_file(decisions), report["negative_review_decisions"]["sha256"])
         decision_rows = read_jsonl(decisions)
@@ -273,10 +300,13 @@ class PretrainCurationTests(unittest.TestCase):
         output = self.root / "retained-overlap"
         config = self._config(output)
         curate_pretrain_from_config(config)
+        self._review_candidates(output, {"neg-overlap", "neg-clean"})
         report = curate_pretrain_from_config(
             config, overwrite=True, finalize_review=True
         )
         self.assertEqual(2, report["negative_review_workspace"]["retained_confirmed_count"])
+        self.assertEqual(1, report["negative_review_workspace"]["quarantine_count"])
+        self.assertEqual(1, report["negative_review_workspace"]["admitted_confirmed_count"])
         self.assertEqual(1, report["counts"]["included_confirmed_negatives"])
         queue = {
             row["crop_id"]: row
@@ -303,8 +333,9 @@ class PretrainCurationTests(unittest.TestCase):
         config = self._config(output)
         curate_pretrain_from_config(config)
         review_root = self.root / "reviews" / output.name
-        manifest = read_jsonl(review_root / "review_manifest.jsonl")
-        candidate = review_root / "negative_candidates" / manifest[0]["candidate_relative_path"]
+        manifest = self._review_candidates(output, {"neg-clean"})
+        row = next(row for row in manifest if row["crop_id"] == "neg-clean")
+        candidate = review_root / "negative_reviewed" / row["candidate_relative_path"]
         candidate.write_bytes(b"modified")
         with self.assertRaisesRegex(ValueError, "was modified"):
             curate_pretrain_from_config(
@@ -372,12 +403,100 @@ class PretrainCurationTests(unittest.TestCase):
         output = self.root / "invalid-review-output"
         config = self._config(output)
         curate_pretrain_from_config(config)
-        candidates = self.root / "reviews" / output.name / "negative_candidates"
-        (candidates / "unmanifested.png").write_bytes(b"not-reviewed")
+        reviewed = self.root / "reviews" / output.name / "negative_reviewed"
+        (reviewed / "unmanifested.png").write_bytes(b"not-reviewed")
         with self.assertRaisesRegex(ValueError, "not present in review_manifest"):
             curate_pretrain_from_config(
                 config, overwrite=True, finalize_review=True
             )
+
+    def test_review_folder_rejects_archives_and_preserves_candidates_on_failure(self):
+        output = self.root / "archive-review-output"
+        config = self._config(output)
+        curate_pretrain_from_config(config)
+        review_root = self.root / "reviews" / output.name
+        (review_root / "negative_reviewed" / "review-copy.zip").write_bytes(b"zip")
+        with self.assertRaisesRegex(ValueError, "unsupported file or archive"):
+            curate_pretrain_from_config(
+                config, overwrite=True, finalize_review=True
+            )
+        self.assertEqual(
+            2, len(list((review_root / "negative_candidates").rglob("*.png")))
+        )
+        self.assertFalse((review_root / "negative_removed_manifest.jsonl").exists())
+
+    def test_removed_quarantine_manifests_and_idempotent_recovery(self):
+        output = self.root / "transactional-review"
+        config = self._config(output)
+        curate_pretrain_from_config(config)
+        review_root = self.root / "reviews" / output.name
+        self._review_candidates(output, {"neg-overlap", "neg-clean"})
+
+        first = curate_pretrain_from_config(
+            config, overwrite=True, finalize_review=True
+        )
+        removed = read_jsonl(review_root / "negative_removed_manifest.jsonl")
+        quarantine = read_jsonl(review_root / "negative_quarantine_manifest.jsonl")
+        self.assertEqual([], removed)
+        self.assertEqual(["neg-overlap"], [row["crop_id"] for row in quarantine])
+        self.assertEqual(
+            "negative_quarantine_manifest_v1", quarantine[0]["schema_version"]
+        )
+        self.assertTrue(
+            (
+                review_root
+                / "negative_quarantine"
+                / quarantine[0]["candidate_relative_path"]
+            ).is_file()
+        )
+        with (review_root / "review_transaction.json").open(encoding="utf-8") as handle:
+            transaction = json.load(handle)
+        self.assertEqual("committed", transaction["status"])
+        self.assertEqual("complete", transaction["candidate_cleanup"])
+        self.assertEqual(
+            {"expected": 2, "reviewed": 2, "admitted": 1, "quarantine": 1, "removed": 0},
+            transaction["partitions"],
+        )
+
+        second = curate_pretrain_from_config(
+            config, overwrite=True, finalize_review=True
+        )
+        self.assertEqual(first["counts"], second["counts"])
+        dataset = {
+            "labels": str(
+                output / "05_labels" / "hand_training_labels_pretrain_multitask.jsonl"
+            ),
+            "curation_manifest": str(output / "qc" / "sha256_manifest.json"),
+            "require_curation_schema": "pretrain_curation_v1",
+        }
+        verified = verify_curation_manifest({}, dataset)
+        self.assertEqual(
+            "committed", verified["negative_review_transaction"]["status"]
+        )
+
+    def test_prepared_transaction_recovers_without_early_candidate_cleanup(self):
+        output = self.root / "prepared-recovery"
+        config = self._config(output)
+        curate_pretrain_from_config(config)
+        review_root = self.root / "reviews" / output.name
+        self._review_candidates(output, {"neg-clean"})
+        with mock.patch(
+            "hand_landmarker.pretrain_curation._complete_retained_negative_review_transaction",
+            side_effect=RuntimeError("injected-after-snapshot-commit"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected"):
+                curate_pretrain_from_config(
+                    config, overwrite=True, finalize_review=True
+                )
+        self.assertTrue((review_root / "negative_candidates").is_dir())
+        with (review_root / "review_transaction.json").open(encoding="utf-8") as handle:
+            self.assertEqual("prepared", json.load(handle)["status"])
+
+        recovered = curate_pretrain_from_config(
+            config, overwrite=True, finalize_review=True
+        )
+        self.assertEqual(1, recovered["counts"]["included_confirmed_negatives"])
+        self.assertFalse((review_root / "negative_candidates").exists())
 
 
 if __name__ == "__main__":

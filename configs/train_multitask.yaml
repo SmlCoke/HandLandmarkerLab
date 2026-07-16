@@ -27,6 +27,10 @@ training:
     handedness_error_weight: 0.005
 
 sampling:
+  epoch_size: auto
+  epoch_size_upper_bound: 6400
+  max_average_cell_draws_per_unique_record: 4.0
+  max_expected_row_draws_per_epoch: 8.0
   sample_type_fractions:
     POS_RUNTIME: 0.72
     POS_LOW_PALM: 0.18

@@ -1,6 +1,8 @@
 # Pretrain 数据与分阶段训练操作手册
 
-本文是当前 v2 pretrain 的主操作手册。当前范围不包含 finetune，也不需要 Gold finetune 数据。
+本文是 v2 pretrain 的专项操作手册，范围只到 geometry 与 multitask；已经实现的 Gold/finetune 流程由下述端到端文档单独说明。
+
+本文只说明 pretrain 组件。跨 HLMF、geometry、负例复核、multitask、Gold 和 finetune 的项目最高级流程，以 [HLMF + HLML Hand Landmarker 完整训练流程 v1.0](end_to_end_training_workflow_v1_0.md) 为准；理解完整流程后可按[简易操作手册 v1.0](end_to_end_training_quick_runbook_v1_0.md)执行。实际目标和依赖链以 Makefile 为最终权威。
 
 ## 1. 为什么 pretrain 分成两个阶段
 
@@ -154,6 +156,7 @@ make test
 <curated_root>/audit/negative_review_queue.jsonl
 <curated_root>/audit/review_image_manifest.jsonl
 ${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/
+${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_reviewed/
 ${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json
 ```
 
@@ -167,12 +170,14 @@ ${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json
 
 ### 4.3 人工复核负例
 
-直接递归打开 `hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_candidates/`：
+`negative_candidates/` 是程序生成的完整只读候选池，不能直接在其中删除图片。先在本地保持原相对目录复制候选并完成删除式复核，再将保留结果放入 sibling `hand_landmarker_reviews/<HAND_PRETRAIN_ID>/negative_reviewed/`：
 
 - 图片中只要存在手、手指、手腕或疑似手部区域，就删除该图片；
 - 遮挡、模糊、过暗、过曝、边缘局部或无法确定的图片也删除；
 - 只有明确无手的背景 ROI 才保留；
-- 不要增加、改名、移动或编辑图片，否则 manifest/哈希门禁会拒绝；
+- 不要增加、改名、移动、重新保存或编辑图片，否则 manifest/哈希门禁会拒绝；
+- `negative_reviewed/` 只能包含受支持的图片，ZIP、7z 和其他额外文件必须留在目录外；
+- 服务器原 `negative_candidates/` 必须完整保留到程序成功提交事务，不能人工清理；
 - `NEG_RUNTIME_CANDIDATE`、`NEG_LOW_PALM_CANDIDATE` 和各 `dataset_id` 已分目录，可由三人直接按目录分工；无需记录逐图 reviewer，也无需手写 JSONL。
 
 配置中的 `review.reviewer: hlml-visual-review-team` 表示这是一批由三人团队共同完成的可视化复核。`make pretrain-curate-reviewed` 会为所有保留图片统一生成 `reviewer`、`reviewed_at`、`review_method` 和图片 SHA-256。运行该命令本身就是“全部目录已审完”的显式确认，因此未完成前不要运行。
@@ -183,7 +188,14 @@ ${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json
 make pretrain-curate-reviewed
 ```
 
-该命令扫描 `negative_candidates/` 中仍存在的图片，对照 `review_manifest.jsonl` 检查身份和 SHA-256，自动生成 YAML 所指定的 `negative_review_decisions.jsonl`，再显式重建同一个 curated ID。被删除的图片继续保持 HOLD，不会进入训练；自动检测到与已确认手重叠的候选即使被保留，也仍不会进入 multitask。重建后检查：
+该命令只把 `negative_reviewed/` 视为人工保留集合，以 `review_manifest.jsonl` 中的 `candidate_relative_path` 对齐身份，并核验 reviewed 图片、候选 manifest 和 `train_sources/` 原 ROI 三方 SHA-256。程序随后以事务方式生成：
+
+- `negative_review_decisions.jsonl`：人工保留项的复核证据；
+- `negative_removed/` 与 `negative_removed_manifest.jsonl`：完整候选中不在 reviewed 的补集；
+- `negative_quarantine/` 与 `negative_quarantine_manifest.jsonl`：虽被人工保留、但命中 confirmed-hand overlap 安全门禁的冲突项；
+- 新的 curated multitask 快照和 `review_transaction.json`。
+
+只有 `reviewed - quarantine` 会作为 confirmed negative 进入 multitask。所有清单、SHA 和 curated 快照成功提交后，程序才清理完整 `negative_candidates/`；失败或中断可幂等复跑，不会先丢失候选。重建后检查：
 
 ```bash
 make check-multitask-data
@@ -199,7 +211,7 @@ make check-multitask-data
 
 门槛写在 `configs/train_multitask.yaml`，变更门槛必须作为一次明确的配置变更提交，不能通过删掉 gate 绕过。数量不足时仍可训练 geometry，但不可启动 multitask。
 
-`hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json` 记录原候选数、保留确认数和删除数；`qc/sha256_manifest.json` 与 `qc/curation_report.json` 记录自动生成 decisions 文件的路径、SHA-256 和决策数。确认后的 multitask JSONL 保留在 curated 目录，其 `crop_path` 仍指向 `train_sources/` 中的唯一 ROI 数据。
+`hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json` 记录 expected、reviewed、admitted、removed、quarantine 和 candidates cleanup 状态；`review_transaction.json` 必须为 `status=committed` 且 `candidate_cleanup=complete`。`qc/sha256_manifest.json` 会认证 decisions、review manifest、removed manifest 和 quarantine manifest。确认后的 multitask JSONL 保留在 curated 目录，其 `crop_path` 仍指向 `train_sources/` 中的唯一 ROI 数据。
 
 ### 4.5 Geometry 阶段
 

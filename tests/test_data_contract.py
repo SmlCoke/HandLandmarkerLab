@@ -284,6 +284,109 @@ class CanonicalDataContractTests(unittest.TestCase):
             self.assertEqual(str(actual.resolve()), samples[0]["_resolved_crop_path"])
             self.assertEqual("rebased", samples[0]["_path_resolution"])
 
+    def test_allowed_crop_roots_apply_to_direct_canonical_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            allowed = root / "allowed"
+            outside = root / "outside"
+            allowed.mkdir()
+            outside.mkdir()
+            image = outside / "crop.bmp"
+            _write_image(image)
+            labels = root / "labels.jsonl"
+            _write_jsonl(labels, [_train_row("outside", image)])
+            dataset = _dataset_config(labels)
+            dataset.update(
+                {
+                    "crop_image_roots": [str(allowed)],
+                    "allowed_crop_roots": [str(allowed)],
+                }
+            )
+
+            samples, report = audit_canonical_dataset(
+                {"data": dataset, "stage": "pretrain", "task": "train"},
+                expected_stage="pretrain",
+                check_images=True,
+                raise_on_error=False,
+            )
+            self.assertEqual([], samples)
+            self.assertEqual("failed", report["status"])
+            self.assertIn("escapes allowed_crop_roots", " ".join(report["errors"][0]["errors"]))
+
+    def test_allowed_crop_roots_reject_symlinked_crop(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            allowed = root / "allowed"
+            outside = root / "outside"
+            allowed.mkdir()
+            outside.mkdir()
+            target = outside / "crop.bmp"
+            _write_image(target)
+            linked = allowed / "crop.bmp"
+            try:
+                linked.symlink_to(target)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest("File symlinks are unavailable: {}".format(exc))
+            labels = root / "labels.jsonl"
+            _write_jsonl(labels, [_train_row("linked", linked)])
+            dataset = _dataset_config(labels)
+            dataset.update(
+                {
+                    "crop_image_roots": [str(allowed)],
+                    "allowed_crop_roots": [str(allowed)],
+                }
+            )
+
+            samples, report = audit_canonical_dataset(
+                {"data": dataset, "stage": "pretrain", "task": "train"},
+                expected_stage="pretrain",
+                check_images=True,
+                raise_on_error=False,
+            )
+            self.assertEqual([], samples)
+            self.assertEqual("failed", report["status"])
+            self.assertIn("symlink component", " ".join(report["errors"][0]["errors"]))
+
+    def test_validation_roots_override_train_roots(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            train_root = root / "train"
+            eval_root = root / "eval"
+            train_root.mkdir()
+            eval_root.mkdir()
+            train_image = train_root / "train.bmp"
+            val_image = eval_root / "val.bmp"
+            _write_image(train_image, 40)
+            _write_image(val_image, 90)
+            train_labels = root / "train.jsonl"
+            val_labels = root / "val.jsonl"
+            _write_jsonl(train_labels, [_train_row("train", train_image)])
+            _write_jsonl(val_labels, [_evaluation_row("val", val_image)])
+            dataset = _dataset_config(train_labels)
+            dataset.update(
+                {
+                    "data_root": str(train_root),
+                    "crop_image_roots": [str(train_root)],
+                    "allowed_crop_roots": [str(train_root)],
+                }
+            )
+            config = {
+                "task": "train",
+                "stage": "pretrain",
+                "data": dataset,
+                "validation": {
+                    "enabled": True,
+                    "data_root": str(eval_root),
+                    "labels": str(val_labels),
+                    "crop_image_roots": [str(eval_root)],
+                    "allowed_crop_roots": [str(eval_root)],
+                },
+            }
+
+            report = inspect_config(config, check_images=True, hash_images=True)
+            self.assertEqual("ok", report["datasets"]["primary"]["status"])
+            self.assertEqual("ok", report["datasets"]["validation"]["status"])
+
     def test_stage_schema_and_weights_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -413,6 +516,72 @@ class CanonicalDataContractTests(unittest.TestCase):
         gold = sum(records[int(index)]["supervision_tier"] == "gold" for index in indices)
         self.assertEqual(40, gold)
 
+    def test_pretrain_auto_epoch_size_uses_exact_batch_quota_and_row_weights(self):
+        fractions = {
+            "POS_RUNTIME": 0.72,
+            "POS_LOW_PALM": 0.18,
+            "NEG_RUNTIME_CANDIDATE": 0.08,
+            "NEG_LOW_PALM_CANDIDATE": 0.02,
+        }
+        counts = {
+            "POS_RUNTIME": 1600,
+            "POS_LOW_PALM": 500,
+            "NEG_RUNTIME_CANDIDATE": 128,
+            "NEG_LOW_PALM_CANDIDATE": 894,
+        }
+        records = []
+        for sample_type, count in counts.items():
+            for index in range(count):
+                records.append(
+                    {
+                        "crop_id": "{}:{}".format(sample_type, index),
+                        "supervision_tier": "pseudo",
+                        "sample_type": sample_type,
+                        "sampling_bucket": "pseudo:{}".format(sample_type),
+                        "sampling_weight": 0.25,
+                    }
+                )
+        sampler = WeightedStratifiedSampler(
+            records,
+            "pretrain",
+            seed=7,
+            sample_type_fractions=fractions,
+        )
+        epoch_size, report = sampler.resolve_auto_epoch_size(
+            batch_size=64,
+            upper_bound=6400,
+            max_average_draws=4.0,
+            max_expected_row_draws=8.0,
+        )
+        self.assertEqual(6400, epoch_size)
+        runtime = report["cell_reports"]["pseudo:NEG_RUNTIME_CANDIDATE"]
+        self.assertEqual(500, runtime["draws"])
+        self.assertAlmostEqual(3.90625, runtime["average_draws_per_unique_record"])
+        self.assertAlmostEqual(3.90625, runtime["max_expected_row_draws"])
+        self.assertEqual("pseudo:NEG_RUNTIME_CANDIDATE", report["limiting_cell"])
+
+        one_runtime = [
+            row
+            for row in records
+            if row["sample_type"] != "NEG_RUNTIME_CANDIDATE"
+        ] + [
+            {
+                "crop_id": "only-runtime-negative",
+                "supervision_tier": "pseudo",
+                "sample_type": "NEG_RUNTIME_CANDIDATE",
+                "sampling_bucket": "pseudo:NEG_RUNTIME_CANDIDATE",
+                "sampling_weight": 1.0,
+            }
+        ]
+        unsafe = WeightedStratifiedSampler(
+            one_runtime,
+            "pretrain",
+            seed=7,
+            sample_type_fractions=fractions,
+        )
+        with self.assertRaisesRegex(DatasetContractError, "No whole-batch epoch_size"):
+            unsafe.resolve_auto_epoch_size(64, 6400, 4.0, 8.0)
+
     def test_finetune_sampler_enforces_exact_cross_bucket_quota(self):
         records = []
         for tier in ("gold", "pseudo"):
@@ -515,6 +684,113 @@ class CanonicalDataContractTests(unittest.TestCase):
                 gold_fraction=0.4,
                 sample_type_fractions=SAMPLE_TYPE_FRACTIONS,
             )
+
+    def test_finetune_epoch_plan_redistributes_missing_gold_cells(self):
+        records = []
+        for tier, count in (("gold", 20), ("pseudo", 20)):
+            for index in range(count):
+                records.append(
+                    {
+                        "crop_id": "{}:{}".format(tier, index),
+                        "supervision_tier": tier,
+                        "sample_type": "POS_RUNTIME",
+                        "sampling_bucket": "{}:POS_RUNTIME".format(tier),
+                        "sampling_weight": 1.0,
+                    }
+                )
+        sampler = WeightedStratifiedSampler(
+            records,
+            "finetune",
+            seed=19,
+            gold_fraction=0.4,
+            sample_type_fractions_by_tier={
+                "gold": {
+                    "POS_RUNTIME": 0.70,
+                    "POS_LOW_PALM": 0.20,
+                    "NEG_RUNTIME_CANDIDATE": 0.07,
+                    "NEG_LOW_PALM_CANDIDATE": 0.03,
+                },
+                "pseudo": POS_ONLY_FRACTIONS,
+            },
+            missing_cell_policy={"gold": "redistribute_within_tier", "pseudo": "fail"},
+        )
+        indices = sampler.sample_epoch([10] * 10, epoch=3)
+        self.assertEqual(100, len(indices))
+        self.assertEqual(
+            {"gold": 40, "pseudo": 60},
+            dict(Counter(records[int(index)]["supervision_tier"] for index in indices)),
+        )
+        plan = sampler.last_epoch_plan
+        self.assertIsNotNone(plan)
+        self.assertEqual(40, plan["epoch_draw_quota_by_tier_type"]["gold"]["POS_RUNTIME"])
+        self.assertEqual(
+            ["POS_LOW_PALM", "NEG_RUNTIME_CANDIDATE", "NEG_LOW_PALM_CANDIDATE"],
+            plan["configured_and_effective_fractions"]["gold"]["missing"],
+        )
+        self.assertTrue(
+            all(batch.get("gold:POS_RUNTIME") == 4 for batch in plan["batch_cell_quotas"])
+        )
+
+    def test_finetune_epoch_plan_caps_rare_gold_negative_across_batches(self):
+        records = []
+        for tier in ("gold", "pseudo"):
+            for index in range(20):
+                records.append(
+                    {
+                        "crop_id": "{}:pos:{}".format(tier, index),
+                        "supervision_tier": tier,
+                        "sample_type": "POS_RUNTIME",
+                        "sampling_bucket": "{}:POS_RUNTIME".format(tier),
+                        "sampling_weight": 1.0,
+                    }
+                )
+        records.append(
+            {
+                "crop_id": "gold:rare-negative",
+                "supervision_tier": "gold",
+                "sample_type": "NEG_RUNTIME_CANDIDATE",
+                "sampling_bucket": "gold:NEG_RUNTIME_CANDIDATE",
+                "sampling_weight": 1.0,
+            }
+        )
+        sampler = WeightedStratifiedSampler(
+            records,
+            "finetune",
+            seed=23,
+            gold_fraction=0.5,
+            sample_type_fractions_by_tier={
+                "gold": {
+                    "POS_RUNTIME": 0.80,
+                    "POS_LOW_PALM": 0.0,
+                    "NEG_RUNTIME_CANDIDATE": 0.20,
+                    "NEG_LOW_PALM_CANDIDATE": 0.0,
+                },
+                "pseudo": POS_ONLY_FRACTIONS,
+            },
+            missing_cell_policy={"gold": "redistribute_within_tier", "pseudo": "fail"},
+            rare_cell_policy={
+                "gold": "cap_fraction_then_redistribute_within_tier",
+                "pseudo": "fail",
+                "max_average_draws_per_unique_record": 4.0,
+                "max_expected_row_draws_per_epoch": 8.0,
+            },
+        )
+        indices = sampler.sample_epoch([10] * 10, epoch=0)
+        plan = sampler.last_epoch_plan
+        self.assertEqual(100, len(indices))
+        self.assertEqual(
+            4,
+            plan["epoch_draw_quota_by_tier_type"]["gold"]["NEG_RUNTIME_CANDIDATE"],
+        )
+        negative_batches = sum(
+            batch.get("gold:NEG_RUNTIME_CANDIDATE", 0) > 0
+            for batch in plan["batch_cell_quotas"]
+        )
+        self.assertEqual(4, negative_batches)
+        self.assertEqual(
+            6,
+            plan["rare_cell_quota_cap"]["gold"]["redistributed_draws"],
+        )
 
     def test_sampler_rejects_pretrain_gold_and_non_finite_fractions(self):
         pseudo = {

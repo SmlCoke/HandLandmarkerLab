@@ -1,0 +1,37 @@
+extends: train_finetune.yaml
+
+experiment:
+  name: hand_landmarker_v2_finetune_smoke
+
+data:
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_finetune_merged/${HAND_FINETUNE_ID:-v2-finetune-r1}/05_labels/hand_training_labels_finetune_smoke.jsonl"
+
+training:
+  epochs: 300
+  batch_size: 32
+  checkpoint: {monitor: loss, mode: min}
+  learning_rate_schedule:
+    monitor: loss
+    mode: min
+  early_stopping:
+    monitor: loss
+    mode: min
+
+sampling:
+  epoch_size: 256
+
+augmentation: {enabled: false}
+validation: {enabled: false}
+
+outputs:
+  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_FINETUNE_ID:-v2-finetune-r1}/finetune_smoke"
+
+smoke_gate:
+  expected_records: 256
+  maximum_mean_landmark_mae: 0.02
+  maximum_p90_landmark_mae: 0.04
+  maximum_max_landmark_mae: 0.10
+  maximum_hand_flag_bce: 0.08
+  minimum_hand_flag_accuracy: 0.98
+  maximum_handedness_bce: 0.15
+  minimum_handedness_accuracy: 0.95

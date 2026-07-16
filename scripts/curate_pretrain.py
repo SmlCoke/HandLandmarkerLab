@@ -26,7 +26,10 @@ def main() -> None:
     parser.add_argument(
         "--finalize-retained-review",
         action="store_true",
-        help="Treat every retained, manifest-matched review image as a confirmed negative",
+        help=(
+            "Transactionally import only manifest-matched images from negative_reviewed; "
+            "partition absent and safety-conflicting images before rebuilding multitask data"
+        ),
     )
     args = parser.parse_args()
     config = load_config(args.config)

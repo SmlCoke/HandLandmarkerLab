@@ -13,7 +13,7 @@ from hand_landmarker.contracts import (
     validate_model_checkpoint_stage,
 )
 from hand_landmarker.evaluation import evaluate_from_config, evaluate_hand_rois
-from hand_landmarker.export import export_from_config
+from hand_landmarker.export import _finetune_training_provenance, export_from_config
 from hand_landmarker.training import train_from_config
 from hand_landmarker.visualization import infer_folder_from_config
 from scripts import evaluate as evaluate_script
@@ -37,6 +37,52 @@ def _positive_row():
 
 
 class CheckpointStageContractTests(unittest.TestCase):
+    def test_finetune_export_records_training_manifest_and_initial_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "sha256_manifest.json"
+            initial = root / "multitask" / "best.weights.h5"
+            initial.parent.mkdir()
+            manifest.write_text("{}\n", encoding="utf-8")
+            initial.write_bytes(b"multitask-checkpoint")
+            train_config_path = root / "train_finetune.yaml"
+            train_config_path.write_text(
+                json.dumps(
+                    {
+                        "task": "train",
+                        "stage": "finetune",
+                        "model": {"checkpoint_stage": "finetune"},
+                        "data": {"curation_manifest": str(manifest)},
+                        "training": {"initial_checkpoint": str(initial)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = {
+                "export": {
+                    "conversion_datasets": {
+                        "sets": {
+                            "calibrate_datasets": {
+                                "sources": {
+                                    "train": {"config_path": str(train_config_path)}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            provenance = _finetune_training_provenance(config)
+            self.assertEqual("finetune_export_provenance_v1", provenance["schema_version"])
+            self.assertEqual(str(manifest.resolve()), provenance["curation_manifest"]["path"])
+            self.assertEqual(
+                str(initial.resolve()),
+                provenance["initial_multitask_checkpoint"]["path"],
+            )
+            for artifact in provenance.values():
+                if isinstance(artifact, dict) and "sha256" in artifact:
+                    self.assertEqual(64, len(artifact["sha256"]))
+
     def test_checkpoint_stage_is_a_required_strict_enum(self):
         self.assertEqual(
             "pretrain",

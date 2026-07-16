@@ -1,9 +1,11 @@
 import json
+import os
 import re
 import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hand_landmarker.config import load_config
 
@@ -16,8 +18,8 @@ def _normalized(value):
     return str(value).replace("\\", "/")
 
 
-class PretrainConfigRouteTests(unittest.TestCase):
-    expected_configs = {
+class StageConfigRouteTests(unittest.TestCase):
+    pretrain_configs = {
         "curate_pretrain.yaml",
         "train_geometry.yaml",
         "train_smoke.yaml",
@@ -28,13 +30,20 @@ class PretrainConfigRouteTests(unittest.TestCase):
         "export.yaml",
         "export_preflight.yaml",
     }
+    finetune_configs = {
+        "prepare_finetune_sources.yaml",
+        "curate_finetune.yaml",
+        "train_finetune.yaml",
+        "train_finetune_smoke.yaml",
+    }
 
-    def test_config_surface_is_small_and_pretrain_only(self):
+    def test_config_surface_is_small_and_stage_complete(self):
         self.assertEqual(
-            self.expected_configs,
+            self.pretrain_configs | self.finetune_configs,
             {path.name for path in CONFIGS.glob("*.yaml")},
         )
-        for path in CONFIGS.glob("*.yaml"):
+        for filename in self.pretrain_configs:
+            path = CONFIGS / filename
             text = path.read_text(encoding="utf-8").lower()
             self.assertNotIn("finetune", text, path.name)
 
@@ -54,6 +63,11 @@ class PretrainConfigRouteTests(unittest.TestCase):
                 config = load_config(CONFIGS / (name + ".yaml"))
                 self.assertEqual("v2", config["model"]["version"])
                 self.assertEqual("pretrain", config["model"]["checkpoint_stage"])
+        for name in ("train_finetune", "train_finetune_smoke"):
+            with self.subTest(config=name):
+                config = load_config(CONFIGS / (name + ".yaml"))
+                self.assertEqual("v2", config["model"]["version"])
+                self.assertEqual("finetune", config["model"]["checkpoint_stage"])
 
     def test_geometry_and_multitask_are_explicit_persisted_phases(self):
         curation = load_config(CONFIGS / "curate_pretrain.yaml")
@@ -101,6 +115,29 @@ class PretrainConfigRouteTests(unittest.TestCase):
             sources["evaluate_datasets"]["sources"]["test"]["config_path"],
         )
 
+    def test_generic_consumers_resolve_finetune_stage_and_experiment(self):
+        environment = {
+            "HAND_MODEL_STAGE": "finetune",
+            "HAND_EXPERIMENT_ID": "v2-finetune-route-test",
+            "HAND_RUN_PHASE": "finetune",
+            "HAND_TRAIN_CONFIG": "configs/train_finetune.yaml",
+        }
+        with mock.patch.dict(os.environ, environment, clear=False):
+            for name in ("eval_val", "eval_test", "infer", "export"):
+                with self.subTest(config=name):
+                    config = load_config(CONFIGS / (name + ".yaml"))
+                    self.assertEqual("finetune", config["model"]["checkpoint_stage"])
+                    self.assertIn(
+                        "/v2-finetune-route-test/",
+                        _normalized(config["hand"]["model_path"]),
+                    )
+                    self.assertIn("/finetune/", _normalized(config["hand"]["model_path"]))
+            export = load_config(CONFIGS / "export.yaml")
+            train_source = export["export"]["conversion_datasets"]["sets"][
+                "calibrate_datasets"
+            ]["sources"]["train"]
+            self.assertEqual("configs/train_finetune.yaml", train_source["config_path"])
+
     def test_no_config_serializes_a_v1_model(self):
         for path in CONFIGS.glob("*.yaml"):
             config = load_config(path)
@@ -109,7 +146,7 @@ class PretrainConfigRouteTests(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("make"), "GNU Make is required")
-class MakePretrainRouteTests(unittest.TestCase):
+class MakeStageRouteTests(unittest.TestCase):
     make = shutil.which("make")
 
     def _dry_run(self, target):
@@ -131,6 +168,11 @@ class MakePretrainRouteTests(unittest.TestCase):
         match = re.search(r"(?m)^HAND_PRETRAIN_ID := ([A-Za-z0-9][A-Za-z0-9._-]*)$", text)
         self.assertIsNotNone(match, "Makefile must declare one filesystem-safe HAND_PRETRAIN_ID")
         self.assertTrue(match.group(1).startswith("v2-pretrain-"))
+        finetune = re.search(
+            r"(?m)^HAND_FINETUNE_ID \?= ([A-Za-z0-9][A-Za-z0-9._-]*)$", text
+        )
+        self.assertIsNotNone(finetune, "Makefile must declare HAND_FINETUNE_ID")
+        self.assertTrue(finetune.group(1).startswith("v2-finetune-"))
         self.assertNotIn("HAND_DATA_ROOT", text)
         self.assertNotIn("HAND_PRETRAIN_CURATED_ID", text)
         self.assertNotIn("HAND_PRETRAIN_RUN_ID", text)
@@ -157,6 +199,14 @@ class MakePretrainRouteTests(unittest.TestCase):
             "check-multitask-data": "configs/train_multitask.yaml",
             "inspect-multitask": "configs/train_multitask.yaml",
             "pretrain-multitask": "configs/train_multitask.yaml",
+            "prepare-finetune-sources": "configs/prepare_finetune_sources.yaml",
+            "check-finetune-sources": "configs/curate_finetune.yaml",
+            "finetune-curate": "configs/curate_finetune.yaml",
+            "check-finetune-data": "configs/train_finetune.yaml",
+            "finetune-smoke": "configs/train_finetune_smoke.yaml",
+            "check-finetune-smoke": "configs/train_finetune_smoke.yaml",
+            "inspect-finetune": "configs/train_finetune.yaml",
+            "finetune-train": "configs/train_finetune.yaml",
             "eval-val-geometry": "configs/eval_val.yaml",
             "eval-test-geometry": "configs/eval_test.yaml",
             "eval-val-multitask": "configs/eval_val.yaml",
@@ -167,6 +217,11 @@ class MakePretrainRouteTests(unittest.TestCase):
             "export-multitask": "configs/export.yaml",
             "conversion-data-geometry": "configs/export.yaml",
             "conversion-data-multitask": "configs/export.yaml",
+            "eval-val-finetune": "configs/eval_val.yaml",
+            "eval-test-finetune": "configs/eval_test.yaml",
+            "infer-finetune": "configs/infer.yaml",
+            "export-finetune": "configs/export.yaml",
+            "conversion-data-finetune": "configs/export.yaml",
             "test-export-preflight": "configs/export_preflight.yaml",
         }
         for target, config in expected.items():
@@ -180,6 +235,7 @@ class MakePretrainRouteTests(unittest.TestCase):
             "env", "curate", "inspect", "inspect-smoke", "smoke", "train",
             "pretrain", "multitask", "eval-val", "eval-test", "infer", "export",
             "conversion-data",
+            "finetune",
         ):
             with self.subTest(target=target):
                 result = self._dry_run(target)
@@ -195,6 +251,29 @@ class MakePretrainRouteTests(unittest.TestCase):
         self.assertGreater(inspection, gate, result.stdout)
         self.assertGreater(train, inspection, result.stdout)
         self.assertGreater(train, gate, result.stdout)
+
+    def test_finetune_full_train_requires_smoke_and_data_gates(self):
+        result = self._dry_run("finetune-train")
+        self.assertEqual(0, result.returncode, result.stdout)
+        data_gate = result.stdout.find("check_finetune_data.py")
+        inspection = result.stdout.find("inspect_dataset.py")
+        smoke = result.stdout.find("check_finetune_smoke.py")
+        train = result.stdout.rfind("scripts/train.py")
+        self.assertGreaterEqual(data_gate, 0, result.stdout)
+        self.assertGreater(inspection, data_gate, result.stdout)
+        self.assertGreater(smoke, inspection, result.stdout)
+        self.assertGreater(train, smoke, result.stdout)
+
+    def test_make_declares_explicit_generic_stage_routes(self):
+        text = (ROOT / "Makefile").read_text(encoding="utf-8")
+        for value in (
+            "HAND_EXPERIMENT_ID := $(HAND_PRETRAIN_ID)",
+            "HAND_EXPERIMENT_ID := $(HAND_FINETUNE_ID)",
+            "HAND_MODEL_STAGE := pretrain",
+            "HAND_MODEL_STAGE := finetune",
+            "HAND_TRAIN_CONFIG := configs/train_finetune.yaml",
+        ):
+            self.assertIn(value, text)
 
     def test_v2_depth_and_export_size_contract_are_shared(self):
         expected_iterations = [2, 2, 3, 4, 4, 6, 6]

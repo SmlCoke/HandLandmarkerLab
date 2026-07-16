@@ -14,6 +14,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from hand_landmarker.config import load_config, resolve_path
+from hand_landmarker.data import WeightedStratifiedSampler
 from hand_landmarker.io_utils import read_jsonl, write_json
 from hand_landmarker.pretrain_curation import verify_curation_manifest
 
@@ -71,8 +72,47 @@ def check_multitask_data(config: Mapping[str, Any]) -> Dict[str, Any]:
         confirmed.append(row)
 
     counts = Counter(str(row.get("sample_type")) for row in confirmed)
+    transaction = (manifest or {}).get("negative_review_transaction")
+    sampling = dict(config.get("sampling") or {})
+    epoch_resolution = None
+    if sampling.get("epoch_size") == "auto":
+        training = dict(config.get("training") or {})
+        experiment = dict(config.get("experiment") or {})
+        sampler = WeightedStratifiedSampler(
+            rows,
+            stage="pretrain",
+            seed=int(experiment.get("seed", 0)),
+            weight_key=str(sampling.get("weight_key", "sampling_weight")),
+            sample_type_fractions=sampling.get("sample_type_fractions"),
+            tier_key=str(sampling.get("tier_key", "supervision_tier")),
+            bucket_key=str(sampling.get("bucket_key", "sampling_bucket")),
+            sample_type_key=str(sampling.get("sample_type_key", "sample_type")),
+            quota_tie_break=sampling.get(
+                "quota_tie_break",
+                [
+                    "POS_RUNTIME",
+                    "POS_LOW_PALM",
+                    "NEG_RUNTIME_CANDIDATE",
+                    "NEG_LOW_PALM_CANDIDATE",
+                ],
+            ),
+            require_all_tier_sample_type_cells=bool(
+                sampling.get("require_all_tier_sample_type_cells", True)
+            ),
+        )
+        _, epoch_resolution = sampler.resolve_auto_epoch_size(
+            batch_size=int(training.get("batch_size", 0)),
+            upper_bound=int(sampling.get("epoch_size_upper_bound", 0)),
+            max_average_draws=float(
+                sampling.get("max_average_cell_draws_per_unique_record", 0.0)
+            ),
+            max_expected_row_draws=float(
+                sampling.get("max_expected_row_draws_per_epoch", 0.0)
+            ),
+        )
     checks = {
         "no_unreviewed_negative": not violations,
+        "authenticated_negative_review_transaction": bool(transaction),
         "has_positive_geometry": positives > 0,
         "minimum_confirmed_negatives": len(confirmed) >= minimum_total,
         "minimum_confirmed_by_sample_type": all(
@@ -95,6 +135,32 @@ def check_multitask_data(config: Mapping[str, Any]) -> Dict[str, Any]:
             "require_review_fields": required_review_fields,
         },
         "checks": checks,
+        "sampling_epoch_resolution": epoch_resolution,
+        "resolved_epoch_size": (
+            epoch_resolution.get("resolved_epoch_size") if epoch_resolution else None
+        ),
+        "expected_draws_per_unique_record": (
+            {
+                cell: value.get("average_draws_per_unique_record")
+                for cell, value in epoch_resolution.get("cell_reports", {}).items()
+            }
+            if epoch_resolution
+            else None
+        ),
+        "max_expected_row_draws": (
+            epoch_resolution.get("max_expected_row_draws") if epoch_resolution else None
+        ),
+        "limiting_cell": (
+            epoch_resolution.get("limiting_cell") if epoch_resolution else None
+        ),
+        "limiting_record_id": (
+            epoch_resolution.get("limiting_record_id") if epoch_resolution else None
+        ),
+        "limiting_record_normalized_weight": (
+            epoch_resolution.get("limiting_record_normalized_weight")
+            if epoch_resolution
+            else None
+        ),
         "violations": violations[:50],
         "violation_count": len(violations),
     }
