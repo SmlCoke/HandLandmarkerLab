@@ -107,7 +107,7 @@ class StageConfigRouteTests(unittest.TestCase):
         self.assertGreaterEqual(multitask["multitask_gate"]["minimum_confirmed_negatives"], 1)
         self.assertEqual("val_multitask_score", multitask["training"]["checkpoint"]["monitor"])
         self.assertTrue(multitask["training"]["multitask_monitor"]["enabled"])
-        self.assertTrue(_normalized(curation["source"]["crop_root"]).endswith("/train_sources"))
+        self.assertTrue(_normalized(curation["source"]["crop_root"]).endswith("/DatesetFab"))
         self.assertNotIn("materialize_images", curation["output"])
         self.assertNotIn("materialize_images", curation["review"])
 
@@ -139,7 +139,7 @@ class StageConfigRouteTests(unittest.TestCase):
     def test_generic_consumers_resolve_finetune_stage_and_experiment(self):
         environment = {
             "HAND_MODEL_STAGE": "finetune",
-            "HAND_EXPERIMENT_ID": "v2-finetune-route-test",
+            "HAND_EXPERIMENT_ID": "v3-finetune-route-test",
             "HAND_RUN_PHASE": "finetune",
             "HAND_TRAIN_CONFIG": "configs/train_finetune.yaml",
         }
@@ -149,7 +149,7 @@ class StageConfigRouteTests(unittest.TestCase):
                     config = load_config(CONFIGS / (name + ".yaml"))
                     self.assertEqual("finetune", config["model"]["checkpoint_stage"])
                     self.assertIn(
-                        "/v2-finetune-route-test/",
+                        "/v3-finetune-route-test/",
                         _normalized(config["hand"]["model_path"]),
                     )
                     self.assertIn("/finetune/", _normalized(config["hand"]["model_path"]))
@@ -185,15 +185,16 @@ class MakeStageRouteTests(unittest.TestCase):
 
     def test_makefile_declares_reproducible_identity(self):
         text = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0", text)
-        match = re.search(r"(?m)^HAND_PRETRAIN_ID := ([A-Za-z0-9][A-Za-z0-9._-]*)$", text)
-        self.assertIsNotNone(match, "Makefile must declare one filesystem-safe HAND_PRETRAIN_ID")
-        self.assertTrue(match.group(1).startswith("v2-pretrain-"))
+        self.assertIn("HAND_TRAIN_ROOT ?= /root/autodl-tmp/TrainFab/HLML-3.0", text)
+        self.assertIn("HAND_DATASET_ROOT ?= /root/autodl-tmp/DatesetFab", text)
+        match = re.search(r"(?m)^HAND_PRETRAIN_ID \?= ([A-Za-z0-9][A-Za-z0-9._-]*)$", text)
+        self.assertIsNotNone(match, "Makefile must declare a filesystem-safe HAND_PRETRAIN_ID default")
+        self.assertTrue(match.group(1).startswith("v3-pretrain-"))
         finetune = re.search(
             r"(?m)^HAND_FINETUNE_ID \?= ([A-Za-z0-9][A-Za-z0-9._-]*)$", text
         )
         self.assertIsNotNone(finetune, "Makefile must declare HAND_FINETUNE_ID")
-        self.assertTrue(finetune.group(1).startswith("v2-finetune-"))
+        self.assertTrue(finetune.group(1).startswith("v3-finetune-"))
         self.assertNotIn("HAND_DATA_ROOT", text)
         self.assertNotIn("HAND_PRETRAIN_CURATED_ID", text)
         self.assertNotIn("HAND_PRETRAIN_RUN_ID", text)
@@ -289,7 +290,7 @@ class MakeStageRouteTests(unittest.TestCase):
         text = (ROOT / "Makefile").read_text(encoding="utf-8")
         for value in (
             "HAND_EXPERIMENT_ID := $(HAND_PRETRAIN_ID)",
-            "HAND_EXPERIMENT_ID := $(HAND_FINETUNE_ID)",
+            "HAND_EXPERIMENT_ID := $(FINETUNE_EXPERIMENT_ID)",
             "HAND_MODEL_STAGE := pretrain",
             "HAND_MODEL_STAGE := finetune",
             "HAND_TRAIN_CONFIG := configs/train_finetune.yaml",

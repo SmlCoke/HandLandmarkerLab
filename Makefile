@@ -5,12 +5,22 @@ CONDA := conda
 ENV_FILE := environment.yml
 
 # The only experiment inputs that operators edit between runs.
-# HLML-2.0 is the deployed data-layout namespace. It is intentionally stable
-# across repository tags and isolates TrainFab from the separate DatasetFab.
-HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
-HAND_PRETRAIN_ID := v2-pretrain-r3
-HAND_FINETUNE_ID ?= v2-finetune-r1
-export HAND_TRAIN_ROOT HAND_PRETRAIN_ID HAND_FINETUNE_ID
+# TrainFab stores only generated metadata/runs. DatasetFab is the read-only,
+# reproducible image warehouse and is referenced directly wherever possible.
+HAND_TRAIN_ROOT ?= /root/autodl-tmp/TrainFab/HLML-3.0
+HAND_DATASET_ROOT ?= /root/autodl-tmp/DatesetFab
+HAND_PRETRAIN_ID ?= v3-pretrain-r1
+HAND_FINETUNE_ID ?= v3-finetune-r1
+FINETUNE_EXPERIMENT_ID ?= $(HAND_FINETUNE_ID)
+FINETUNE_PROFILE ?= data_only
+FINETUNE_ROUND_ID ?= r01
+FINETUNE_GOLD_BUDGET ?= 800
+NEW_RECORDED_SOURCE_ID ?=
+BASELINE_FINETUNE_ID ?= v3-finetune-r1
+CANDIDATE_FINETUNE_ID ?= $(FINETUNE_EXPERIMENT_ID)
+ANALYSIS_OVERWRITE ?= 0
+export HAND_TRAIN_ROOT HAND_DATASET_ROOT HAND_PRETRAIN_ID HAND_FINETUNE_ID
+export FINETUNE_EXPERIMENT_ID FINETUNE_PROFILE
 
 CURATE_CONFIG := configs/curate_pretrain.yaml
 GEOMETRY_CONFIG := configs/train_geometry.yaml
@@ -50,17 +60,17 @@ TEST_ARGS ?=
 	inspect-geometry inspect-geometry-smoke inspect-multitask \
 	pretrain-geometry-smoke check-geometry-smoke pretrain-geometry \
 	check-multitask-data pretrain-multitask \
-	prepare-finetune-sources check-finetune-sources finetune-curate \
+	prepare-finetune-sources prepare-finetune-round check-finetune-sources finetune-curate \
 	check-finetune-data finetune-smoke check-finetune-smoke \
 	inspect-finetune finetune-train \
 	eval-val-geometry eval-test-geometry eval-val-multitask eval-test-multitask \
 	eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune \
 	infer-geometry infer-multitask export-geometry export-multitask \
 	conversion-data-geometry conversion-data-multitask \
-	test test-unit test-export-preflight compile
+	analyze-finetune-errors compare-finetune-runs test test-unit test-export-preflight compile
 
 help:
-	@echo Hand Landmarker v2 pretrain + finetune - TrainFab layout HLML-2.0
+	@echo Hand Landmarker Lab 3.0 - DatasetFab read-only + TrainFab generated workspace
 	@echo   make paths                       Print the fixed training root and both experiment IDs
 	@echo   make env-create                  Create the documented Conda environment
 	@echo   make env-update                  Reconcile the documented Conda environment
@@ -76,6 +86,9 @@ help:
 	@echo   make inspect-multitask           Audit multitask Train, Val and locked Test
 	@echo   make pretrain-multitask          Train multitask from geometry best
 	@echo   make prepare-finetune-sources    Select hard/disagreement Gold requests and replay
+	@echo   make prepare-finetune-round      Freeze one cumulative-disjoint Gold selection round
+	@echo   make analyze-finetune-errors     Compare Val/infer failures and render at most 40 overlays
+	@echo   make compare-finetune-runs       Produce a paired candidate-versus-baseline report
 	@echo   make check-finetune-sources      Authenticate HLMF Gold sources and aggregate
 	@echo   make finetune-curate             Merge authenticated Gold with replay
 	@echo   make check-finetune-data         Verify the immutable finetune snapshot and mix
@@ -105,8 +118,11 @@ help:
 
 paths:
 	@echo HAND_TRAIN_ROOT=$(HAND_TRAIN_ROOT)
+	@echo HAND_DATASET_ROOT=$(HAND_DATASET_ROOT)
 	@echo HAND_PRETRAIN_ID=$(HAND_PRETRAIN_ID)
 	@echo HAND_FINETUNE_ID=$(HAND_FINETUNE_ID)
+	@echo FINETUNE_EXPERIMENT_ID=$(FINETUNE_EXPERIMENT_ID)
+	@echo FINETUNE_PROFILE=$(FINETUNE_PROFILE)
 	@echo CURATED_ROOT=$(HAND_TRAIN_ROOT)/train_pretrain_curated/$(HAND_PRETRAIN_ID)
 	@echo RUN_ROOT=$(HAND_TRAIN_ROOT)/hand_landmarker_runs/$(HAND_PRETRAIN_ID)
 	@echo FINETUNE_WORKSPACE=$(HAND_TRAIN_ROOT)/finetune/$(HAND_FINETUNE_ID)
@@ -155,6 +171,9 @@ pretrain-multitask: check-multitask-data inspect-multitask
 prepare-finetune-sources:
 	$(PYTHON) -B scripts/prepare_finetune_sources.py --config "$(PREPARE_FINETUNE_CONFIG)" $(PREPARE_FINETUNE_ARGS)
 
+prepare-finetune-round:
+	$(PYTHON) -B scripts/prepare_finetune_round.py --config "$(PREPARE_FINETUNE_CONFIG)" --round-id "$(FINETUNE_ROUND_ID)" --gold-budget "$(FINETUNE_GOLD_BUDGET)" $(if $(strip $(NEW_RECORDED_SOURCE_ID)),--new-recorded-source-id "$(NEW_RECORDED_SOURCE_ID)",)
+
 check-finetune-sources:
 	$(PYTHON) -B scripts/check_finetune_sources.py --config "$(FINETUNE_CURATE_CONFIG)" $(FINETUNE_SOURCE_GATE_ARGS)
 
@@ -187,7 +206,7 @@ eval-val-multitask eval-test-multitask infer-multitask export-multitask conversi
 eval-val-multitask eval-test-multitask infer-multitask export-multitask conversion-data-multitask: export HAND_MODEL_STAGE := pretrain
 export-multitask conversion-data-multitask: export HAND_TRAIN_CONFIG := configs/train_multitask.yaml
 
-eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune: export HAND_EXPERIMENT_ID := $(HAND_FINETUNE_ID)
+eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune: export HAND_EXPERIMENT_ID := $(FINETUNE_EXPERIMENT_ID)
 eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune: export HAND_RUN_PHASE := finetune
 eval-val-finetune eval-test-finetune infer-finetune export-finetune conversion-data-finetune: export HAND_MODEL_STAGE := finetune
 export-finetune conversion-data-finetune: export HAND_TRAIN_CONFIG := configs/train_finetune.yaml
@@ -206,6 +225,12 @@ export-geometry export-multitask export-finetune:
 
 conversion-data-geometry conversion-data-multitask conversion-data-finetune:
 	$(PYTHON) -B scripts/build_conversion_datasets.py --config "$(EXPORT_CONFIG)" $(CONVERSION_ARGS)
+
+analyze-finetune-errors:
+	$(PYTHON) -B scripts/analyze_finetune.py --work-root "$(HAND_TRAIN_ROOT)" --baseline-id "$(BASELINE_FINETUNE_ID)" --candidate-id "$(CANDIDATE_FINETUNE_ID)" --labels "$(HAND_TRAIN_ROOT)/val_merged/05_labels/hand_validation_labels.jsonl" --output-dir "$(HAND_TRAIN_ROOT)/hand_landmarker_runs/$(CANDIDATE_FINETUNE_ID)/analysis/error_audit" --overlay-limit 40 $(if $(filter 1 true yes on,$(ANALYSIS_OVERWRITE)),--overwrite,)
+
+compare-finetune-runs:
+	$(PYTHON) -B scripts/analyze_finetune.py --work-root "$(HAND_TRAIN_ROOT)" --baseline-id "$(BASELINE_FINETUNE_ID)" --candidate-id "$(CANDIDATE_FINETUNE_ID)" --labels "$(HAND_TRAIN_ROOT)/val_merged/05_labels/hand_validation_labels.jsonl" --output-dir "$(HAND_TRAIN_ROOT)/hand_landmarker_runs/$(CANDIDATE_FINETUNE_ID)/analysis/compare_vs_$(BASELINE_FINETUNE_ID)" --overlay-limit 40 $(if $(filter 1 true yes on,$(ANALYSIS_OVERWRITE)),--overwrite,)
 
 test:
 	$(PYTHON) -B -m unittest discover -s tests -p "test_*.py" $(TEST_ARGS)

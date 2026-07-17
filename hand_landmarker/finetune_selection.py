@@ -14,7 +14,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
-from .contracts import HAND_CONNECTIONS, ordered_landmarks
+from .contracts import HAND_CONNECTIONS, STRUCTURAL_BONES, ordered_landmarks
 from .io_utils import sha256_file
 
 
@@ -40,6 +40,37 @@ def identity_value(row: Mapping[str, Any]) -> str:
         or row.get("crop_id")
         or ""
     )
+
+
+def identity_tokens(row: Mapping[str, Any]) -> Set[str]:
+    """Return all stable identities available across Gold, selection and eval rows."""
+
+    tokens: Set[str] = set()
+    fields = {
+        "parent": ("parent_global_crop_id", "global_crop_id", "crop_id", "source_crop_id"),
+        "source_image": ("source_image_identity", "source_image", "image"),
+        "roi_sha256": ("image_sha256", "crop_image_sha256", "source_image_sha256"),
+        "pixel_sha256": ("normalized_pixel_sha256",),
+    }
+    for namespace, keys in fields.items():
+        for key in keys:
+            value = str(row.get(key) or "").strip().lower()
+            if value:
+                if namespace == "source_image":
+                    dataset = str(
+                        row.get("parent_dataset_id") or row.get("dataset_id") or ""
+                    ).strip().lower()
+                    value = "{}:{}".format(dataset, value)
+                tokens.add("{}:{}".format(namespace, value))
+    native_crop_id = str(row.get("native_source_crop_id") or "").strip().lower()
+    if native_crop_id:
+        native_root = str(row.get("native_source_root") or "").strip().lower()
+        tokens.add("native:{}:{}".format(native_root, native_crop_id))
+    return tokens
+
+
+def overlaps_identity(row: Mapping[str, Any], occupied_tokens: Set[str]) -> bool:
+    return bool(identity_tokens(row) & occupied_tokens)
 
 
 def largest_remainder(total: int, weights: Mapping[str, float]) -> Dict[str, int]:
@@ -328,12 +359,14 @@ def _selection_request(
                 "teacher_edge_length",
                 "student_edge_length",
                 "collapse_log_ratio",
+                "bone_vector_nme",
                 "teacher_bbox_area",
                 "student_bbox_area",
                 "hand_flag_error",
                 "mean_nme_percentile",
                 "p90_nme_percentile",
                 "collapse_log_ratio_percentile",
+                "bone_vector_nme_percentile",
                 "hand_flag_error_percentile",
             )
         }
@@ -349,6 +382,7 @@ def select_negative_removed(
     catalog_rows: Sequence[Mapping[str, Any]],
     config: Mapping[str, Any],
     occupied_parent_ids: Optional[Set[str]] = None,
+    occupied_identity_tokens: Optional[Set[str]] = None,
     provenance_hash_cache: Optional[MutableMapping[Path, str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Select hard negatives from authenticated ``negative_removed`` evidence."""
@@ -356,6 +390,7 @@ def select_negative_removed(
     if not bool(config.get("enabled", True)) or int(config.get("max_items", 0)) == 0:
         return [], {"status": "disabled", "input_count": len(removed_rows), "actual_selected": 0}
     occupied = set(occupied_parent_ids or set())
+    occupied_tokens = set(occupied_identity_tokens or set())
     catalog = {identity_value(row): row for row in catalog_rows}
     if "" in catalog:
         raise ValueError("Pretrain catalog rows require global/crop identity")
@@ -369,7 +404,7 @@ def select_negative_removed(
         source = catalog.get(crop_id)
         if source is None:
             raise ValueError("Removed evidence has no pretrain catalog row: {}".format(crop_id))
-        if crop_id in occupied:
+        if crop_id in occupied or overlaps_identity(source, occupied_tokens):
             continue
         sample_type = str(source.get("sample_type") or evidence.get("sample_type") or "")
         if sample_type not in NEGATIVE_SAMPLE_TYPES:
@@ -472,6 +507,15 @@ def disagreement_metrics(
     teacher_edge = _edge_length(teacher)
     student_edge = _edge_length(student)
     collapse = math.log(max(student_edge, 1e-8) / max(teacher_edge, 1e-8))
+    bone_vector_error = sum(
+        math.hypot(
+            (student[end][0] - student[start][0])
+            - (teacher[end][0] - teacher[start][0]),
+            (student[end][1] - student[start][1])
+            - (teacher[end][1] - teacher[start][1]),
+        )
+        for start, end in STRUCTURAL_BONES
+    ) / (len(STRUCTURAL_BONES) * scale)
     return {
         "mean_l2": sum(distances) / len(distances),
         "mean_nme": sum(normalized) / len(normalized),
@@ -481,6 +525,7 @@ def disagreement_metrics(
         "teacher_edge_length": teacher_edge,
         "student_edge_length": student_edge,
         "collapse_log_ratio": collapse,
+        "bone_vector_nme": bone_vector_error,
         "teacher_bbox_area": _bbox_area(teacher),
         "student_bbox_area": _bbox_area(student),
         "hand_flag_error": abs(1.0 - float(prediction.get("student_hand_flag", 0.0))),
@@ -508,13 +553,15 @@ def select_teacher_student(
     prediction_rows: Sequence[Mapping[str, Any]],
     config: Mapping[str, Any],
     occupied_parent_ids: Optional[Set[str]] = None,
+    occupied_identity_tokens: Optional[Set[str]] = None,
     provenance_hash_cache: Optional[MutableMapping[Path, str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[Dict[str, Any]]]:
     """Rank geometry positives by teacher/student disagreement."""
 
-    if not bool(config.get("enabled", True)) or int(config.get("max_items", 0)) == 0:
+    if not bool(config.get("enabled", True)):
         return [], {"status": "disabled", "actual_selected": 0}, []
     occupied = set(occupied_parent_ids or set())
+    occupied_tokens = set(occupied_identity_tokens or set())
     teachers = {identity_value(row): row for row in teacher_rows}
     predictions = {identity_value(row): row for row in prediction_rows}
     if set(teachers) != set(predictions):
@@ -524,7 +571,7 @@ def select_teacher_student(
     scored: List[Dict[str, Any]] = []
     for crop_id in sorted(teachers):
         teacher = teachers[crop_id]
-        if crop_id in occupied:
+        if crop_id in occupied or overlaps_identity(teacher, occupied_tokens):
             continue
         if str(teacher.get("sample_type")) not in POSITIVE_SAMPLE_TYPES:
             continue
@@ -537,10 +584,14 @@ def select_teacher_student(
         "mean_nme": 1.0,
         "p90_nme": 0.5,
         "collapse_log_ratio": 0.5,
+        "bone_vector_nme": 0.5,
         "hand_flag_error": 0.0,
     }
     weights.update({key: float(value) for key, value in dict(config.get("score_weights") or {}).items()})
-    unknown = sorted(set(weights) - {"mean_nme", "p90_nme", "collapse_log_ratio", "hand_flag_error"})
+    unknown = sorted(
+        set(weights)
+        - {"mean_nme", "p90_nme", "collapse_log_ratio", "bone_vector_nme", "hand_flag_error"}
+    )
     if unknown:
         raise ValueError("Unknown disagreement score components: {}".format(unknown))
     if str(config.get("checkpoint_stage", "geometry")) == "geometry" and weights["hand_flag_error"] != 0.0:

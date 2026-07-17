@@ -2,7 +2,7 @@ schema_version: 1
 task: infer_folder
 
 input:
-  images_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_inference/input"
+  images_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_inference/input"
   recursive: true
   extensions: [.png, .jpg, .jpeg, .tif, .tiff, .bmp]
   rotate_clockwise: false
@@ -25,7 +25,7 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/${HAND_RUN_PHASE:-geometry}/checkpoints/best.weights.h5"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v3-pretrain-r1}/${HAND_RUN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 palm:
   model_path: preminilary/palm/model_opt.onnx
@@ -53,7 +53,7 @@ inference:
   fail_fast: false
 
 output:
-  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_inference/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/${HAND_RUN_PHASE:-geometry}"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_inference/${HAND_EXPERIMENT_ID:-v3-pretrain-r1}/${HAND_RUN_PHASE:-geometry}"
   write_annotated_images: true
   write_jsonl: true
   draw_palm_box: true

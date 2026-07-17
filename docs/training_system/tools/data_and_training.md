@@ -2,7 +2,7 @@
 
 本文是 v2 pretrain 的专项操作手册，范围只到 geometry 与 multitask；已经实现的 Gold/finetune 流程由下述端到端文档单独说明。
 
-本文只说明 pretrain 组件。跨 HLMF、geometry、负例复核、multitask、Gold 和 finetune 的最高级操作入口见[端到端训练快速操作手册 v1.0](end_to_end_training_quick_runbook_v1_0.md)，详细契约见[完整训练流程 v1.0](end_to_end_training_workflow_v1_0.md)，当前实验事实见[当前训练与数据状态](current_training_status.md)。实际目标和依赖链以 Makefile 为最终权威。
+本文深入说明 pretrain 组件。完整操作入口见 [HLML 完整训练流程](../HLML_training_workflow.md)，简易命令见 [Quick Start](../HLML_quick_start.md)，当前事实见 [当前训练状态](../HLML_current_training_status.md)。实际目标和依赖链以 Makefile 为最终权威。
 
 ## 1. 为什么 pretrain 分成两个阶段
 
@@ -44,8 +44,9 @@ export_preflight.yaml  训练前非零探针权重 ONNX 与转换数据预检
 服务器路径与实验 ID 固定写在 `Makefile` 顶部：
 
 ```make
-HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
-HAND_PRETRAIN_ID := v2-pretrain-r1
+HAND_TRAIN_ROOT ?= /root/autodl-tmp/TrainFab/HLML-3.0
+HAND_DATASET_ROOT ?= /root/autodl-tmp/DatesetFab
+HAND_PRETRAIN_ID := v3-pretrain-r1
 ```
 
 `HAND_TRAIN_ROOT` 是当前训练系统版本的唯一数据盘根；`HAND_PRETRAIN_ID` 同时标识提纯快照、geometry/multitask run、评估、推理和导出。review decisions 路径写在 `configs/curate_pretrain.yaml`，由程序生成，不是 Makefile 变量，也不需要人工创建目录或编写 JSONL。不再维护 curated ID、run ID、phase 三套外部变量。每次正式实验前直接修改并提交这两行。不要只在 shell 中临时 `export` 一个新值，否则后续难以仅凭仓库版本复核训练使用了哪套数据与输出目录。执行以下命令可核对本次 Make 实际使用的值：
@@ -60,12 +61,12 @@ make paths
 /root/autodl-tmp/
 ├── DatasetFab/                         # 独立的数据集制作系统
 └── TrainFab/
-    └── HLML-2.0/                       # HAND_TRAIN_ROOT
+    └── HLML-3.0/                       # HAND_TRAIN_ROOT
         ├── eval_sources/
         ├── hand_landmarker_inference/
         ├── hand_landmarker_runs/
         ├── hand_landmarker_reviews/       # curate 自动创建的可视化审查工作区
-        ├── train_sources/                 # HandLandmarkerFab 生成的各训练来源
+DatesetFab/                             # HLMF 可再生来源仓库，训练 ROI 原地读取
         │   └── <dataset_id>/
         ├── test_merged/
         ├── train_pretrain_merged/
@@ -73,7 +74,7 @@ make paths
         └── val_merged/
 ```
 
-新的数据提纯或训练不得复用已有 ID。建议按 `v2-pretrain-r1`、`v2-pretrain-r2` 递增；系统默认拒绝覆盖非空训练目录。
+新的数据提纯或训练不得复用已有 ID。建议按 `v3-pretrain-r1`、`v3-pretrain-r2` 递增；系统默认拒绝覆盖非空训练目录。
 
 不同自动标注后端会产生不同类别的待审候选：能暴露低分 Palm proposal 的 AetherSign ONNX 可生成 `NEG_LOW_PALM_CANDIDATE`；MediaPipe official 只有成功输出 landmarks 后才会生成 ROI，因此其失败通常在 ROI 重跑阶段表现为 `NEG_RUNTIME_CANDIDATE`，而不是 low-Palm 候选。判断某来源有没有负例必须查看 `negative_review_queue.jsonl` 或按 `dataset_id × sample_type` 统计，不能只查看其中一个候选类别目录。真实来源审计及 ROI 尺度风险见 [训练来源负例及 ROI 域审计](../training_history/2026-07-15_train_source_negative_and_roi_audit.md)。
 
@@ -105,11 +106,11 @@ train_pretrain_curated/<HAND_PRETRAIN_ID>/
     └── sha256_manifest.json
 ```
 
-`landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。这些 JSONL 的 `crop_path` 直接指向 `${HAND_TRAIN_ROOT}/train_sources/` 中由 HLMF 交付的 Hand ROI。curate 目录只保存训练索引、决策目录、审计清单和报告，不再另建 ROI 图片目录。
+`landmarks.jsonl` 只包含合格 positive；`multitask.jsonl` 初次提纯时也只有这些 positive。这些 JSONL 的 `crop_path` 直接指向 `${HAND_DATASET_ROOT}/` 中由 HLMF 交付的 Hand ROI。curate 目录只保存训练索引、决策目录、审计清单和报告，不再另建 ROI 图片目录。
 
-提纯时会校验每个源 `crop_path` 都是 `source.crop_root` 下真实存在的文件，并将每张 ROI 的 SHA-256 写入标签和 manifest。训练 loader 会重新计算图片哈希并逐条比对；复核完成后重建 curated 索引时，还会确认源 ROI 的成员集和字节从首次提纯起未变。因此 `train_sources/` 必须视为当次实验的只读输入；如果需要重生或修改 ROI，应使用新的 `HAND_PRETRAIN_ID` 重新提纯。
+提纯时会校验每个源 `crop_path` 都是 `source.crop_root` 下真实存在的文件，并将每张 ROI 的 SHA-256 写入标签和 manifest。训练 loader 会重新计算图片哈希并逐条比对；复核完成后重建 curated 索引时，还会确认源 ROI 的成员集和字节从首次提纯起未变。因此 `DatesetFab/` 必须视为当次实验的只读输入；如果需要重生或修改 ROI，应使用新的 `HAND_PRETRAIN_ID` 重新提纯。
 
-`hand_landmarker_reviews/.../negative_candidates` 是唯一会另行写入图片的地方。它是为了让人工通过“删掉有手图、保留明确背景图”快速完成负例复核而生成的工作区。该工作区不是训练数据源；训练仍从 `train_sources/` 读取 ROI。程序只把工作区中仍存在、manifest 匹配且 SHA-256 未改变的图片写成 `CONFIRMED_NEGATIVE`；自动重叠门禁仍可拒绝其中存在冲突的样本。
+`hand_landmarker_reviews/.../negative_candidates` 是唯一会另行写入图片的地方。它是为了让人工通过“删掉有手图、保留明确背景图”快速完成负例复核而生成的工作区。该工作区不是训练数据源；训练仍从 `DatesetFab/` 读取 ROI。程序只把工作区中仍存在、manifest 匹配且 SHA-256 未改变的图片写成 `CONFIRMED_NEGATIVE`；自动重叠门禁仍可拒绝其中存在冲突的样本。
 
 执行命令 `make pretrain-curate` 还会自动创建负样本人工复核工作区：
 
@@ -188,7 +189,7 @@ ${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json
 make pretrain-curate-reviewed
 ```
 
-该命令只把 `negative_reviewed/` 视为人工保留集合，以 `review_manifest.jsonl` 中的 `candidate_relative_path` 对齐身份，并核验 reviewed 图片、候选 manifest 和 `train_sources/` 原 ROI 三方 SHA-256。程序随后以事务方式生成：
+该命令只把 `negative_reviewed/` 视为人工保留集合，以 `review_manifest.jsonl` 中的 `candidate_relative_path` 对齐身份，并核验 reviewed 图片、候选 manifest 和 `DatesetFab/` 原 ROI 三方 SHA-256。程序随后以事务方式生成：
 
 - `negative_review_decisions.jsonl`：人工保留项的复核证据；
 - `negative_removed/` 与 `negative_removed_manifest.jsonl`：完整候选中不在 reviewed 的补集；
@@ -211,7 +212,7 @@ make check-multitask-data
 
 门槛写在 `configs/train_multitask.yaml`，变更门槛必须作为一次明确的配置变更提交，不能通过删掉 gate 绕过。数量不足时仍可训练 geometry，但不可启动 multitask。
 
-`hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json` 记录 expected、reviewed、admitted、removed、quarantine 和 candidates cleanup 状态；`review_transaction.json` 必须为 `status=committed` 且 `candidate_cleanup=complete`。`qc/sha256_manifest.json` 会认证 decisions、review manifest、removed manifest 和 quarantine manifest。确认后的 multitask JSONL 保留在 curated 目录，其 `crop_path` 仍指向 `train_sources/` 中的唯一 ROI 数据。
+`hand_landmarker_reviews/<HAND_PRETRAIN_ID>/review_report.json` 记录 expected、reviewed、admitted、removed、quarantine 和 candidates cleanup 状态；`review_transaction.json` 必须为 `status=committed` 且 `candidate_cleanup=complete`。`qc/sha256_manifest.json` 会认证 decisions、review manifest、removed manifest 和 quarantine manifest。确认后的 multitask JSONL 保留在 curated 目录，其 `crop_path` 仍指向 `DatesetFab/` 中的唯一 ROI 数据。
 
 ### 4.5 Geometry 阶段
 

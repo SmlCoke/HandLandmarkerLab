@@ -4,11 +4,11 @@ experiment:
   name: hand_landmarker_v2_multitask
 
 data:
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/05_labels/hand_training_labels_pretrain_multitask.jsonl"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_training_labels_pretrain_multitask.jsonl"
 
 training:
   epochs: 80
-  initial_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/geometry/checkpoints/best.weights.h5"
+  initial_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/geometry/checkpoints/best.weights.h5"
   optimizer:
     learning_rate: 0.00005
   early_stopping:
@@ -43,7 +43,7 @@ losses:
   handedness: {name: binary_crossentropy, from_logits: false, coefficient: 0.05}
 
 outputs:
-  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/multitask"
+  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/multitask"
 
 multitask_gate:
   minimum_confirmed_negatives: 500

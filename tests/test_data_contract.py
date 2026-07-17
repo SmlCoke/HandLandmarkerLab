@@ -450,14 +450,18 @@ class CanonicalDataContractTests(unittest.TestCase):
             self.assertEqual((2, 42), targets[0].shape)
             self.assertEqual((2, 1), targets[1].shape)
             self.assertEqual((2, 1), targets[2].shape)
-            self.assertEqual([(2,), (2,), (2,)], [value.shape for value in weights])
+            self.assertEqual(
+                {"landmarks", "hand_flag", "handedness", "structure"}, set(weights)
+            )
+            self.assertEqual((2,), weights["structure"].shape)
             for position, record_index in enumerate(sequence.batch_record_indices(0)):
                 row = samples[int(record_index)]
                 # sampling_weight affects selection only; effective presence is 0.7 for all pseudo rows.
-                self.assertAlmostEqual(0.7, float(weights[1][position]), places=6)
+                self.assertAlmostEqual(0.7, float(weights["hand_flag"][position]), places=6)
+                self.assertEqual(0.0, float(weights["structure"][position]))
                 if not row["hand_presence"]["present"]:
-                    self.assertEqual(0.0, float(weights[0][position]))
-                    self.assertEqual(0.0, float(weights[2][position]))
+                    self.assertEqual(0.0, float(weights["landmarks"][position]))
+                    self.assertEqual(0.0, float(weights["handedness"][position]))
 
     def test_sequence_rejects_non_board_input_contract(self):
         row = _train_row("contract", "unused.bmp")

@@ -87,6 +87,20 @@ def load_config(path: PathLike) -> Dict[str, Any]:
 
     config_path = Path(path).resolve()
     config = _expand_tree(_load_recursive(config_path, []))
+    profiles = config.pop("profiles", None)
+    profile = config.get("profile")
+    if profiles is not None:
+        if not isinstance(profiles, Mapping) or not str(profile or ""):
+            raise ValueError("Configuration profiles require a non-empty profile selector")
+        selected = profiles.get(str(profile))
+        if not isinstance(selected, Mapping):
+            raise ValueError(
+                "Unknown profile {!r}; available profiles: {}".format(
+                    profile, sorted(str(value) for value in profiles)
+                )
+            )
+        _deep_merge(config, selected)
+        config["resolved_profile"] = str(profile)
     config["_meta"] = {
         "config_path": str(config_path),
         "config_dir": str(config_path.parent),

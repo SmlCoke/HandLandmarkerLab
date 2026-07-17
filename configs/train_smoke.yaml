@@ -4,7 +4,7 @@ experiment:
   name: hand_landmarker_v2_smoke
 
 data:
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/05_labels/hand_training_labels_pretrain_smoke.jsonl"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_training_labels_pretrain_smoke.jsonl"
 
 training:
   epochs: 300
@@ -28,7 +28,7 @@ augmentation: {enabled: false}
 validation: {enabled: false}
 
 outputs:
-  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/smoke"
+  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/smoke"
 
 smoke_gate:
   expected_records: 128

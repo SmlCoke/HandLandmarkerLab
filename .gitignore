@@ -9,6 +9,8 @@ docs/annotation/example/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
@@ -18,11 +20,19 @@ outputs/
 *.weights.h5
 *.keras
 events.out.tfevents.*
+checkpoints/
+artifacts/
+analysis/
+*.npy
+*.npz
+*.zip
+*.7z
+*.log
 
 # temp
 tmp/
 temp/
-*.ipynb_checkpoints/
+.ipynb_checkpoints/
 bak
 model_bak/
 *prompts*

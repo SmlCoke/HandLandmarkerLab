@@ -2,7 +2,7 @@
 
 Teacher abstentions are candidates, not verified background. This module
 persists curated labels and image hashes while keeping canonical ROI paths in
-``train_sources``. Every rejected or unverified row remains in an on-disk
+the read-only dataset warehouse. Every rejected or unverified row remains in an on-disk
 audit catalog instead of being filtered only in training memory.
 """
 
@@ -1383,7 +1383,7 @@ def _reference_crop(
     value["pretrain_curation"] = dict(value["pretrain_curation"])
     value["pretrain_curation"].update(
         {
-            "image_storage": "train_sources_reference",
+            "image_storage": "external_source_reference",
             "image_sha256": image_sha256,
         }
     )
@@ -1398,7 +1398,7 @@ def _reference_crop(
         "path": str(source),
         "sha256": image_sha256,
         "size_bytes": int(source.stat().st_size),
-        "storage": "train_sources_reference",
+        "storage": "external_source_reference",
     }
     return value, manifest
 
@@ -1417,7 +1417,7 @@ def _reference_review_crop(
     value["pretrain_curation"] = dict(value["pretrain_curation"])
     value["pretrain_curation"].update(
         {
-            "review_image_storage": "train_sources_reference",
+            "review_image_storage": "external_source_reference",
             "review_image_sha256": digest_value,
         }
     )
@@ -1426,7 +1426,7 @@ def _reference_review_crop(
         "path": str(source),
         "sha256": digest_value,
         "size_bytes": int(source.stat().st_size),
-        "storage": "train_sources_reference",
+        "storage": "external_source_reference",
     }
 
 
@@ -1831,7 +1831,7 @@ def curate_pretrain_from_config(
                 "count": len(image_manifest),
                 "aggregate_sha256": image_aggregate,
                 "manifest": "audit/image_manifest.jsonl",
-                "storage": "train_sources_reference",
+                "storage": "external_source_reference",
             },
             "review_candidates": {
                 "count": len(review_image_manifest),
@@ -1842,7 +1842,7 @@ def curate_pretrain_from_config(
                         for row in review_image_manifest
                     ).encode("utf-8")
                 ).hexdigest(),
-                "storage": "train_sources_reference",
+                "storage": "external_source_reference",
             },
         }
         manifest_path = qc_dir / "sha256_manifest.json"

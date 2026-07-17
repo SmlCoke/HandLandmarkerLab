@@ -66,8 +66,9 @@ make inspect-geometry
 Makefile 顶部直接定义：
 
 ```make
-HAND_TRAIN_ROOT := /root/autodl-tmp/TrainFab/HLML-2.0
-HAND_PRETRAIN_ID := v2-pretrain-r1
+HAND_TRAIN_ROOT ?= /root/autodl-tmp/TrainFab/HLML-3.0
+HAND_DATASET_ROOT ?= /root/autodl-tmp/DatesetFab
+HAND_PRETRAIN_ID := v3-pretrain-r1
 ```
 
 服务器路径改变或开始新实验时，修改并提交 Makefile。评估、推理、导出使用 `*-geometry` 或 `*-multitask` 显式目标选择子阶段，不需要操作者维护 phase 环境变量。正式训练的数据根和 ID 应留在仓库版本中，避免只存在于某次 shell 会话。
@@ -80,4 +81,4 @@ HAND_PRETRAIN_ID := v2-pretrain-r1
 - 日志中的 TensorFlow build CUDA/cuDNN 版本不是当前进程实际加载动态库的充分证明；最终以 GPU 可见、训练实际进入 cuDNN 且 smoke 通过为准；
 - `make pretrain-geometry` 和 `make pretrain-multitask` 拒绝覆盖既有 run；新实验修改 `HAND_PRETRAIN_ID`，续训才使用 `training.resume_checkpoint`。
 
-完整训练步骤见 [Pretrain 数据与分阶段训练操作手册](data_and_training.md)。
+完整训练步骤见 [HLML 完整训练流程](../HLML_training_workflow.md)；本目录的 [Pretrain 专项说明](data_and_training.md)用于深入查询。

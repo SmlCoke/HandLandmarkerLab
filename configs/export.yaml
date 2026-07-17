@@ -16,10 +16,10 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/${HAND_RUN_PHASE:-geometry}/checkpoints/best.weights.h5"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v3-pretrain-r1}/${HAND_RUN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 export:
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/export/${HAND_RUN_PHASE:-geometry}/hand_landmarker_v2.onnx"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v3-pretrain-r1}/export/${HAND_RUN_PHASE:-geometry}/hand_landmarker_v2.onnx"
   opset: 11
   input_name: inputs
   output_names: [landmarks, hand_flag, handedness]
@@ -51,7 +51,7 @@ export:
   # are opened read-only and are never copied back into Train/Val/Test roots.
   conversion_datasets:
     enabled: true
-    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v2-pretrain-r3}/export/${HAND_RUN_PHASE:-geometry}/model_conversion"
+    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v3-pretrain-r1}/export/${HAND_RUN_PHASE:-geometry}/model_conversion"
     selection_salt: hand_landmarker_v2_conversion_inputs_v1
     input:
       shape: [1, 1, 256, 256]

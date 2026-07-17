@@ -162,7 +162,7 @@ class PretrainCurationTests(unittest.TestCase):
             self.assertTrue(source.is_file())
             self.assertTrue(str(source).startswith(str(self.images)))
             self.assertEqual(
-                "train_sources_reference",
+                "external_source_reference",
                 row["pretrain_curation"]["image_storage"],
             )
             self.assertEqual(self.source_hash, row["pretrain_curation"]["source_labels_sha256"])
@@ -196,7 +196,7 @@ class PretrainCurationTests(unittest.TestCase):
         self.assertTrue((output / "qc" / "sha256_manifest.json").is_file())
         with (output / "qc" / "sha256_manifest.json").open(encoding="utf-8") as handle:
             manifest = json.load(handle)
-        self.assertEqual("train_sources_reference", manifest["images"]["storage"])
+            self.assertEqual("external_source_reference", manifest["images"]["storage"])
         self.assertEqual(2, manifest["review_candidates"]["count"])
         self.assertFalse((output / "images").exists())
         self.assertFalse((output / "review_images").exists())

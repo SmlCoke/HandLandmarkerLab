@@ -236,6 +236,7 @@ class FinetuneSelectionCoreTest(unittest.TestCase):
         metrics = disagreement_metrics(teacher, prediction)
         self.assertAlmostEqual(metrics["mean_nme"], 0.0)
         self.assertAlmostEqual(metrics["collapse_log_ratio"], 0.0)
+        self.assertAlmostEqual(metrics["bone_vector_nme"], 0.0)
 
     def test_train_prediction_batch_matches_single_row(self):
         import numpy as np

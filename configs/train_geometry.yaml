@@ -14,13 +14,15 @@ environment:
   require_gpu: true
 
 data:
-  data_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}"
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/05_labels/hand_training_labels_pretrain_landmarks.jsonl"
-  curation_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/qc/sha256_manifest.json"
+  data_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_training_labels_pretrain_landmarks.jsonl"
+  curation_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/qc/sha256_manifest.json"
   require_curation_schema: pretrain_curation_v1
   crop_path_key: crop_path
   path_policy: canonical_crop_path_only
   require_schema_version: train_finalize_v1
+  allowed_crop_roots:
+    - "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
   image_size: [256, 256]
   channels: 1
   color_mode: grayscale
@@ -102,6 +104,8 @@ losses:
   landmarks: {name: huber, delta: 0.05, coefficient: 20.0}
   hand_flag: {name: binary_crossentropy, from_logits: false, coefficient: 0.1}
   handedness: {name: binary_crossentropy, from_logits: false, coefficient: 0.0}
+  bone_vector: {name: huber, delta: 0.05, coefficient: 0.0}
+  spread_ratio: {name: huber, delta: 0.10, coefficient: 0.0}
   honor_record_loss_weights: true
 
 augmentation:
@@ -116,20 +120,20 @@ augmentation:
 
 validation:
   enabled: true
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/val_merged/05_labels/hand_validation_labels.jsonl"
-  ignored_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/val_merged/05_labels/hand_val_ignored.jsonl"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/val_merged/05_labels/hand_validation_labels.jsonl"
+  ignored_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/val_merged/05_labels/hand_val_ignored.jsonl"
   batch_size: 128
   every_epochs: 1
 
 inspection:
   compare_datasets:
     test:
-      data_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}"
-      labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/test_merged/05_labels/hand_test_labels.jsonl"
-      ignored_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/test_merged/05_labels/hand_test_ignored.jsonl"
+      data_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}"
+      labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/test_merged/05_labels/hand_test_labels.jsonl"
+      ignored_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/test_merged/05_labels/hand_test_ignored.jsonl"
       crop_image_roots:
-        - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/eval_sources/peak_test/02_roi_crops/images"
-        - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/eval_sources/soar_test/02_roi_crops/images"
+        - "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}/eval_sources/peak_test/02_roi_crops/images"
+        - "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}/eval_sources/soar_test/02_roi_crops/images"
       crop_path_key: crop_path
       path_policy: canonical_crop_path_only
       require_schema_version: evaluation_gold_v1
@@ -138,7 +142,7 @@ inspection:
       channels: 1
 
 outputs:
-  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/geometry"
+  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/geometry"
   overwrite: false
 
 runtime:

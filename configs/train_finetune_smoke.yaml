@@ -4,7 +4,7 @@ experiment:
   name: hand_landmarker_v2_finetune_smoke
 
 data:
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_finetune_merged/${HAND_FINETUNE_ID:-v2-finetune-r1}/05_labels/hand_training_labels_finetune_smoke.jsonl"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_finetune_merged/${HAND_FINETUNE_ID:-v3-finetune-r1}/05_labels/hand_training_labels_finetune_smoke.jsonl"
 
 training:
   epochs: 300
@@ -24,7 +24,7 @@ augmentation: {enabled: false}
 validation: {enabled: false}
 
 outputs:
-  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_FINETUNE_ID:-v2-finetune-r1}/finetune_smoke"
+  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${FINETUNE_EXPERIMENT_ID:-v3-finetune-r1}/finetune_smoke"
 
 smoke_gate:
   expected_records: 256

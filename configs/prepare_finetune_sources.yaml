@@ -1,18 +1,18 @@
 schema_version: 1
 task: prepare_finetune_sources
 
-pretrain_id: "${HAND_PRETRAIN_ID:-v2-pretrain-r3}"
-finetune_id: "${HAND_FINETUNE_ID:-v2-finetune-r1}"
+pretrain_id: "${HAND_PRETRAIN_ID:-v3-pretrain-r1}"
+finetune_id: "${HAND_FINETUNE_ID:-v3-finetune-r1}"
 
 inputs:
-  pretrain_multitask_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r3}/05_labels/hand_training_labels_pretrain_multitask.jsonl"
-  pretrain_geometry_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r3}/05_labels/hand_training_labels_pretrain_landmarks.jsonl"
-  pretrain_catalog: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r3}/audit/pretrain_curation_catalog.jsonl"
-  pretrain_curation_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r3}/qc/sha256_manifest.json"
-  negative_removed_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_reviews/${HAND_PRETRAIN_ID:-v2-pretrain-r3}/negative_removed_manifest.jsonl"
-  source_registry: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_merged/qc/pretrain_source_registry.jsonl"
-  geometry_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v2-pretrain-r3}/geometry/checkpoints/best.weights.h5"
-  train_crop_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_sources"
+  pretrain_multitask_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_training_labels_pretrain_multitask.jsonl"
+  pretrain_geometry_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_training_labels_pretrain_landmarks.jsonl"
+  pretrain_catalog: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/audit/pretrain_curation_catalog.jsonl"
+  pretrain_curation_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/qc/sha256_manifest.json"
+  negative_removed_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_reviews/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/negative_removed_manifest.jsonl"
+  source_registry: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_merged/qc/pretrain_source_registry.jsonl"
+  geometry_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/geometry/checkpoints/best.weights.h5"
+  train_crop_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
 
 model:
   version: v2
@@ -23,8 +23,8 @@ prediction:
 
 selection:
   negative_removed:
-    enabled: true
-    max_items: 300
+    enabled: false
+    max_items: 0
     per_dataset_max: 100
     sample_type_fractions:
       NEG_RUNTIME_CANDIDATE: 0.60
@@ -34,7 +34,7 @@ selection:
   teacher_student:
     enabled: true
     checkpoint_stage: geometry
-    max_items: 300
+    max_items: 0
     per_dataset_max: 100
     sample_type_fractions:
       POS_RUNTIME: 0.50
@@ -43,6 +43,7 @@ selection:
       mean_nme: 1.0
       p90_nme: 0.5
       collapse_log_ratio: 0.5
+      bone_vector_nme: 0.5
       hand_flag_error: 0.0
     salt: geometry_disagreement_v1
 
@@ -56,5 +57,11 @@ selection:
     salt: finetune_replay_v1
 
 output:
-  workspace: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/finetune/${HAND_FINETUNE_ID:-v2-finetune-r1}"
+  workspace: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}"
+
+round_exclusion:
+  validation_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/val_merged/05_labels/hand_validation_labels.jsonl"
+  validation_ignored: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/val_merged/05_labels/hand_val_ignored.jsonl"
+  test_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/test_merged/05_labels/hand_test_labels.jsonl"
+  test_ignored: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/test_merged/05_labels/hand_test_ignored.jsonl"
 

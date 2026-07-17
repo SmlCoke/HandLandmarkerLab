@@ -949,7 +949,7 @@ class WeightedStratifiedSampler:
 
 
 class CanonicalSequence(_KerasSequence):
-    """Keras sequence returning ``x, y_list, effective_weight_list``."""
+    """Keras sequence returning targets plus head and Gold-structure masks."""
 
     def __init__(
         self,
@@ -1247,6 +1247,7 @@ class CanonicalSequence(_KerasSequence):
         presence_weights: List[float] = []
         landmark_weights: List[float] = []
         handedness_weights: List[float] = []
+        structure_weights: List[float] = []
         batch_rng = np.random.RandomState(
             (self.seed + self.epoch * 1000003 + int(batch_index) * 9176 + 17) % (2 ** 32 - 1)
         )
@@ -1279,6 +1280,11 @@ class CanonicalSequence(_KerasSequence):
             presence_weights.append(float(presence_weight))
             landmark_weights.append(float(landmark_weight))
             handedness_weights.append(float(handedness_weight))
+            structure_weights.append(
+                float(landmark_weight)
+                if present and str(row.get("supervision_tier")) == "gold"
+                else 0.0
+            )
 
         x_value = np.stack(images).astype(np.float32)
         y_values = [
@@ -1286,11 +1292,12 @@ class CanonicalSequence(_KerasSequence):
             np.asarray(presence_targets, dtype=np.float32),
             np.asarray(handedness_targets, dtype=np.float32),
         ]
-        sample_weights = [
-            np.asarray(landmark_weights, dtype=np.float32),
-            np.asarray(presence_weights, dtype=np.float32),
-            np.asarray(handedness_weights, dtype=np.float32),
-        ]
+        sample_weights = {
+            "landmarks": np.asarray(landmark_weights, dtype=np.float32),
+            "hand_flag": np.asarray(presence_weights, dtype=np.float32),
+            "handedness": np.asarray(handedness_weights, dtype=np.float32),
+            "structure": np.asarray(structure_weights, dtype=np.float32),
+        }
         return x_value, y_values, sample_weights
 
     def sampling_report(self) -> Dict[str, Any]:
@@ -1474,7 +1481,12 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
             "inputs": [None, 1, 256, 256],
             "targets": [[None, 42], [None, 1], [None, 1]],
             "target_order": list(OUTPUT_ORDER),
-            "sample_weights": [[None], [None], [None]],
+            "sample_weights": {
+                "landmarks": [None],
+                "hand_flag": [None],
+                "handedness": [None],
+                "structure": [None],
+            },
         },
     }
     return train_sequence, validation_sequence, report

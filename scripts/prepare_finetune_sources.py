@@ -131,7 +131,9 @@ def main() -> None:
     c_cfg = selection_cfg.get("teacher_student") or {}
     d_cfg = selection_cfg.get("pretrain_replay") or {}
     b_enabled = bool(b_cfg.get("enabled", True)) and int(b_cfg.get("max_items", 0)) > 0
-    c_enabled = bool(c_cfg.get("enabled", True)) and int(c_cfg.get("max_items", 0)) > 0
+    # A zero request budget is the normal HLML-3.0 score-pool mode: predict
+    # every eligible ROI now, then freeze disjoint selections per round later.
+    c_enabled = bool(c_cfg.get("enabled", True))
     d_enabled = bool(d_cfg.get("enabled", True))
 
     registry_path = resolve_path(str(inputs.get("source_registry") or ""), config)

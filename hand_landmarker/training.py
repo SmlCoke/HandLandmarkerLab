@@ -2,8 +2,8 @@
 
 The data module owns canonical JSONL parsing and sampling.  Its public
 ``create_sequences(config)`` function returns ``(train_seq, val_seq,
-data_report)``; each sequence batch is ``(x, targets, sample_weights)`` with
-three targets and three weights in landmarks/hand-flag/handedness order.
+data_report)``; each sequence batch is ``(x, targets, sample_weights)``.  The
+extra ``structure`` weight is non-zero only for valid human-Gold positives.
 
 TensorFlow is imported only inside :func:`train_from_config` so repository
 inspection remains possible before the documented server environment exists.
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .config import resolve_path
-from .contracts import validate_model_checkpoint_stage
+from .contracts import STRUCTURAL_BONES, validate_model_checkpoint_stage
 from .io_utils import sha256_file, write_json
 
 
@@ -36,8 +36,6 @@ _EXPECTED_OUTPUT_SHAPES = (
     (None, 1, 1, 1),
     (None, 1, 1, 1),
 )
-
-
 def _jsonable(value: Any) -> Any:
     """Convert common runtime values to stable JSON-compatible structures."""
 
@@ -196,6 +194,8 @@ def _validate_loss_config(config: Mapping[str, Any]) -> Dict[str, Dict[str, Any]
         "landmarks": "huber",
         "hand_flag": "binary_crossentropy",
         "handedness": "binary_crossentropy",
+        "bone_vector": "huber",
+        "spread_ratio": "huber",
     }
     normalized: Dict[str, Dict[str, Any]] = {}
     for semantic, expected_name in expected.items():
@@ -214,10 +214,11 @@ def _validate_loss_config(config: Mapping[str, Any]) -> Dict[str, Dict[str, Any]
         normalized[semantic]["name"] = name
         normalized[semantic]["coefficient"] = coefficient
 
-    delta = float(normalized["landmarks"].get("delta", 0.01))
-    if not math.isfinite(delta) or delta <= 0.0:
-        raise ValueError("losses.landmarks.delta must be finite and positive")
-    normalized["landmarks"]["delta"] = delta
+    for semantic in ("landmarks", "bone_vector", "spread_ratio"):
+        delta = float(normalized[semantic].get("delta", 0.01))
+        if not math.isfinite(delta) or delta <= 0.0:
+            raise ValueError("losses.{}.delta must be finite and positive".format(semantic))
+        normalized[semantic]["delta"] = delta
     for semantic in ("hand_flag", "handedness"):
         if bool(normalized[semantic].get("from_logits", False)):
             raise ValueError("{} uses a sigmoid model output; from_logits must be false".format(semantic))
@@ -256,6 +257,12 @@ def _build_optimizer(tf: Any, config: Mapping[str, Any]):
 def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Mapping[str, Any]]):
     coefficients = tuple(float(loss_config[name]["coefficient"]) for name in _SEMANTIC_OUTPUTS)
     huber_delta = float(loss_config["landmarks"]["delta"])
+    bone_coefficient = float(loss_config["bone_vector"]["coefficient"])
+    bone_delta = float(loss_config["bone_vector"]["delta"])
+    spread_coefficient = float(loss_config["spread_ratio"]["coefficient"])
+    spread_delta = float(loss_config["spread_ratio"]["delta"])
+    structure_enabled = bone_coefficient > 0.0 or spread_coefficient > 0.0
+    metric_coefficients = (*coefficients, bone_coefficient, spread_coefficient)
 
     class WeightedPerSampleMean(tf.keras.metrics.Metric):
         def __init__(self, name: str):
@@ -293,7 +300,7 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
 
         def result(self):
             total = tf.cast(self.regularization.result(), tf.float32)
-            for coefficient, component in zip(coefficients, self.components):
+            for coefficient, component in zip(metric_coefficients, self.components):
                 total = total + tf.cast(coefficient, tf.float32) * tf.cast(
                     component.result(), tf.float32
                 )
@@ -316,6 +323,8 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
             self.landmarks_loss_metric = WeightedPerSampleMean("landmarks_loss")
             self.hand_flag_loss_metric = WeightedPerSampleMean("hand_flag_loss")
             self.handedness_loss_metric = WeightedPerSampleMean("handedness_loss")
+            self.bone_vector_loss_metric = WeightedPerSampleMean("bone_vector_loss")
+            self.spread_ratio_loss_metric = WeightedPerSampleMean("spread_ratio_loss")
             self.regularization_loss_metric = tf.keras.metrics.Mean(
                 name="regularization_loss", dtype=tf.float32
             )
@@ -324,6 +333,8 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
                     self.landmarks_loss_metric,
                     self.hand_flag_loss_metric,
                     self.handedness_loss_metric,
+                    self.bone_vector_loss_metric,
+                    self.spread_ratio_loss_metric,
                 ),
                 self.regularization_loss_metric,
             )
@@ -338,6 +349,8 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
                 self.landmarks_loss_metric,
                 self.hand_flag_loss_metric,
                 self.handedness_loss_metric,
+                self.bone_vector_loss_metric,
+                self.spread_ratio_loss_metric,
                 self.regularization_loss_metric,
                 self.landmark_mae_metric,
                 self.hand_flag_accuracy_metric,
@@ -407,13 +420,50 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
             losses = 0.5 * tf.square(quadratic) + tf.cast(huber_delta, tf.float32) * linear
             return tf.reduce_mean(losses, axis=1)
 
+        @staticmethod
+        def _huber_values(error: Any, delta: float):
+            absolute = tf.abs(tf.cast(error, tf.float32))
+            quadratic = tf.minimum(absolute, tf.cast(delta, tf.float32))
+            return 0.5 * tf.square(quadratic) + tf.cast(delta, tf.float32) * (absolute - quadratic)
+
+        def _structure_terms(self, target: Any, prediction: Any):
+            target_points = tf.reshape(target, [-1, 21, 2])
+            prediction_points = tf.reshape(prediction, [-1, 21, 2])
+            target_bones = tf.stack(
+                [target_points[:, end] - target_points[:, start] for start, end in STRUCTURAL_BONES],
+                axis=1,
+            )
+            prediction_bones = tf.stack(
+                [prediction_points[:, end] - prediction_points[:, start] for start, end in STRUCTURAL_BONES],
+                axis=1,
+            )
+            bone = tf.reduce_mean(
+                self._huber_values(prediction_bones - target_bones, bone_delta), axis=[1, 2]
+            )
+            target_centered = target_points - target_points[:, 0:1, :]
+            prediction_centered = prediction_points - prediction_points[:, 0:1, :]
+            target_spread = tf.sqrt(tf.reduce_mean(tf.square(target_centered), axis=[1, 2]))
+            prediction_spread = tf.sqrt(tf.reduce_mean(tf.square(prediction_centered), axis=[1, 2]))
+            epsilon = tf.cast(1.0e-6, tf.float32)
+            log_ratio = tf.math.log((prediction_spread + epsilon) / (target_spread + epsilon))
+            spread = self._huber_values(log_ratio, spread_delta)
+            return bone, spread
+
         def _loss_terms(self, x: Any, y: Any, sample_weight: Any, training: bool):
             targets = self._ordered(y, "targets")
             predictions = self._ordered(self.backbone(x, training=training), "model outputs")
             if sample_weight is None:
                 raw_weights = (None, None, None)
+                raw_structure_weight = None
             else:
                 raw_weights = self._ordered(sample_weight, "sample weights")
+                raw_structure_weight = (
+                    sample_weight.get("structure") if isinstance(sample_weight, Mapping) else None
+                )
+            if structure_enabled and raw_structure_weight is None:
+                raise ValueError(
+                    "Enabled structure losses require an explicit per-record structure mask"
+                )
 
             batch_size = tf.shape(x)[0]
             y_landmarks = tf.reshape(tf.cast(targets[0], tf.float32), [batch_size, 42])
@@ -424,6 +474,11 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
             p_handed = tf.reshape(tf.cast(predictions[2], tf.float32), [batch_size, 1])
 
             weights = tuple(self._weights(value, batch_size) for value in raw_weights)
+            structure_weight = (
+                self._weights(raw_structure_weight, batch_size)
+                if raw_structure_weight is not None
+                else tf.zeros([batch_size], dtype=tf.float32)
+            )
             per_sample = (
                 self._huber_per_sample(y_landmarks, p_landmarks),
                 self._binary_crossentropy_per_sample(y_flag, p_flag),
@@ -432,6 +487,9 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
             head_losses = tuple(
                 self._weighted_mean(loss, weight) for loss, weight in zip(per_sample, weights)
             )
+            bone_per_sample, spread_per_sample = self._structure_terms(y_landmarks, p_landmarks)
+            bone_loss = self._weighted_mean(bone_per_sample, structure_weight)
+            spread_loss = self._weighted_mean(spread_per_sample, structure_weight)
             if self.backbone.losses:
                 regularization_loss = tf.add_n(
                     [tf.cast(value, tf.float32) for value in self.backbone.losses]
@@ -441,6 +499,8 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
             total_loss = regularization_loss
             for coefficient, value in zip(coefficients, head_losses):
                 total_loss = total_loss + tf.cast(coefficient, tf.float32) * value
+            total_loss = total_loss + tf.cast(bone_coefficient, tf.float32) * bone_loss
+            total_loss = total_loss + tf.cast(spread_coefficient, tf.float32) * spread_loss
 
             auxiliary = {
                 "landmark_mae": tf.reduce_mean(tf.abs(y_landmarks - p_landmarks), axis=1),
@@ -451,7 +511,13 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
                     tf.cast(tf.equal(y_handed >= 0.5, p_handed >= 0.5), tf.float32), axis=1
                 ),
             }
-            return total_loss, regularization_loss, per_sample, weights, auxiliary
+            return (
+                total_loss,
+                regularization_loss,
+                (*per_sample, bone_per_sample, spread_per_sample),
+                (*weights, structure_weight, structure_weight),
+                auxiliary,
+            )
 
         def _update_metrics(
             self,
@@ -463,6 +529,8 @@ def _build_weighted_trainer(tf: Any, backbone: Any, loss_config: Mapping[str, Ma
             self.landmarks_loss_metric.update_state(per_sample[0], weights[0])
             self.hand_flag_loss_metric.update_state(per_sample[1], weights[1])
             self.handedness_loss_metric.update_state(per_sample[2], weights[2])
+            self.bone_vector_loss_metric.update_state(per_sample[3], weights[3])
+            self.spread_ratio_loss_metric.update_state(per_sample[4], weights[4])
             self.regularization_loss_metric.update_state(regularization_loss)
             self.landmark_mae_metric.update_state(auxiliary["landmark_mae"], weights[0])
             self.hand_flag_accuracy_metric.update_state(auxiliary["hand_flag_accuracy"], weights[1])

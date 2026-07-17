@@ -1,37 +1,38 @@
 schema_version: 1
 task: curate_finetune
+profile: "${FINETUNE_PROFILE:-data_only}"
 
-gold_source_descriptor_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/finetune/${HAND_FINETUNE_ID:-v2-finetune-r1}/sources/gold"
-replay_source_descriptor_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/finetune/${HAND_FINETUNE_ID:-v2-finetune-r1}/sources/replay"
+gold_source_descriptor_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}/sources/gold"
+replay_source_descriptor_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}/sources/replay"
 
 gold_aggregate:
-  descriptor: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/finetune/${HAND_FINETUNE_ID:-v2-finetune-r1}/hmlf_gold_merged/hmlf_gold_aggregate.json"
+  descriptor: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}/hmlf_gold_merged/hmlf_gold_aggregate.json"
 
 allowed_crop_roots:
-  - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/finetune/${HAND_FINETUNE_ID:-v2-finetune-r1}"
-  - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_sources"
+  - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}"
+  - "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
 
 sources:
   dragon_gold:
     discover_kind: external_gold
     enabled: auto
     required: false
-    target_gold_weight: 0.60
+    target_gold_weight: 0.40
   negative_removed_gold:
     discover_kind: reviewed_hard_gold
     enabled: auto
     required: false
-    target_gold_weight: 0.20
+    target_gold_weight: 0.15
   disagreement_gold:
     discover_kind: disagreement_gold
     enabled: auto
     required: false
-    target_gold_weight: 0.15
+    target_gold_weight: 0.30
   new_recorded_gold:
     discover_kind: new_recorded_gold
     enabled: auto
     required: false
-    target_gold_weight: 0.05
+    target_gold_weight: 0.15
   pretrain_replay:
     discover_kind: pretrain_replay
     enabled: true
@@ -44,15 +45,15 @@ gate:
   fail_on_val_test_leakage: true
 
 leakage:
-  validation_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/val_merged/05_labels/hand_validation_labels.jsonl"
-  validation_ignored: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/val_merged/05_labels/hand_val_ignored.jsonl"
-  test_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/test_merged/05_labels/hand_test_labels.jsonl"
-  test_ignored: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/test_merged/05_labels/hand_test_ignored.jsonl"
+  validation_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/val_merged/05_labels/hand_validation_labels.jsonl"
+  validation_ignored: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/val_merged/05_labels/hand_val_ignored.jsonl"
+  test_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/test_merged/05_labels/hand_test_labels.jsonl"
+  test_ignored: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/test_merged/05_labels/hand_test_ignored.jsonl"
 
 smoke:
   salt: finetune_smoke_v1
 
 output:
-  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_finetune_merged/${HAND_FINETUNE_ID:-v2-finetune-r1}"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_finetune_merged/${HAND_FINETUNE_ID:-v3-finetune-r1}"
   overwrite: false
 

@@ -2,8 +2,8 @@ schema_version: 1
 task: curate_pretrain
 
 source:
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl"
-  crop_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_sources"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_merged/05_labels/hand_training_labels_pretrain.jsonl"
+  crop_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
 
 curation:
   # LOW handedness confidence does not invalidate otherwise useful geometry;
@@ -17,14 +17,14 @@ curation:
 
   # This subset is persisted for the mandatory overfit gate before full train.
   smoke_subset_size: 128
-  smoke_selection_salt: pretrain_landmark_smoke_v2
+  smoke_selection_salt: pretrain_landmark_smoke_v3
 
 review:
   # The first curation run creates candidates and an empty reviewed directory.
   # Copy candidates to reviewed without changing relative paths, then delete
   # every ROI containing a hand or uncertain hand-like content from reviewed.
   # Finalization never infers review decisions from the original candidates.
-  decisions_file: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/hand_landmarker_reviews/${HAND_PRETRAIN_ID:-v2-pretrain-r1}/negative_review_decisions.jsonl"
+  decisions_file: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_reviews/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/negative_review_decisions.jsonl"
   candidates_subdir: negative_candidates
   reviewed_subdir: negative_reviewed
   removed_subdir: negative_removed
@@ -36,5 +36,5 @@ review:
   reviewer: hlml-visual-review-team
 
 output:
-  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-2.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v2-pretrain-r1}"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}"
   overwrite: false

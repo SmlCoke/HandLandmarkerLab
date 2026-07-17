@@ -167,7 +167,7 @@ class FinetuneSourceCoreTest(unittest.TestCase):
                 output,
                 parent,
                 crops,
-                "v2-pretrain-r3",
+                "v3-pretrain-r1",
                 "test-version",
             )
             validated = validate_finetune_source(output / "finetune_source.json", [crops])

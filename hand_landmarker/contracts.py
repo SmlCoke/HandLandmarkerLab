@@ -61,6 +61,17 @@ HAND_CONNECTIONS: Tuple[Tuple[int, int], ...] = (
     (0, 17),
 )
 
+# Anatomical parent-child vectors used by training and error ranking.  This is
+# intentionally separate from HAND_CONNECTIONS, whose palm links are optimized
+# for drawing a connected wireframe.
+STRUCTURAL_BONES: Tuple[Tuple[int, int], ...] = (
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+)
+
 
 def validate_model_checkpoint_stage(
     config: Mapping[str, Any],
