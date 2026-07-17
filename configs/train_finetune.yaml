@@ -66,7 +66,7 @@ training:
   mixed_precision: false
   optimizer:
     name: adam
-    learning_rate: 0.00001
+    learning_rate: 0.00005
     beta_1: 0.9
     beta_2: 0.999
     epsilon: 1.0e-7
@@ -76,13 +76,13 @@ training:
     monitor: val_landmark_mae
     mode: min
     factor: 0.5
-    patience: 3
+    patience: 20
     min_learning_rate: 1.0e-7
   early_stopping:
     enabled: true
     monitor: val_landmark_mae
     mode: min
-    patience: 8
+    patience: 60
     restore_best_weights: true
 
 sampling:

@@ -69,6 +69,27 @@ class StageConfigRouteTests(unittest.TestCase):
                 self.assertEqual("v2", config["model"]["version"])
                 self.assertEqual("finetune", config["model"]["checkpoint_stage"])
 
+    def test_finetune_smoke_keeps_the_full_optimization_window(self):
+        full = load_config(CONFIGS / "train_finetune.yaml")
+        smoke = load_config(CONFIGS / "train_finetune_smoke.yaml")
+        full_training = full["training"]
+        smoke_training = smoke["training"]
+
+        self.assertEqual(5.0e-5, full_training["optimizer"]["learning_rate"])
+        self.assertEqual(
+            full_training["optimizer"]["learning_rate"],
+            smoke_training["optimizer"]["learning_rate"],
+        )
+        for component, patience in (
+            ("learning_rate_schedule", 20),
+            ("early_stopping", 60),
+        ):
+            self.assertEqual(patience, full_training[component]["patience"])
+            self.assertEqual(
+                full_training[component]["patience"],
+                smoke_training[component]["patience"],
+            )
+
     def test_geometry_and_multitask_are_explicit_persisted_phases(self):
         curation = load_config(CONFIGS / "curate_pretrain.yaml")
         geometry = load_config(CONFIGS / "train_geometry.yaml")
