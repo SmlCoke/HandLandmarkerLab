@@ -2,7 +2,7 @@
 
 本文是 v2 pretrain 的专项操作手册，范围只到 geometry 与 multitask；已经实现的 Gold/finetune 流程由下述端到端文档单独说明。
 
-本文只说明 pretrain 组件。跨 HLMF、geometry、负例复核、multitask、Gold 和 finetune 的项目最高级流程，以 [HLMF + HLML Hand Landmarker 完整训练流程 v1.0](end_to_end_training_workflow_v1_0.md) 为准；理解完整流程后可按[简易操作手册 v1.0](end_to_end_training_quick_runbook_v1_0.md)执行。实际目标和依赖链以 Makefile 为最终权威。
+本文只说明 pretrain 组件。跨 HLMF、geometry、负例复核、multitask、Gold 和 finetune 的最高级操作入口见[端到端训练快速操作手册 v1.0](end_to_end_training_quick_runbook_v1_0.md)，详细契约见[完整训练流程 v1.0](end_to_end_training_workflow_v1_0.md)，当前实验事实见[当前训练与数据状态](current_training_status.md)。实际目标和依赖链以 Makefile 为最终权威。
 
 ## 1. 为什么 pretrain 分成两个阶段
 

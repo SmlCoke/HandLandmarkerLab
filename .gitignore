@@ -25,3 +25,4 @@ temp/
 *.ipynb_checkpoints/
 bak
 model_bak/
+*prompts*

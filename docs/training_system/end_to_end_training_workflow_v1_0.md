@@ -4,13 +4,15 @@
 
 发布日期：2026-07-16
 
-文档级别：项目最高级别训练操作规范
+文档级别：端到端详细规范与异常处理参考
 
 适用范围：原始数据制作、pretrain geometry、负例复核、multitask、Gold 数据制作、finetune、评估、推理与导出
 
 ## 0. 文档定位与可执行性
 
-本文固化 AetherSign Hand Landmarker 已实现的完整端到端流程。人工操作只包括：
+本文是[端到端训练快速操作手册 v1.0](end_to_end_training_quick_runbook_v1_0.md)的完整版本：两者采用同一流程顺序；本文额外保留术语解释、设计原理、数据契约、门禁依据和异常处理。
+
+本文固化 AetherSign Hand Landmarker 的完整端到端流程。人工操作只包括：
 
 1. 放置、压缩、上传或下载目录；
 2. 在 CVAT 中复核程序已经准备好的任务；
@@ -20,24 +22,17 @@
 
 人工不再编写候选 ID 文本、CSV、JSONL 或 SHA 清单，也不手工拼接训练标签。候选筛选、分层抽样、图片复制、身份恢复、去重、哈希、来源占比和数据聚合全部由程序负责。
 
-本文描述当前已经落地的 HLMF + HLML 端到端能力，并区分已经在服务器完成的数据步骤与仍需操作者执行的步骤：
+本文只说明系统契约和操作方法，不记录某一轮实验是否已经完成。实际服务器、数据集和训练进度统一查阅[当前训练与数据状态](current_training_status.md)。
 
-| 标记 | 含义 |
-|---|---|
-| `[现有]` | 当前仓库已经支持，可以按命令执行 |
-| `[已实现]` | 本轮已经补齐代码、配置和测试，可以按前置条件执行 |
-| `[已完成]` | `v2-pretrain-r3` 已完成的历史步骤，不需要重复运行 |
-| `[可选]` | 时间或数据允许时再执行，不是当前硬门禁 |
+重要安全边界：
 
-当前最重要的安全边界：
-
-> **`make pretrain-curate-reviewed` 现在只接受 `negative_reviewed`。程序会校验 review manifest、人工保留图和 `train_sources` 原 ROI 三方 SHA，并事务化生成 removed/quarantine；任何额外归档、路径越界、符号链接、文件改写或数量不守恒都会失败。不得把完整 `negative_candidates` 当成复核结果。**
+> **`make pretrain-curate-reviewed` 只接受 `negative_reviewed`。程序会校验 review manifest、人工保留图和 `train_sources` 原 ROI 三方 SHA，并事务化生成 removed/quarantine；任何额外归档、路径越界、符号链接、文件改写或数量不守恒都会失败。不得把完整 `negative_candidates` 当成复核结果。**
 
 HLML 公开目标统一使用连字符；实际命令是 `make finetune-curate` 与 `make finetune-train`，不提供含义不完整的 `make finetune`。
 
 原训练历史分析文档只保留为历史证据，不再作为后续操作入口。
 
-理解本文细节后，日常执行可直接使用[简易操作手册 v1.0](end_to_end_training_quick_runbook_v1_0.md)。
+日常操作从[端到端训练快速操作手册 v1.0](end_to_end_training_quick_runbook_v1_0.md)进入；服务器、数据集和实验进度见[当前训练与数据状态](current_training_status.md)。本文保留完整术语、契约、门禁原理和异常处理细节。
 
 ## 1. 系统边界
 
@@ -116,7 +111,7 @@ HLMF finalize 阶段的 `HAND_DATA_ROOT` 与 HLML 的 `HAND_TRAIN_ROOT` 指向�
 | teacher–student disagreement | student 预测与 teacher 伪标签差异很大的 ROI。分歧只表示“值得人工检查”，不表示某一方必然正确。 |
 | replay | finetune 时自动回放的一部分 pretrain positive 和已确认 negative，用于防止模型遗忘 pretrain/multitask 能力。 |
 | source package | 程序生成的一份可审计数据来源，至少包含标签、来源清单、忽略清单、QC 报告和 SHA。 |
-| `source_id` | 一份具体 source package/CVAT task 的唯一目录身份，例如 `negative_removed_gold`、`disagreement_gold`、`dragon_gold_0716_v1`；同一 finetune 工作区内不能重复。 |
+| `source_id` | 一份具体 source package/CVAT task 的唯一目录身份，例如 `negative_removed_gold`、`disagreement_gold`、`dragon_gold_v1`；同一 finetune 工作区内不能重复。 |
 | `source_kind` | source 的逻辑类别，用于 HLML 自动发现和应用策略；例如 b 是 `reviewed_hard_gold`、c 是 `disagreement_gold`、Dragon 是 `external_gold`。它由 selection request 或 adapter 生成并由 HLMF 验证，不是人工 Make 参数。 |
 | `ignore_for_training` | 人工无法可靠确定目标手或完整 21 点时使用的 CVAT tag。该 ROI 会被记录但不进入训练。 |
 | curation | 对来源数据进行审核、去重、抽样和聚合，生成训练 loader 可直接读取的不可变快照。 |
@@ -125,7 +120,7 @@ HLMF finalize 阶段的 `HAND_DATA_ROOT` 与 HLML 的 `HAND_TRAIN_ROOT` 指向�
 | sampling fraction | 各类数据的目标抽样比例。pretrain/multitask 按 batch 取整；finetune 先固定每个 batch 的 Gold/pseudo 数，再按整个 epoch 计算各 sample type 的整数总配额，以便少量 Gold negative 能被均匀分散而不是每个 batch 都重复出现。 |
 | NME | Normalized Mean Error，归一化平均关键点误差。本流程用掌宽作分母，使不同大小的手能在同一尺度比较；越小越好。 |
 | PCK | Percentage of Correct Keypoints，在指定归一化距离阈值内的关键点比例；越大越好。 |
-| Peak | 当前数据来源家族/`dataset_id` 名称的一部分，不是算法术语。“Peak teacher-abstention”只是指 Peak 来源里 Google 未输出 21 点的 ROI。 |
+| Peak | 一种数据来源家族/`dataset_id` 名称的一部分，不是算法术语。“Peak teacher-abstention”只是指 Peak 来源里 Google 未输出 21 点的 ROI。 |
 | largest remainder | “最大余数法”：先取各比例配额的整数部分，再把剩余名额依次给小数余数最大的类别，保证整数总数严格守恒。 |
 | fail-closed | 条件不完整或证据不一致时直接停止，不猜测、不自动放宽。 |
 | `POS_RUNTIME` | Palm 分数达到正式运行阈值，而且 teacher 或人工确认 ROI 中有手的正样本。这里的 Runtime 表示部署时正常会进入 Hand Landmarker 的 Palm ROI。 |
@@ -196,95 +191,11 @@ flowchart TD
     T --> U["冻结后 Test、推理、ONNX、厂商转换"]
 ```
 
-## 5. 已完成进度：`v2-pretrain-r3`
+## 5. 步骤 0～6：从 HLMF 到 geometry
 
-### 5.1 数据与 geometry
+本节说明每个新 pretrain ID 都要执行的完整操作。
 
-以下步骤已经完成：
-
-1. HLMF 制作并聚合多来源 pseudo Train；
-2. 将 Train source 放入 `${HAND_TRAIN_ROOT}/train_sources`；
-3. 将 Val/Test source 放入 `${HAND_TRAIN_ROOT}/eval_sources`；
-4. HLMF 生成 `train_pretrain_merged`、`val_merged`、`test_merged`；
-5. HLML 完成 `make pretrain-curate`；
-6. HLML 完成 geometry smoke；
-7. HLML 完成 `v2-pretrain-r3` geometry、Val 和独立整图推理。
-
-服务器 geometry 状态：
-
-```text
-${HAND_TRAIN_ROOT}/hand_landmarker_runs/v2-pretrain-r3/geometry/
-```
-
-关键事实：
-
-| 项目 | r3 结果 |
-|---|---:|
-| geometry Train positive | 59,952 |
-| 完成 epoch | 31 |
-| best epoch | 11 |
-| Val mean pixel error | 22.221 px |
-| Val median pixel error | 19.444 px |
-| Val P90 / P95 | 39.920 / 46.527 px |
-| mean NME | 0.21097 |
-| PCK@0.05 / 0.10 / 0.15 | 0.1197 / 0.3040 / 0.4608 |
-
-`training_report.json` 已为 `complete`，best 与 final checkpoint SHA 一致。该 checkpoint 可以作为 multitask 起点和当前 fallback。
-
-Val 共有 1,226 个 Gold positive，没有 negative，因此 `hand_flag_accuracy=1.0` 不能证明模型会拒绝背景。geometry 的 handedness loss coefficient 为 0，原始 BCE 虽会被记录但不参与 total loss 和优化，因此 handedness 指标也不能作为能力证明。
-
-独立整图推理为 192 张原图、217 个 Palm ROI；217 个 ROI 全被 geometry `hand_flag` 接受。52 张无输出图片是 Palm 没有 proposal，不能归因于 Hand Landmarker 在已有 ROI 上拒绝。
-
-### 5.2 本地负例复核结果
-
-服务器原始候选：
-
-```text
-48,643 张
-├── NEG_LOW_PALM_CANDIDATE     31,573
-└── NEG_RUNTIME_CANDIDATE      17,070
-```
-
-本地人工保留的明确背景 PNG：
-
-```text
-1,049 张
-├── NEG_LOW_PALM_CANDIDATE        920
-└── NEG_RUNTIME_CANDIDATE         129
-```
-
-这 1,049 张已经全量与服务器 `review_manifest.jsonl` 和 `train_sources` 原 ROI 对比：相对路径匹配 `1049/1049`、未知路径 0、保留副本 SHA 不匹配 0、服务器源 ROI 缺失 0、源 ROI SHA 不匹配 0。数据本身已经满足三方身份链，当前阻断仅是程序仍扫描错误目录。
-
-其中 27 张带自动 `NEGATIVE_OVERLAPS_CONFIRMED_HAND` 冲突，预计最终分区为：
-
-```text
-原候选 48,643
-├── 进入 multitask 的 confirmed negative  1,022
-├── negative_quarantine 冲突项               27
-└── negative_removed 人工删除候选         47,594
-```
-
-预计进入 multitask 的 1,022 张中：
-
-- `NEG_RUNTIME_CANDIDATE`：128；
-- `NEG_LOW_PALM_CANDIDATE`：894。
-
-数量满足当前 gate 的总数 500、Runtime 100、Low-Palm 100 门槛。
-
-本地目录还包含两个传输用 ZIP，共约 438 MB：
-
-```text
-NEG_LOW_PALM_CANDIDATE/peak_train_0714_dark.zip
-NEG_RUNTIME_CANDIDATE/peak_train_0714_dark.zip
-```
-
-它们不是候选图片，上传 `negative_reviewed` 时必须留在包外；未来导入程序也会拒绝非图片文件。
-
-## 6. 步骤 0～6：从 HLMF 到 geometry
-
-本节是以后制作新 pretrain ID 时的完整操作。当前 r3 已完成，无需重跑。
-
-### 6.1 HLMF 准备一个原始 Train source `[现有]`
+### 5.1 HLMF 准备一个原始 Train source
 
 原始图片应与 Val/Test/inference 按完整采集 session 隔离。普通 HLMF source 使用正向 1280×720 灰度图片。
 
@@ -316,7 +227,7 @@ make run_mediapipe_train
 
 普通 pseudo Train 不需要把所有 ROI 送入 CVAT。
 
-### 6.2 将 source 交付到 TrainFab `[现有]`
+### 5.2 将 source 交付到 TrainFab
 
 将 HLMF 中直接用于训练的 source 复制到：
 
@@ -335,7 +246,7 @@ qc/
 
 复制后由程序检查图片数量、相对身份和 SHA。不要手工改 JSONL 中的旧绝对路径；HLMF finalizer 使用 `crop_images_dir` 重定位真实图片。
 
-### 6.3 HLMF finalize pretrain `[现有]`
+### 5.3 HLMF finalize pretrain
 
 在 `configs/finalize_train.yaml` 登记每个 source 的唯一 `dataset_id`，然后：
 
@@ -359,7 +270,7 @@ train_pretrain_merged/
 
 报告必须满足 `status=ok`、`fatal_errors=[]`、图片缺失为 0，并且每个预期 source 的 included 数不是 0。
 
-### 6.4 HLML 更新、提纯和测试 `[现有]`
+### 5.4 HLML 更新、提纯和测试
 
 每次新实验先在 HLML Makefile 设置新的 `HAND_PRETRAIN_ID`，不要复用旧 ID。
 
@@ -383,7 +294,7 @@ train_pretrain_curated/<PRETRAIN_ID>/qc/sha256_manifest.json
 hand_landmarker_reviews/<PRETRAIN_ID>/review_report.json
 ```
 
-### 6.5 Geometry smoke 与正式训练 `[现有]`
+### 5.5 Geometry smoke 与正式训练
 
 ```bash
 make doctor
@@ -405,7 +316,7 @@ hand_landmarker_runs/<PRETRAIN_ID>/geometry/
     └── final.weights.h5
 ```
 
-### 6.6 Geometry Val、推理和 fallback `[现有]`
+### 5.6 Geometry Val、推理和 fallback
 
 先 Val：
 
@@ -428,11 +339,9 @@ make eval-test-geometry
 
 geometry best 和导出的 ONNX 应在后续实验开始前保留为 fallback。
 
-## 7. 步骤 7：导入人工复核负例
+## 6. 步骤 7：导入人工复核负例
 
-状态：`[已实现]`。满足本节目录、数量和 SHA 前置条件后执行。
-
-### 7.1 人工要做什么
+### 6.1 人工要做什么
 
 本地权威目录为：
 
@@ -443,7 +352,7 @@ D:\CICIEC\MediaPipe\Trainfab\HLML-2.0\negative_candidates\negative_candidates
 只上传其中的 PNG 目录树，服务器目标为：
 
 ```text
-${HAND_TRAIN_ROOT}/hand_landmarker_reviews/v2-pretrain-r3/negative_reviewed/
+${HAND_TRAIN_ROOT}/hand_landmarker_reviews/<PRETRAIN_ID>/negative_reviewed/
 ```
 
 目标目录最外层必须直接是：
@@ -460,17 +369,19 @@ negative_reviewed/
 
 ```powershell
 Set-Location "D:\CICIEC\MediaPipe\Trainfab\HLML-2.0\negative_candidates\negative_candidates"
-7z a -t7z ..\v2-pretrain-r3-negative-reviewed.7z .\* -xr!*.zip
-7z t ..\v2-pretrain-r3-negative-reviewed.7z
+7z a -t7z ..\<PRETRAIN_ID>-negative-reviewed.7z .\* -xr!*.zip
+7z t ..\<PRETRAIN_ID>-negative-reviewed.7z
 ```
 
-可以经夸克网盘中转；7z 压缩、上传、下载和正常解压都不会改写 PNG 的内容，因此不会改变单个 PNG 的 SHA-256。人工无需逐图计算哈希，导入程序会把解压后的 1,049 张图与 review manifest、服务器 `train_sources` 原图做三方 SHA 校验。
+可以经夸克网盘中转；7z 压缩、上传、下载和正常解压都不会改写 PNG 的内容，因此不会改变单个 PNG 的 SHA-256。人工无需逐图计算哈希，导入程序会把解压后的全部 PNG 与 review manifest、服务器 `train_sources` 原图做三方 SHA 校验。
 
 把 7z 放到服务器 review root 之外或其根目录后，解压到一个全新的空目录：
 
 ```bash
-REVIEW_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0/hand_landmarker_reviews/v2-pretrain-r3
-ARCHIVE=/root/autodl-tmp/v2-pretrain-r3-negative-reviewed.7z
+ROOT=/root/autodl-tmp/TrainFab/HLML-2.0
+PRETRAIN_ID=<PRETRAIN_ID>
+REVIEW_ROOT="$ROOT/hand_landmarker_reviews/$PRETRAIN_ID"
+ARCHIVE="/root/autodl-tmp/$PRETRAIN_ID-negative-reviewed.7z"
 
 7z t "$ARCHIVE"
 test ! -e "$REVIEW_ROOT/negative_reviewed"
@@ -480,22 +391,22 @@ find "$REVIEW_ROOT/negative_reviewed" -type f -iname '*.png' | wc -l
 find "$REVIEW_ROOT/negative_reviewed" -type f ! -iname '*.png' -print
 ```
 
-第一条 `find` 应输出 `1049`，第二条不应输出任何路径。若数量或目录层级不对，先修正解压位置，不要运行 curate。人工不删除服务器原 `negative_candidates`，不手工创建 `negative_removed`，不写 decision 文件；这些都由事务化程序完成。
+第一条 `find` 应等于本地人工保留的 PNG 数，第二条不应输出任何路径。若数量或目录层级不对，先修正解压位置，不要运行 curate。人工不删除服务器原 `negative_candidates`，不手工创建 `negative_removed`，不写 decision 文件；这些都由事务化程序完成。
 
-### 7.2 程序必须自动完成什么
+### 6.2 程序必须自动完成什么
 
-当前 `make pretrain-curate-reviewed` 会：
+`make pretrain-curate-reviewed` 会：
 
 1. 只读取 `negative_reviewed` 作为人工保留集合；
 2. 以 `review_manifest.jsonl.candidate_relative_path` 对齐身份；
 3. 拒绝未知路径、重复文件、符号链接、非图片文件和 SHA 不符；
 4. 再核对 `train_sources` 原 ROI 的路径和 SHA；
-5. 将 1,049 个保留项写成有人工证据的 review decision；
-6. 将 27 个重叠冲突项写入 `negative_quarantine`；
-7. 将原候选中不在 `negative_reviewed` 的 47,594 项写入 `negative_removed`；
+5. 将人工保留项写成有人工证据的 review decision；
+6. 将重叠冲突项写入 `negative_quarantine`；
+7. 将原候选中不在 `negative_reviewed` 的项目写入 `negative_removed`；
 8. 生成 `negative_removed_manifest.jsonl`，保存原 crop ID、父 source、相对路径和 SHA；
-9. 重建 r3 multitask canonical；
-10. 全部产物和哈希成功后，才清理完整 `negative_candidates`，避免占用约 2.2 GB；
+9. 重建该 pretrain ID 的 multitask canonical；
+10. 全部产物和哈希成功后，才清理完整 `negative_candidates`，释放审查副本占用的空间；
 11. 支持成功后的幂等复跑，不依赖已经清理的 candidates；
 12. 任何一步失败时保持原 candidates 和旧 curated 快照可恢复。
 
@@ -503,12 +414,12 @@ find "$REVIEW_ROOT/negative_reviewed" -type f ! -iname '*.png' -print
 
 ```text
 原候选 = admitted confirmed negative + quarantine + removed
-48,643 = 1,022 + 27 + 47,594
+candidate_count = admitted_count + quarantine_count + removed_count
 ```
 
 `negative_removed` 只是高价值待标池。程序不得自动把它标为 positive，因为其中仍可能有模糊手、非目标手或真正背景。
 
-### 7.3 执行命令
+### 6.3 执行命令
 
 ```bash
 cd /root/HandLandmarkerLab
@@ -522,22 +433,22 @@ make check-multitask-data
 重点查看：
 
 ```text
-hand_landmarker_reviews/v2-pretrain-r3/review_report.json
-hand_landmarker_reviews/v2-pretrain-r3/negative_removed_manifest.jsonl
-train_pretrain_curated/v2-pretrain-r3/qc/curation_report.json
-train_pretrain_curated/v2-pretrain-r3/qc/sha256_manifest.json
-hand_landmarker_runs/v2-pretrain-r3/multitask_data_gate.json
+hand_landmarker_reviews/<PRETRAIN_ID>/review_report.json
+hand_landmarker_reviews/<PRETRAIN_ID>/negative_removed_manifest.jsonl
+train_pretrain_curated/<PRETRAIN_ID>/qc/curation_report.json
+train_pretrain_curated/<PRETRAIN_ID>/qc/sha256_manifest.json
+hand_landmarker_runs/<PRETRAIN_ID>/multitask_data_gate.json
 ```
 
-报告中的期望值是 `retained_confirmed_count=1049`、`quarantine=27`、`included_confirmed_negatives=1022`；三者含义不同，不能只看 1,049 就认为全部进入训练。
+报告必须满足：`retained_confirmed_count` 等于人工保留 PNG 数，且 `retained_confirmed_count = quarantine + included_confirmed_negatives`。三者含义不同，不能把人工保留数直接当成最终训练负例数。
 
-## 8. 步骤 8：Multitask
+## 7. 步骤 8：Multitask
 
-状态：训练入口与基于实际负例规模的重复率保护均 `[已实现]`。正式启动 multitask 仍必须先通过人工负例事务和数据 gate。
+正式启动 multitask 前必须先通过人工负例事务和数据 gate。
 
-### 8.1 训练目标
+### 7.1 训练目标
 
-Multitask 从 r3 geometry best 初始化，同时训练：
+Multitask 从同一 pretrain ID 的 geometry best 初始化，同时训练：
 
 - landmarks：继续保持 21 点能力；
 - hand flag：使用人工确认背景学习拒绝假 ROI；
@@ -545,11 +456,9 @@ Multitask 从 r3 geometry best 初始化，同时训练：
 
 它不会训练 Palm Detector，也不能恢复 Palm 根本没有产生的 ROI。
 
-### 8.2 自动采样保护
+### 7.2 自动采样保护
 
-当前预计只有 128 个 Runtime confirmed negative。若保持 `epoch_size=null`，按逐 batch 配额每轮约产生 4,764 个 Runtime-negative draw，平均每条重复约 37.2 次；按总体 8% 粗算约 38 次，容易记住少量背景。
-
-当前配置使用：
+confirmed negative 通常远少于 positive。若 epoch 太大，少量 Runtime-negative 会在每轮被重复抽取很多次，模型容易记住这些背景。正式配置使用自动 epoch size 和两级重复率上限：
 
 ```yaml
 sampling:
@@ -559,7 +468,7 @@ sampling:
   max_expected_row_draws_per_epoch: 8.0
 ```
 
-第一个上限控制一个 sampling cell 中“平均每条记录被抽多少次”，第二个上限额外保护 cell 内权重最高的单条记录，避免平均值合格但个别行被反复抽中。程序根据 gate 后的真实数量和逐 batch 整数配额自动计算最终 epoch size，并在报告中写出每种 sample type 的预计抽样次数。对当前 1,022 个负例，建议起点约为 6,400 个 draw/epoch；操作者不需要手算或人工删数据。
+第一个上限控制一个 sampling cell 中“平均每条记录被抽多少次”，第二个上限额外保护 cell 内权重最高的单条记录，避免平均值合格但个别行被反复抽中。程序根据 gate 后的真实数量和逐 batch 整数配额自动计算最终 epoch size，并在报告中写出每种 sample type 的预计抽样次数；操作者不需要手算或人工删数据。
 
 默认 batch 比例仍可保持：
 
@@ -570,7 +479,7 @@ NEG_RUNTIME_CANDIDATE      8%
 NEG_LOW_PALM_CANDIDATE     2%
 ```
 
-### 8.3 启动训练
+### 7.3 启动训练
 
 确认 `check-multitask-data` 已解析出可行 epoch size 后：
 
@@ -586,7 +495,7 @@ make pretrain-multitask
 输出：
 
 ```text
-${HAND_TRAIN_ROOT}/hand_landmarker_runs/v2-pretrain-r3/multitask/
+${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/multitask/
 ```
 
 完成后先运行 Val 和独立推理：
@@ -600,7 +509,7 @@ make export-multitask
 接受 multitask 的最低条件：
 
 - `training_report.json` 与 `experiment_metadata.json` 都为 `complete`；
-- 起点是 r3 geometry `best.weights.h5`；
+- 起点是同一 pretrain ID 的 geometry `best.weights.h5`；
 - Val landmark mean/P90 相比 geometry 不明显恶化，建议相对退化不超过 3%；
 - 固定推理样例的 landmarks 没有明显恶化；
 - `hand_flag` 的背景拒绝能力不能仅用 positive-only Val 证明，应结合独立推理中的假 ROI 定性复核。
@@ -611,15 +520,15 @@ Test 仍只在最终方案冻结后运行：
 make eval-test-multitask
 ```
 
-## 9. 步骤 9：准备 finetune 数据
+## 8. 步骤 9：准备 finetune 数据
 
-状态：`[已实现]`。五类来源均走统一 source descriptor；可选来源可以缺失，但已经存在的来源必须完整通过 gate。
+五类来源均走统一 source descriptor；可选来源可以缺失，但已经存在的来源必须完整通过 gate。
 
-### 9.1 五类来源总表
+### 8.1 五类来源总表
 
 | 代号 | 来源 | 是否需要新增人工标注 | 是否允许缺失 | 主要监督 |
 |---|---|---:|---:|---|
-| a | Dragon 0716 已有人工精标 | 否，只需自动转换和小规模可视化验收 | 是 | Gold landmark + positive presence；handedness 无效 |
+| a | Dragon 已有人工精标 | 否，只需自动转换和小规模可视化验收 | 是 | Gold landmark + positive presence；handedness 无效 |
 | b | `negative_removed` 自动抽样 | 是，CVAT | 是 | 困难 Gold positive/no_hand/ignore |
 | c | geometry teacher–student 分歧自动抽样 | 是，CVAT | 是 | 高分歧 Gold landmark/presence |
 | d | pretrain positive + confirmed negative replay | 否 | 训练时必须有 | pseudo landmark/handedness + reviewed negative presence |
@@ -627,22 +536,11 @@ make eval-test-multitask
 
 `make finetune-curate` 不要求 a～e 全部存在；但已存在的任何 source 必须严格通过内部结构、身份、SHA、标签和泄漏检查。正式训练至少需要一个 Gold source 和 d replay。
 
-### 9.2 a：Dragon 0716 Gold 转换
+### 8.2 a：Dragon Gold 转换
 
 没有新建平行仓库。Dragon external-Gold adapter 已直接集成到 HLMF，并复用 ROI geometry、projection、source package 和 07A 契约。
 
-Dragon 原始情况：
-
-| 项目 | 实际值 |
-|---|---:|
-| `images/` JPEG | 8,593 |
-| 两份标注共同覆盖图片 | 4,500 |
-| 未被 Hand 标注引用的图片 | 4,093，禁止自动纳入 Gold |
-| 标注中 `p=0` | 850 张，只进 reject audit，不是 negative |
-| 原始人工标注 hand | 5,311 |
-| 按 README 唯一匹配成功 | 5,191 ROI |
-| 投影后 21 点全部在 ROI 内 | 5,189 ROI |
-| 各有 1 点越界 | 2 ROI，自动 ignore，禁止 clamp |
+Dragon adapter 只处理同时满足 Palm/Hand 标注契约且能唯一匹配的 ROI。未被 Hand 标注引用的图片不得自动纳入 Gold；标注中的 `p=0`、Palm/Hand 映射歧义和点越界样本进入 reject/ignore audit，不能被猜成 negative，也不能通过 clamp 伪造合法 21 点。具体输入、匹配、可训练、忽略和拒绝数量以对应 `gold_source_report.json` 为准。
 
 所有被标注 JPEG 的物理尺寸都是 720×1280，EXIF Orientation=6；Dragon 坐标描述的是 EXIF 转正后的 1280×720 图。HLMF 普通 OpenCV 读取会忽略 EXIF，因此不能直接把这批 JPEG送入现有 00/02。
 
@@ -653,9 +551,9 @@ cd /root/HandLandmarksFab
 conda activate anfab
 
 make prepare_dragon_gold \
-  DRAGON_RAW_ROOT=/path/to/HandViolenceEnhanced0716/dragon \
+  DRAGON_RAW_ROOT=/path/to/dragon \
   HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0 \
-  HAND_FINETUNE_ID=v2-finetune-r1
+  HAND_FINETUNE_ID=<FINETUNE_ID>
 ```
 
 程序自动：
@@ -665,8 +563,8 @@ make prepare_dragon_gold \
 3. 按 README 的“21 点中心只落入唯一 Palm bbox”规则匹配 Hand 与 Palm；
 4. 使用 `scale=1.8`、`shift_y=-0.1` 构造 256×256 ROI；
 5. 将原图 21 点精确投影到 ROI；
-6. 生成 5,189 个可训练 Gold 和 2 个 ignored；
-7. 将 850 张 `p=0` 图片写入 reject audit；另把 `p>q`、映射歧义、Palm 数不足等各自按原因写入 reject audit，不制造 negative；
+6. 将 21 点全部合法的 ROI 写入可训练 Gold，将越界或不满足训练契约的 ROI 写入 ignored；
+7. 将 `p=0` 图片写入 reject audit；另把 `p>q`、映射歧义、Palm 数不足等各自按原因写入 reject audit，不制造 negative；
 8. 自动生成 source package、报告、SHA 和可视化抽检图。
 
 Dragon 没有 handedness。其训练行必须为 `unknown/null`，有效 head 权重为：
@@ -679,18 +577,18 @@ handedness = 0
 
 它只能提供 positive presence，不能代替 multitask 的 confirmed negative。
 
-Dragon 已是人工精标，不需要再做一次全量 CVAT。人工只需快速查看程序生成的固定 64 张 overlay，确认 EXIF 方向、Palm→Hand 对应和投影没有系统错误。
+Dragon 已是人工精标，不需要再做一次全量 CVAT。人工只需快速查看程序生成的固定数量 overlay，确认 EXIF 方向、Palm→Hand 对应和投影没有系统错误。
 
-当前默认 source ID 为 `dragon_gold_0716_v1`，重点查看：
+设对应 source ID 为 `<DRAGON_SOURCE_ID>`，重点查看：
 
 ```text
-finetune/<FINETUNE_ID>/sources/gold/dragon_gold_0716_v1/finetune_source.json
-finetune/<FINETUNE_ID>/sources/gold/dragon_gold_0716_v1/qc/gold_source_report.json
-finetune/<FINETUNE_ID>/sources/gold/dragon_gold_0716_v1/qc/overlays/
-finetune/<FINETUNE_ID>/sources/gold/dragon_gold_0716_v1/qc/source_images_sha256.jsonl
+finetune/<FINETUNE_ID>/sources/gold/<DRAGON_SOURCE_ID>/finetune_source.json
+finetune/<FINETUNE_ID>/sources/gold/<DRAGON_SOURCE_ID>/qc/gold_source_report.json
+finetune/<FINETUNE_ID>/sources/gold/<DRAGON_SOURCE_ID>/qc/overlays/
+finetune/<FINETUNE_ID>/sources/gold/<DRAGON_SOURCE_ID>/qc/source_images_sha256.jsonl
 ```
 
-### 9.3 b：从 `negative_removed` 自动选择困难候选
+### 8.3 b：从 `negative_removed` 自动选择困难候选
 
 程序读取经过 SHA 认证的 `negative_removed_manifest.jsonl`，不按文件名猜身份，也不使用 HLMF `tools/downsample.py`。
 
@@ -709,9 +607,9 @@ NEG_RUNTIME : NEG_LOW_PALM = 60% : 40%
 - 显式 `no_hand`；
 - `ignore_for_training`。
 
-### 9.4 c：自动选择 teacher–student 高分歧样本
+### 8.4 c：自动选择 teacher–student 高分歧样本
 
-程序对 r3 curated geometry positive 批量运行 r3 geometry best，并与同 ROI 的 teacher pseudo 比较。
+程序对指定 pretrain ID 的 curated geometry positive 批量运行同一 ID 的 geometry best，并与同 ROI 的 teacher pseudo 比较。
 
 默认人工预算：
 
@@ -729,13 +627,13 @@ landmark NME = 21点平均(student与teacher距离)
 collapse = abs(log(student骨架总长度 / teacher骨架总长度))
 ```
 
-其中 teacher 掌宽固定定义为 landmark 5 到 landmark 17 的距离，骨架总长度固定使用 MediaPipe 的 20 条标准连接边。程序同时记录 mean/P90/max NME、student hand flag、teacher/student bbox 和骨架 spread；geometry 的 hand-flag head 尚未经过 negative 训练，因此当前分歧总分中的 `hand_flag_error` 权重固定为 0。只有改用经过验证的 multitask checkpoint 后，才允许显式启用该分项。高分仅表示值得标注，不直接判定 teacher 或 student 错。
+其中 teacher 掌宽固定定义为 landmark 5 到 landmark 17 的距离，骨架总长度固定使用 MediaPipe 的 20 条标准连接边。程序同时记录 mean/P90/max NME、student hand flag、teacher/student bbox 和骨架 spread；使用 geometry checkpoint 时，hand-flag head 尚未经过 negative 训练，所以分歧总分中的 `hand_flag_error` 权重应为 0。只有改用经过验证的 multitask checkpoint 后，才允许显式启用该分项。高分仅表示值得标注，不直接判定 teacher 或 student 错。
 
-### 9.5 b/c 的 HLMF 与 CVAT 流程
+### 8.5 b/c 的 HLMF 与 CVAT 流程
 
 b/c 的 ROI、原 manifest 和原 MediaPipe draft 已经存在。自动 materializer 会恢复它们并按来源生成 task；无需重跑 HLMF 03。重跑 teacher 既浪费时间，也可能因 MediaPipe 版本变化破坏可复现性。
 
-已实现流程：
+处理流程：
 
 ```text
 HLML 自动选样
@@ -749,11 +647,11 @@ HLML 自动选样
 执行命令：
 
 ```bash
-# HLMF：为冻结的 pretrain 标签发布一次只读父源索引；不会改写 r3 JSONL
+# HLMF：为冻结的 pretrain 标签发布一次只读父源索引；不会改写原 JSONL
 cd /root/HandLandmarksFab
 conda activate anfab
 export HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0
-export HAND_PRETRAIN_ID=v2-pretrain-r3
+export HAND_PRETRAIN_ID=<PRETRAIN_ID>
 make build_pretrain_source_registry
 
 # HLML：生成 b/c selection request 和 d replay；不会发布半成品 Gold source
@@ -765,7 +663,7 @@ make prepare-finetune-sources
 cd /root/HandLandmarksFab
 conda activate anfab
 export HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0
-export HAND_FINETUNE_ID=v2-finetune-r1
+export HAND_FINETUNE_ID=<FINETUNE_ID>
 make export_finetune_gold \
   FINETUNE_SOURCE_ID=negative_removed_gold \
   FINETUNE_SOURCE_MODE=selection_subset
@@ -830,7 +728,7 @@ Finetune 专用 HLMF 04 不得把 teacher 的 Left/Right tag 预填成监督标�
 
 ```bash
 export HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0
-export HAND_FINETUNE_ID=v2-finetune-r1
+export HAND_FINETUNE_ID=<FINETUNE_ID>
 make import_finetune_gold
 make finalize_train_finetune
 ```
@@ -859,9 +757,9 @@ HLMF Gold aggregate canonical 是 a/b/c/e **唯一的训练 Gold 标签输入**�
 
 人工不写 subset ID、CSV、JSONL，不手工合并不同 source。
 
-### 9.6 d：自动选择 pretrain replay
+### 8.6 d：自动选择 pretrain replay
 
-d 不进入 CVAT。程序直接从 r3 curated 数据生成 finetune replay 索引，图片继续引用只读 `train_sources`。
+d 不进入 CVAT。程序直接从指定 pretrain ID 的 curated 数据生成 finetune replay 索引，图片继续引用只读 `train_sources`。
 
 默认规则：
 
@@ -875,12 +773,15 @@ d 不进入 CVAT。程序直接从 r3 curated 数据生成 finetune replay 索�
 
 平方根分配的含义：一个来源有 4 倍候选时只获得约 2 倍配额，避免最大来源完全支配，同时又不强迫极小来源获得不合理的等额配额。
 
-### 9.7 e：新录制独立 Gold `[可选]`
+### 8.7 e：新录制独立 Gold（可选）
 
 新数据必须与现有 Train、Val、Test、inference 按完整 session 隔离。先在独立 raw source root 执行 HLMF 00～03，只让程序生成 Palm、ROI 和 teacher draft：
 
 ```bash
-E_SOURCE_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0/finetune/v2-finetune-r1/raw/new_recorded_gold_v1
+ROOT=/root/autodl-tmp/TrainFab/HLML-2.0
+FINETUNE_ID=<FINETUNE_ID>
+E_SOURCE_ID=<NEW_GOLD_SOURCE_ID>
+E_SOURCE_ROOT="$ROOT/finetune/$FINETUNE_ID/raw/$E_SOURCE_ID"
 export HAND_DATA_ROOT="$E_SOURCE_ROOT"
 
 make validate_images_train
@@ -893,27 +794,25 @@ make run_mediapipe_train
 
 ```bash
 export HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0
-export HAND_FINETUNE_ID=v2-finetune-r1
+export HAND_FINETUNE_ID=<FINETUNE_ID>
 
 make export_finetune_gold \
   FINETUNE_SOURCE_MODE=native_existing \
   FINETUNE_RAW_SOURCE_ROOT="$E_SOURCE_ROOT" \
-  FINETUNE_SOURCE_ID=new_recorded_gold_v1
+  FINETUNE_SOURCE_ID=<NEW_GOLD_SOURCE_ID>
 ```
 
 人工在 CVAT 完成 21 点、presence、ignore 和 handedness 决策，把 XML 放回 task descriptor 指定的 `reviewed.xml` 后：
 
 ```bash
-make import_finetune_gold FINETUNE_SOURCE_ID=new_recorded_gold_v1
+make import_finetune_gold FINETUNE_SOURCE_ID=<NEW_GOLD_SOURCE_ID>
 ```
 
-该命令必须走 finetune strict 05，并在检查全部 task、图片和 SHA 后原子发布 `sources/gold/new_recorded_gold_v1`；不能改用普通 `import_cvat_train`。若时间不足没有 e，后续 finetune curate 应记录 `absent_optional`，而不是失败。
+该命令必须走 finetune strict 05，并在检查全部 task、图片和 SHA 后原子发布 `sources/gold/<NEW_GOLD_SOURCE_ID>`；不能改用普通 `import_cvat_train`。若未制作 e，后续 finetune curate 应记录 `absent_optional`，而不是失败。
 
-## 10. 自动采样配置
+## 9. 自动采样配置
 
-状态：`[已实现]`。
-
-候选人工预算和 replay 上限由 `configs/prepare_finetune_sources.yaml` 控制。下面是与当前文件一致的可调部分；输入路径、模型和输出工作区仍保留在正式配置中：
+候选人工预算和 replay 上限由 `configs/prepare_finetune_sources.yaml` 控制。下面展示可调部分；输入路径、模型和输出工作区仍保留在正式配置中：
 
 ```yaml
 schema_version: 1
@@ -952,7 +851,7 @@ selection:
     salt: finetune_replay_v1
 ```
 
-按来源可用量开平方、再用最大余数法取整数配额，是程序的固定算法，不是额外 YAML 开关；当前配置不接受 `allocation` 或 `one_per_source_group_first` 这类占位字段。
+按来源可用量开平方、再用最大余数法取整数配额，是程序的固定算法，不是额外 YAML 开关；配置契约不接受 `allocation` 或 `one_per_source_group_first` 这类占位字段。
 
 如果可选 Gold 来源缺失，程序只在实际存在且通过 gate 的 Gold role 之间重新归一化各自的 `target_gold_weight`，并把原始目标权重、重归一化结果和实际 draw 写入报告。
 
@@ -979,21 +878,19 @@ sources:
     target_gold_weight: 0.05
 ```
 
-这里的 `dragon_gold` 等键是 HLML 的逻辑 role；程序根据各 role 的 `discover_kind` 匹配 HLMF descriptor 中的 `source_kind`，并不要求物理 `source_id` 恰好等于 role 名。例如 Dragon 的实际 source ID 可以是 `dragon_gold_0716_v1`，其 kind 必须是 `external_gold`。
+这里的 `dragon_gold` 等键是 HLML 的逻辑 role；程序根据各 role 的 `discover_kind` 匹配 HLMF descriptor 中的 `source_kind`，并不要求物理 `source_id` 恰好等于 role 名。例如 Dragon 的实际 source ID 可以是 `dragon_gold_v1`，其 kind 必须是 `external_gold`。
 
 `gold_fraction`、`epoch_size` 和 tier 内 sample type 比例只在 `configs/train_finetune.yaml` 定义。三个配置各有唯一职责，gate 会检查 curation manifest 与 train config 是否一致，不从 selection config 隐式继承训练比例。
 
-## 11. 步骤 10：`finetune-curate`
+## 10. 步骤 10：`finetune-curate`
 
-状态：`[已实现]`。
+### 10.1 准备实验身份
 
-### 11.1 准备实验身份
-
-HLML Makefile 已同时导出两个独立实验 ID；步骤 10 继续复用：
+HLML Makefile 使用两个独立实验 ID：
 
 ```make
-HAND_PRETRAIN_ID := v2-pretrain-r3
-HAND_FINETUNE_ID ?= v2-finetune-r1
+HAND_PRETRAIN_ID := <PRETRAIN_ID>
+HAND_FINETUNE_ID ?= <FINETUNE_ID>
 ```
 
 `HAND_PRETRAIN_ID` 指定 replay 和初始 checkpoint；`HAND_FINETUNE_ID` 指定本次 finetune 数据快照、run、评估、推理和导出。尝试另一种 finetune 配置时只增加新的 finetune ID，不重做 pretrain。
@@ -1002,13 +899,14 @@ HAND_FINETUNE_ID ?= v2-finetune-r1
 
 ```bash
 ROOT=/root/autodl-tmp/TrainFab/HLML-2.0
-mkdir -p "$ROOT/finetune/v2-finetune-r1/sources/gold"
-mkdir -p "$ROOT/finetune/v2-finetune-r1/sources/replay"
+FINETUNE_ID=<FINETUNE_ID>
+mkdir -p "$ROOT/finetune/$FINETUNE_ID/sources/gold"
+mkdir -p "$ROOT/finetune/$FINETUNE_ID/sources/replay"
 ```
 
 将外部 source package 放入 `sources/`；a/b/c/d 的程序产物可以直接写入，无需再次复制。
 
-### 11.2 聚合命令 `[已实现]`
+### 10.2 聚合命令
 
 ```bash
 cd /root/HandLandmarkerLab
@@ -1046,7 +944,7 @@ train_finetune_merged/<FINETUNE_ID>/
     └── sha256_manifest.json
 ```
 
-### 11.3 可选来源门禁
+### 10.3 可选来源门禁
 
 缺失 source 的规则：
 
@@ -1069,13 +967,11 @@ train_finetune_merged/<FINETUNE_ID>/
 - b/c/e 中的 Gold `no_hand` 必须带 strict CVAT 的显式 `no_hand`、`supervision_tier=gold`、`annotation_provenance=human_gold` 和 source descriptor SHA。它不需要伪造 pretrain review 字段；
 - sampling cell 与 batch 配额可行。
 
-## 12. 步骤 11：Finetune 训练
+## 11. 步骤 11：Finetune 训练
 
-状态：底层 trainer、正式配置、Make 路由、smoke、eval、infer 与 export 均 `[已实现]`。
+### 11.1 默认训练策略
 
-### 12.1 默认训练策略
-
-下面只是当前训练策略摘要，不是可独立复制执行的完整 YAML；正式 `configs/train_finetune.yaml` 还包含 environment、完整 model/targets/data、loss、augmentation、Val/Test inspection、runtime 和允许图片根。
+下面只是默认训练策略摘要，不是可独立复制执行的完整 YAML；正式 `configs/train_finetune.yaml` 还包含 environment、完整 model/targets/data、loss、augmentation、Val/Test inspection、runtime 和允许图片根。
 
 ```yaml
 stage: finetune
@@ -1083,7 +979,7 @@ stage: finetune
 training:
   epochs: 40
   batch_size: 64
-  initial_checkpoint: <v2-pretrain-r3 multitask best>
+  initial_checkpoint: <PRETRAIN_ID multitask best>
   gold_fraction: 0.35
   optimizer:
     learning_rate: 1.0e-5
@@ -1122,11 +1018,11 @@ sampling:
 
 Gold 通常主要是正样本，但 b/c/e 中人工显式标出的 `no_hand` 也应以受控比例参与训练，不能被浪费。程序先保证每个 batch 的 Gold/pseudo 总数，再对整个 epoch 计算每个 tier×sample type 的整数 draw 总量。Gold 某类 negative 不存在时配额回流到 Gold positive；数量过少时先把该 cell 的 epoch 总 draw 限制到重复率上限，再把剩余配额回流到同 tier positive，并把少量 negative draw 确定性地分散到不同 batch。不能继续用“每个 batch 对 7% 取整为 1”的旧方式，否则一个稀有 Gold negative 会在几乎每个 batch 重复出现。pseudo replay 同时复习 confirmed negative。
 
-finetune 的 Val 仍使用原 `val_merged`，Test 仍使用原 `test_merged`。当前 Val/Test 主要用于公平比较 landmarks；它们没有 negative，不能证明 presence rejection。
+finetune 的 Val 使用固定 `val_merged`，Test 使用固定 `test_merged`。如果这两份集合只有 positive，它们主要用于公平比较 landmarks，不能证明 presence rejection。
 
-未来可以另建含 negative 的新版 Val/Test 来评估 presence，但必须把它视为新的评估协议，并从新的 pretrain 实验 ID 建立 geometry→multitask→finetune 完整对照；不能把新版指标与当前 r3 的旧 Val/Test 指标直接横比。本轮不做这项扩展。
+若另建含 negative 的新版 Val/Test 来评估 presence，必须把它视为新的评估协议，并从新的 pretrain 实验 ID 建立 geometry→multitask→finetune 完整对照；新旧协议的指标不能直接横比。
 
-### 12.2 Finetune smoke 的数据和硬门禁
+### 11.2 Finetune smoke 的数据和硬门禁
 
 `finetune-curate` 必须从最终快照确定性生成并认证：
 
@@ -1154,7 +1050,7 @@ smoke_gate:
 
 landmark 指标只统计 positive 且 landmark mask>0；hand flag 统计 positive 与 negative；handedness 只统计 Left/Right 且 mask>0。任何 NaN、行未覆盖、required cell 或 epoch plan 中 `effective quota>0` 的 cell 从未被抽到、checkpoint/manifest/config SHA 不一致都直接失败。合法缺失并已重分配的可选 Gold-negative cell 记录 `not_applicable/redistributed`，不应失败；全程不使用“loss 看起来下降”这种主观条件。
 
-### 12.3 启动命令 `[已实现]`
+### 11.3 启动命令
 
 ```bash
 cd /root/HandLandmarkerLab
@@ -1179,7 +1075,7 @@ make conversion-data-finetune
 | `multitask` | `HAND_PRETRAIN_ID` | `multitask` | `pretrain` | `configs/train_multitask.yaml` |
 | `finetune` | `HAND_FINETUNE_ID` | `finetune` | `finetune` | `configs/train_finetune.yaml` |
 
-具体注入变量是 `HAND_EXPERIMENT_ID`、`HAND_RUN_PHASE`、`HAND_MODEL_STAGE` 和导出/转换用的 `HAND_TRAIN_CONFIG`。操作者只运行 `make eval-val-finetune`、`make infer-finetune`、`make export-finetune` 等明确目标，不在 shell 中手工设置这些内部路由变量。`make finetune-train` 在启动 full trainer 前会依次要求 finetune 数据门禁、Train/Val/Test inspection 和当前 full-config 绑定的 `finetune_smoke/smoke_gate_report.json` 已通过；它只复核现有 smoke，不会隐式重训 smoke。
+具体注入变量是 `HAND_EXPERIMENT_ID`、`HAND_RUN_PHASE`、`HAND_MODEL_STAGE` 和导出/转换用的 `HAND_TRAIN_CONFIG`。操作者只运行 `make eval-val-finetune`、`make infer-finetune`、`make export-finetune` 等明确目标，不在 shell 中手工设置这些内部路由变量。`make finetune-train` 在启动 full trainer 前会依次要求 finetune 数据门禁、Train/Val/Test inspection 和该 full config 绑定的 `finetune_smoke/smoke_gate_report.json` 已通过；它只复核已有 smoke，不会隐式重训 smoke。
 
 输出：
 
@@ -1198,22 +1094,7 @@ make eval-test-finetune
 
 最终交付必须使用 Val 证明有效的 best checkpoint，而不是默认使用 last。
 
-## 13. 当前从哪里继续
-
-当前不需要重复 HLMF pretrain、HLML 初次 curate 或已经完成的 geometry。代码实现已经完成，正确执行顺序是：
-
-1. 在两个仓库拉取同一版本并分别通过 compile/unit tests；
-2. 若负例复核尚未提交，上传不含 ZIP 的 1,049 张 `negative_reviewed`；
-3. 运行 `make pretrain-curate-reviewed`、gate 与 inspect；
-4. 启动并评估 multitask；
-5. 在 HLMF 发布 pretrain source registry，运行 Dragon adapter 与 HLML b/c/d 自动准备；
-6. 人工只处理 b/c 的 CVAT task；
-7. 运行 HLMF strict import 与 Gold finalize；
-8. 运行 HLML `finetune-curate`、gate、inspect；
-9. finetune smoke、正式训练、Val、推理和导出；
-10. 冻结最终方案后运行一次 Test 和厂商转换。
-
-## 14. 人工与程序职责
+## 12. 人工与程序职责
 
 | 环节 | 人工 | 程序 |
 |---|---|---|
@@ -1222,7 +1103,7 @@ make eval-test-finetune
 | pretrain curate | 运行命令 | 提纯、候选工作区、快照 |
 | negative review | 删除有手/不确定图，上传保留目录 | 身份/SHA、removed/quarantine、decisions、清理 |
 | multitask | 启动、看 Val/推理 | gate、自动 epoch size、训练/checkpoint |
-| Dragon | 提供原目录、看 64 张 overlay | EXIF、匹配、ROI、Gold 投影、reject/QC |
+| Dragon | 提供原目录、查看固定抽检 overlay | EXIF、匹配、ROI、Gold 投影、reject/QC |
 | b/c 候选 | 设置最大数量、运行命令 | 推理、分歧、分层抽样、source package |
 | b/c CVAT | 修 21 点、presence、ignore/handedness | XML 导出、strict import、覆盖率检查 |
 | replay | 无 | 受控抽样、Gold 去重、hash manifest |
@@ -1230,13 +1111,13 @@ make eval-test-finetune
 | finetune | 启动、比较候选 | smoke、训练、best、早停 |
 | Test/export | 冻结方案后运行 | 指标、ONNX contract、转换数据 |
 
-## 15. 一屏命令清单
+## 13. 一屏命令清单
 
-下面均为已实现命令；只有两个仓库拉取到对应版本、测试通过且前置数据门禁满足后才能执行。
+只有两个仓库版本匹配、测试通过且前置数据门禁满足后，才能按顺序执行。
 
 ```bash
 # 先确认 HLML Makefile 中：
-# HAND_PRETRAIN_ID=v2-pretrain-r3，HAND_FINETUNE_ID=v2-finetune-r1
+# HAND_PRETRAIN_ID=<PRETRAIN_ID>，HAND_FINETUNE_ID=<FINETUNE_ID>
 
 # HLML：完成负例分区并训练 multitask
 cd /root/HandLandmarkerLab
@@ -1255,14 +1136,14 @@ conda activate anfab
 make prepare_dragon_gold \
   DRAGON_RAW_ROOT=/path/to/dragon \
   HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0 \
-  HAND_FINETUNE_ID=v2-finetune-r1
+  HAND_FINETUNE_ID=<FINETUNE_ID>
 
-# HLMF：给冻结 r3 发布只读父源索引；不会改写 pretrain 标签
+# HLMF：给冻结的 pretrain 数据发布只读父源索引；不会改写 pretrain 标签
 cd /root/HandLandmarksFab
 conda activate anfab
 make build_pretrain_source_registry \
   HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0 \
-  HAND_PRETRAIN_ID=v2-pretrain-r3
+  HAND_PRETRAIN_ID=<PRETRAIN_ID>
 
 # HLML → HLMF：b/c/d 自动准备与 b/c CVAT
 cd /root/HandLandmarkerLab
@@ -1272,21 +1153,21 @@ cd /root/HandLandmarksFab
 conda activate anfab
 make export_finetune_gold \
   HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0 \
-  HAND_FINETUNE_ID=v2-finetune-r1 \
+  HAND_FINETUNE_ID=<FINETUNE_ID> \
   FINETUNE_SOURCE_ID=negative_removed_gold \
   FINETUNE_SOURCE_MODE=selection_subset
 make export_finetune_gold \
   HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0 \
-  HAND_FINETUNE_ID=v2-finetune-r1 \
+  HAND_FINETUNE_ID=<FINETUNE_ID> \
   FINETUNE_SOURCE_ID=disagreement_gold \
   FINETUNE_SOURCE_MODE=selection_subset
 # 人工完成 CVAT，放回 reviewed.xml
 make import_finetune_gold \
   HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0 \
-  HAND_FINETUNE_ID=v2-finetune-r1
+  HAND_FINETUNE_ID=<FINETUNE_ID>
 make finalize_train_finetune \
   HAND_DATA_ROOT=/root/autodl-tmp/TrainFab/HLML-2.0 \
-  HAND_FINETUNE_ID=v2-finetune-r1
+  HAND_FINETUNE_ID=<FINETUNE_ID>
 
 # HLML：聚合并训练 finetune
 cd /root/HandLandmarkerLab

@@ -2,7 +2,7 @@
 
 本仓库训练 AetherSign Hand Landmarker。当前交付范围覆盖 v2 `pretrain-geometry → pretrain-multitask → finetune`、评估、推理与 ONNX 导出；Palm Detector 仍是冻结的外部资产，不在本仓库训练。
 
-项目从 HLMF 数据制作、pretrain、multitask 到 finetune 的最高级操作规范见 [HLMF + HLML Hand Landmarker 完整训练流程 v1.0](docs/training_system/end_to_end_training_workflow_v1_0.md)；理解完整流程后，日常执行可直接使用[简易操作手册 v1.0](docs/training_system/end_to_end_training_quick_runbook_v1_0.md)。对应的内部开发依据见 [程序、代码与配置更新计划 v1.0](docs/training_system/end_to_end_training_implementation_plan_v1_0.md)。实际命令和依赖链以本仓库 Makefile 为最终权威。
+项目从 HLMF 数据制作、pretrain、multitask 到 finetune 的最高级操作入口见[端到端训练快速操作手册 v1.0](docs/training_system/end_to_end_training_quick_runbook_v1_0.md)；术语、数据契约和异常处理见[完整训练流程 v1.0](docs/training_system/end_to_end_training_workflow_v1_0.md)；服务器、数据集和实验进度见[当前训练与数据状态](docs/training_system/current_training_status.md)。对应的内部开发依据见[程序、代码与配置更新计划 v1.0](docs/training_system/end_to_end_training_implementation_plan_v1_0.md)。实际命令和依赖链以本仓库 Makefile 为最终权威。
 
 ## I. 两阶段训练流程总览
 
