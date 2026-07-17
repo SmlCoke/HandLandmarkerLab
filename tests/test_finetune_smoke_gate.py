@@ -104,7 +104,7 @@ def _smoke_config(root: Path):
     value["training"]["epochs"] = 300
     value["training"]["batch_size"] = 32
     for component in ("checkpoint", "learning_rate_schedule", "early_stopping"):
-        value["training"][component]["monitor"] = "loss"
+        value["training"][component]["monitor"] = "total_loss"
         value["training"][component]["mode"] = "min"
     value["sampling"]["epoch_size"] = 256
     value["augmentation"]["enabled"] = False
@@ -339,7 +339,7 @@ class FinetuneSmokeProvenanceTests(unittest.TestCase):
         best_path = checkpoints / "best.weights.h5"
         write_json(
             history_path,
-            {"epochs": [1, 2], "initial_epoch": 0, "history": {"loss": [1.0, 0.5]}},
+            {"epochs": [1, 2], "initial_epoch": 0, "history": {"total_loss": [1.0, 0.5]}},
         )
         best_path.write_bytes(b"best")
         smoke_yaml = self.root / "train_finetune_smoke.yaml"
@@ -351,7 +351,7 @@ class FinetuneSmokeProvenanceTests(unittest.TestCase):
         }
         git = {"commit": "abc", "dirty": False, "status_short": []}
         selection = {
-            "monitor": "loss",
+            "monitor": "total_loss",
             "mode": "min",
             "completed_epoch": 2,
             "value": 0.5,

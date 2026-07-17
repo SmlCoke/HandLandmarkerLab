@@ -327,8 +327,8 @@ def compare_smoke_and_full_configs(
         smoke_monitor = _require_mapping(smoke_training.get(component), "Smoke training.{}".format(component))
         if full_monitor.get("monitor") != "val_landmark_mae" or full_monitor.get("mode") != "min":
             raise ValueError("Full {} must monitor val_landmark_mae/min".format(component))
-        if smoke_monitor.get("monitor") != "loss" or smoke_monitor.get("mode") != "min":
-            raise ValueError("Smoke {} must monitor loss/min".format(component))
+        if smoke_monitor.get("monitor") != "total_loss" or smoke_monitor.get("mode") != "min":
+            raise ValueError("Smoke {} must monitor total_loss/min".format(component))
     if str((smoke_training.get("learning_rate_schedule") or {}).get("name")) != "reduce_on_plateau":
         raise ValueError("Smoke LR schedule must remain reduce_on_plateau")
     full_run = resolve_path(str((full_config.get("outputs") or {}).get("run_dir")), full_config)
@@ -839,12 +839,12 @@ def verify_smoke_run_provenance(
 
     selection = report.get("checkpoint_selection") or {}
     if (
-        selection.get("monitor") != "loss"
+        selection.get("monitor") != "total_loss"
         or selection.get("mode") != "min"
         or selection.get("verified_against_current_history") is not True
         or metadata.get("checkpoint_selection") != selection
     ):
-        raise ValueError("Smoke best checkpoint must be scratch-history verified with loss/min")
+        raise ValueError("Smoke best checkpoint must be scratch-history verified with total_loss/min")
     history = _read_object(Path(authenticated["history"]["path"]), "Smoke history")
     history_selection = _verify_history_selection(history, selection)
     if list(report.get("completed_epochs") or []) != list(history.get("epochs") or []):

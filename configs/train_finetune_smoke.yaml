@@ -9,12 +9,12 @@ data:
 training:
   epochs: 300
   batch_size: 32
-  checkpoint: {monitor: loss, mode: min}
+  checkpoint: {monitor: total_loss, mode: min}
   learning_rate_schedule:
-    monitor: loss
+    monitor: total_loss
     mode: min
   early_stopping:
-    monitor: loss
+    monitor: total_loss
     mode: min
 
 sampling:
