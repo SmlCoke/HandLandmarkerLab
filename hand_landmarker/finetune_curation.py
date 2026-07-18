@@ -31,6 +31,13 @@ from .io_utils import read_jsonl, sha256_file, write_json, write_jsonl
 
 
 CURATION_SCHEMA = "finetune_curation_v1"
+GOLD_SELECTION_SCHEMA = "hlml_gold_selection_v1"
+GOLD_DOMAIN_BY_KIND = {
+    "external_gold": "dragon",
+    "reviewed_hard_gold": "negative_removed_gold",
+    "disagreement_gold": "disagreement_gold",
+    "new_recorded_gold": "new_recorded_gold",
+}
 
 
 def _config_mapping(config: Union[Mapping[str, Any], str, Path]) -> Dict[str, Any]:
@@ -159,6 +166,39 @@ def _discover_descriptors(root: Path) -> List[Path]:
     return paths
 
 
+def _gold_repository_entry(
+    root: Path, path: Path, source: Mapping[str, Any]
+) -> Dict[str, str]:
+    relative = path.resolve().relative_to(root.resolve())
+    expected = Path(
+        GOLD_DOMAIN_BY_KIND[str(source["source_kind"])]
+    ) / str(source["source_id"]) / "published" / "finetune_source.json"
+    if relative != expected:
+        raise ValueError(
+            "Gold source is outside its canonical domain/batch: {} (expected {})".format(
+                path, expected
+            )
+        )
+    return {
+        "domain": expected.parts[0],
+        "descriptor": expected.as_posix(),
+    }
+
+
+def _read_gold_selection(path: Path) -> Dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Gold selection manifest is missing or a symlink: {}".format(path))
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("PyYAML is required to read Gold selection manifests") from exc
+    with path.open("r", encoding="utf-8") as handle:
+        value = yaml.safe_load(handle) or {}
+    if not isinstance(value, dict):
+        raise ValueError("Gold selection manifest root must be an object")
+    return value
+
+
 def _role_configuration(config: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
     roles: Dict[str, Dict[str, Any]] = {}
     for role, raw in dict(config.get("sources") or {}).items():
@@ -174,50 +214,159 @@ def _role_configuration(config: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 def _gold_source_selection(
     config: Mapping[str, Any], sources: Sequence[Mapping[str, Any]]
-) -> Tuple[Dict[str, bool], List[Dict[str, Any]]]:
+) -> Tuple[Dict[str, bool], List[Dict[str, Any]], Dict[str, Any]]:
     raw = config.get("source_selection") or {}
     if not isinstance(raw, Mapping):
         raise ValueError("source_selection must be an object")
-    unknown_options = sorted(set(raw) - {"default_gold_enabled", "gold"})
+    unknown_options = sorted(set(raw) - {"manifest"})
     if unknown_options:
         raise ValueError(
             "Unknown source_selection options: {}".format(unknown_options)
         )
-    default = raw.get("default_gold_enabled", True)
-    if not isinstance(default, bool):
-        raise ValueError("source_selection.default_gold_enabled must be boolean")
-    overrides = raw.get("gold") or {}
-    if not isinstance(overrides, Mapping):
-        raise ValueError("source_selection.gold must be an object of source_id: boolean")
-    discovered = {str(source["source_id"]) for source in sources}
-    unknown_ids = sorted(set(str(key) for key in overrides) - discovered)
-    if unknown_ids:
+    manifest_value = str(raw.get("manifest") or "")
+    if not manifest_value:
+        raise ValueError("source_selection.manifest is required")
+    manifest_path = resolve_path(manifest_value, config)
+    manifest = _read_gold_selection(manifest_path)
+    if str(manifest.get("schema_version")) != GOLD_SELECTION_SCHEMA:
+        raise ValueError("Unsupported Gold selection manifest schema")
+    if str(manifest.get("finetune_id") or "") != str(config.get("finetune_id") or ""):
+        raise ValueError("Gold selection finetune_id does not match configuration")
+    gold_root = resolve_path(str(config.get("gold_source_descriptor_root") or ""), config)
+    if Path(str(manifest.get("gold_repository_root") or "")).resolve() != gold_root.resolve():
+        raise ValueError("Gold selection repository root does not match configuration")
+    decisions = manifest.get("sources") or {}
+    if not isinstance(decisions, Mapping):
+        raise ValueError("Gold selection sources must be an object")
+    discovered = {str(source["source_id"]): source for source in sources}
+    if set(str(key) for key in decisions) != set(discovered):
+        missing = sorted(set(discovered) - set(str(key) for key in decisions))
+        unknown = sorted(set(str(key) for key in decisions) - set(discovered))
         raise ValueError(
-            "source_selection.gold references undiscovered Gold source IDs: {}".format(
-                unknown_ids
+            "Gold selection must decide every published batch: missing={} unknown={}".format(
+                missing, unknown
             )
         )
-    for source_id, enabled in overrides.items():
-        if not isinstance(enabled, bool):
+    selected: Dict[str, bool] = {}
+    for source_id, source in discovered.items():
+        decision = decisions[source_id]
+        if not isinstance(decision, Mapping):
+            raise ValueError("Gold selection {} must be an object".format(source_id))
+        unknown_fields = sorted(
+            set(decision) - {"enabled", "source_kind", "domain", "descriptor", "descriptor_sha256"}
+        )
+        if unknown_fields:
             raise ValueError(
-                "source_selection.gold.{} must be boolean".format(source_id)
+                "Gold selection {} has unknown fields {}".format(source_id, unknown_fields)
             )
-    selected = {
-        source_id: bool(overrides.get(source_id, default)) for source_id in discovered
-    }
+        if not isinstance(decision.get("enabled"), bool):
+            raise ValueError("Gold selection {}.enabled must be boolean".format(source_id))
+        expected_entry = _gold_repository_entry(
+            gold_root, Path(str(source["path"])), source
+        )
+        expected = {
+            "source_kind": str(source["source_kind"]),
+            "domain": expected_entry["domain"],
+            "descriptor": expected_entry["descriptor"],
+            "descriptor_sha256": str(source["sha256"]),
+        }
+        observed = {key: str(decision.get(key) or "") for key in expected}
+        if observed != expected:
+            raise ValueError(
+                "Gold selection provenance mismatch for {}".format(source_id)
+            )
+        selected[source_id] = bool(decision["enabled"])
     report = [
         {
             "source_id": str(source["source_id"]),
             "dataset_id": str(source["dataset_id"]),
             "source_kind": str(source["source_kind"]),
             "enabled_by_source": selected[str(source["source_id"])],
-            "selection_origin": (
-                "explicit" if str(source["source_id"]) in overrides else "default"
-            ),
+            "selection_origin": "explicit_manifest",
         }
         for source in sorted(sources, key=lambda value: str(value["source_id"]))
     ]
-    return selected, report
+    return selected, report, {
+        "path": str(manifest_path.resolve()),
+        "sha256": sha256_file(manifest_path),
+        "finetune_id": str(manifest["finetune_id"]),
+        "source_count": len(decisions),
+    }
+
+
+def prepare_gold_selection_from_config(
+    config: Union[Mapping[str, Any], str, Path],
+    enabled_source_ids: Sequence[str],
+) -> Dict[str, Any]:
+    """Freeze one explicit per-batch Gold decision manifest for a finetune run."""
+
+    cfg = _config_mapping(config)
+    if str(cfg.get("task")) != "curate_finetune":
+        raise ValueError("Finetune curation config task must be curate_finetune")
+    gold_root = resolve_path(str(cfg.get("gold_source_descriptor_root") or ""), cfg)
+    selection_cfg = cfg.get("source_selection") or {}
+    manifest_path = resolve_path(str(selection_cfg.get("manifest") or ""), cfg)
+    if manifest_path.exists():
+        raise FileExistsError(
+            "Gold selection is immutable and already exists: {}".format(manifest_path)
+        )
+    descriptor_paths = _discover_descriptors(gold_root)
+    if not descriptor_paths:
+        raise ValueError("Gold repository has no published source descriptors")
+    sources = [validate_finetune_source(path) for path in descriptor_paths]
+    if any(str(source["source_kind"]) not in GOLD_KINDS for source in sources):
+        raise ValueError("Gold repository contains a non-Gold source")
+    validate_source_set(sources)
+    discovered = {str(source["source_id"]): source for source in sources}
+    requested = {str(value).strip() for value in enabled_source_ids if str(value).strip()}
+    unknown = sorted(requested - set(discovered))
+    if unknown:
+        raise ValueError("Cannot enable undiscovered Gold source IDs: {}".format(unknown))
+    decisions: Dict[str, Any] = {}
+    for source_id, source in sorted(discovered.items()):
+        entry = _gold_repository_entry(gold_root, Path(str(source["path"])), source)
+        decisions[source_id] = {
+            "enabled": source_id in requested,
+            "source_kind": str(source["source_kind"]),
+            "domain": entry["domain"],
+            "descriptor": entry["descriptor"],
+            "descriptor_sha256": str(source["sha256"]),
+        }
+    manifest = {
+        "schema_version": GOLD_SELECTION_SCHEMA,
+        "finetune_id": str(cfg.get("finetune_id") or ""),
+        "gold_repository_root": str(gold_root.resolve()),
+        "sources": decisions,
+    }
+    if not manifest["finetune_id"]:
+        raise ValueError("finetune_id is required")
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError("PyYAML is required to write Gold selection manifests") from exc
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=".gold_selection.", suffix=".yaml", dir=str(manifest_path.parent)
+    )
+    os.close(handle)
+    temporary = Path(temporary_name)
+    try:
+        temporary.write_text(
+            yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        os.replace(str(temporary), str(manifest_path))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return {
+        "status": "ok",
+        "path": str(manifest_path.resolve()),
+        "sha256": sha256_file(manifest_path),
+        "source_count": len(decisions),
+        "enabled_source_ids": sorted(requested),
+        "disabled_source_ids": sorted(set(discovered) - requested),
+    }
 
 
 def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> Dict[str, Any]:
@@ -240,13 +389,16 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
     for path in gold_paths:
         source = validate_finetune_source(path)
         if source["source_kind"] not in GOLD_KINDS:
-            raise ValueError("Non-Gold source found under sources/gold: {}".format(path))
+            raise ValueError("Non-Gold source found in Gold repository: {}".format(path))
         role = kind_to_role.get(str(source["source_kind"]))
         if role is None:
             raise ValueError("Discovered Gold kind has no configured role: {}".format(source["source_kind"]))
+        source.update(_gold_repository_entry(gold_root, path, source))
         source["role"] = role
         gold_all.append(source)
-    source_enabled, source_selection = _gold_source_selection(config, gold_all)
+    source_enabled, source_selection, selection_manifest = _gold_source_selection(
+        config, gold_all
+    )
     selection_by_id = {row["source_id"]: row for row in source_selection}
     for source in gold_all:
         role_enabled = roles[str(source["role"])].get("enabled", "auto") is not False
@@ -319,6 +471,7 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
         "roles": roles,
         "role_status": role_status,
         "source_selection": source_selection,
+        "source_selection_manifest": selection_manifest,
     }
 
 
@@ -653,8 +806,12 @@ def check_finetune_sources_from_config(config: Union[Mapping[str, Any], str, Pat
     aggregate_path = resolve_path(str((cfg.get("gold_aggregate") or {}).get("descriptor") or ""), cfg)
     if not loaded["gold"]:
         raise ValueError("Gold aggregate cannot be validated without Gold source descriptors")
-    finetune_root = resolve_path(str(cfg.get("gold_source_descriptor_root")), cfg).parent.parent
-    aggregate = validate_gold_aggregate(aggregate_path, finetune_root, loaded["gold_all"])
+    gold_repository_root = resolve_path(
+        str(cfg.get("gold_source_descriptor_root")), cfg
+    )
+    aggregate = validate_gold_aggregate(
+        aggregate_path, gold_repository_root, loaded["gold_all"]
+    )
     dataset_sources = _source_by_dataset(loaded["gold"])
     all_dataset_sources = _source_by_dataset(loaded["gold_all"])
     active_dataset_ids = set(dataset_sources)
@@ -743,6 +900,7 @@ def check_finetune_sources_from_config(config: Union[Mapping[str, Any], str, Pat
         "reports": {
             "source_roles": loaded["role_status"],
             "source_selection": loaded["source_selection"],
+            "source_selection_manifest": loaded["source_selection_manifest"],
             "source_weights": weight_report,
             "leakage": leakage_report,
             "smoke": smoke_report,
@@ -854,6 +1012,7 @@ def curate_finetune_from_config(
             },
             "source_roles": checked["reports"]["source_roles"],
             "source_selection": checked["reports"]["source_selection"],
+            "source_selection_manifest": checked["reports"]["source_selection_manifest"],
             "source_weights": checked["reports"]["source_weights"],
             "leakage": checked["reports"]["leakage"],
             "smoke": checked["reports"]["smoke"],
@@ -884,6 +1043,7 @@ def curate_finetune_from_config(
             "config_path": str(config_path) if config_path else None,
             "config_sha256": sha256_file(config_path) if config_path and Path(str(config_path)).is_file() else None,
             "gold_aggregate": {"path": checked["aggregate"]["path"], "sha256": checked["aggregate"]["sha256"]},
+            "gold_selection": checked["reports"]["source_selection_manifest"],
             "source_descriptors": source_catalog,
             "allowed_crop_roots": checked["allowed_crop_roots"],
             "artifacts": artifacts,

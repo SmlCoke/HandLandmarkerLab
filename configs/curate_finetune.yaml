@@ -1,8 +1,9 @@
 schema_version: 1
 task: curate_finetune
 profile: "${FINETUNE_PROFILE:-data_only}"
+finetune_id: "${HAND_FINETUNE_ID:-v3-finetune-r1}"
 
-gold_source_descriptor_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}/sources/gold"
+gold_source_descriptor_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}/GoldSource"
 replay_source_descriptor_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}/sources/replay"
 
 gold_aggregate:
@@ -12,13 +13,10 @@ allowed_crop_roots:
   - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}"
   - "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
 
-# Gold sources are authenticated even when disabled, but disabled rows do not
-# enter training, weighting or smoke. Unlisted Gold sources follow the default.
-# Replay is deliberately absent from this map because it is mandatory.
+# Every published Gold batch must have one explicit true/false decision in this
+# finetune run's generated selection manifest. Replay remains mandatory.
 source_selection:
-  default_gold_enabled: true
-  gold:
-    dragon_gold_0716_v1: false
+  manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}/gold_selection.yaml"
 
 sources:
   dragon_gold:

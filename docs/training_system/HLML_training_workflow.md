@@ -31,7 +31,16 @@ HAND_PRETRAIN_ID=<pretrain-id>
 HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
-`DatesetFab` 是可再生数据仓库，包含来源级 manifest、伪标签和 ROI。HLMF/HLML 的聚合标签把 `crop_path` 直接指向该仓库；不再建立 `HLML-3.0/train_sources` 副本。
+`DatesetFab` 是与训练版本无关的可再生数据仓库：
+
+```text
+DatesetFab/
+├── PretrainSource/   # 原图、00～03 和 pseudo 标签
+├── GoldSource/       # domain/source-id/{source,task,published}
+└── eval_sources/     # 固定 Val/Test 真源
+```
+
+HLMF/HLML 的聚合标签把 `crop_path` 直接指向该仓库；不再建立 `HLML-3.0/train_sources` 或逐版本 Gold 副本。
 
 允许物化图片的情况只有：
 
@@ -182,13 +191,13 @@ Gold 可以来自多个不可变 source：每批外部 Dragon Gold、新录制 G
 数据流如下：
 
 ```text
-HLMF sources/gold/* ──finalize──> hmlf_gold_merged ─┐
-                                                     ├─ finetune-curate ─> 冻结训练 JSONL
-pretrain registry ──prepare-finetune-sources──> replay┘
+DatesetFab/GoldSource/*/*/published ──HLMF finalize──> hmlf_gold_merged ─┐
+                                                                        ├─ 显式批次选择 ─> finetune-curate
+pretrain registry ──prepare-finetune-sources──> mandatory replay ───────┘
                               └───────────────> disagreement score pool
 ```
 
-### 8.3 在 HLMF 建立或继承 Gold
+### 8.3 在长期 GoldSource 建立 Gold
 
 ```bash
 cd /root/HandLandmarksFab
@@ -197,24 +206,14 @@ conda activate anfab
 # 每批 Dragon 单独运行一次，批次 ID 不得复用
 make prepare_dragon_gold \
   HAND_FINETUNE_ID=<finetune-data-id> \
-  DRAGON_SOURCE_ROOT=$HAND_DATASET_ROOT/<dragon-batch-root> \
+  DRAGON_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/dragon/<dragon-batch-id>/source \
   DRAGON_BATCH_ID=<unique-dragon-batch-id>
 
 # 所有 Gold source 发布/导入后重新聚合
 make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
-`sources/gold/<source-id>/finetune_source.json` 是单个来源的认证描述符；`hmlf_gold_merged/qc/finalize_finetune_report.json` 是所有 Gold 的聚合报告。只有聚合报告通过，HLML 才会接受数据。
-
-需要从同一数据契约的上一 finetune 快照继承认证 Gold 时：
-
-```bash
-make seed_finetune_gold \
-  BASE_FINETUNE_ID=<old-data-id> \
-  HAND_FINETUNE_ID=<new-data-id>
-```
-
-目标存在即失败；程序硬链接并验证全部历史 source。随后只能用新的 source/round ID 增加 Gold，不删除旧 disagreement、new-recorded 或 reviewed Gold。
+`DatesetFab/GoldSource/<domain>/<source-id>/published/finetune_source.json` 是单个批次的认证描述符。GoldSource 与训练版本无关；新 finetune 不再 seed 或复制旧 Gold，而是直接发现所有 published 子批次。HLMF 的 `hmlf_gold_merged` 是本次训练版本可重建的全仓认证聚合。
 
 ### 8.4 在 HLML 建立 replay 和 disagreement score pool
 
@@ -226,7 +225,7 @@ make prepare-finetune-sources HAND_FINETUNE_ID=<finetune-data-id>
 
 程序自动完成：
 
-1. 认证 HLMF 的 pretrain source registry、curated multitask 标签和 checkpoint；
+1. 认证 HLMF 的 pretrain source registry、curated multitask 标签和 checkpoint，并读取 GoldSource 中所有历史/pending Gold 身份用于排重；
 2. 从广泛来源中确定性选择 replay，保存其来源、标签和 SHA；
 3. 用当前 student checkpoint 对可选 positive 推理；
 4. 把 student 预测与 MediaPipe teacher 伪标签比较，生成逐 ROI disagreement 分数池。
@@ -250,7 +249,7 @@ finetune/<id>/mining/prepare_finetune_sources_report.json
 
 ### 9.2 先制作新录制任务
 
-1. 人工录制当前模型薄弱的姿态，并在 HLMF 跑完 00～03；
+1. 在 `GoldSource/new_recorded_gold/<source-id>/source/` 放入无损图片流，并在该目录跑完 HLMF 00～03；
 2. HLMF 使用 `native_existing` 和本轮计划给出的显式限额确定性抽样；
 3. 任务生成后，查看 `task_descriptor.json` 得到实际任务数；
 4. 不要人工从原始目录随意挑图，也不要在任务冻结后改限额。
@@ -262,7 +261,7 @@ make export_finetune_gold \
   HAND_FINETUNE_ID=<finetune-data-id> \
   FINETUNE_SOURCE_ID=new_recorded_gold_<round-id> \
   FINETUNE_SOURCE_MODE=native_existing \
-  FINETUNE_RAW_SOURCE_ROOT=$HAND_DATASET_ROOT/<source-id> \
+  FINETUNE_RAW_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/new_recorded_gold/new_recorded_gold_<round-id>/source \
   FINETUNE_MAX_ITEMS=<new-recorded-limit>
 ```
 
@@ -275,12 +274,12 @@ make prepare-finetune-round \
   HAND_FINETUNE_ID=<finetune-data-id> \
   FINETUNE_ROUND_ID=<round-id> \
   FINETUNE_GOLD_BUDGET=<round-budget> \
-  NEW_RECORDED_SOURCE_ID=new_recorded_gold_<round-id>
+  NEW_RECORDED_SOURCE_IDS=new_recorded_gold_<round-id>[,new_recorded_gold_<other-id>]
 ```
 
 `FINETUNE_GOLD_BUDGET` 是本轮两个 CVAT task 的合计上限，必须由执行计划显式指定。程序读取：
 
-- 所有已发布 Gold source；
+- GoldSource 内所有已发布 Gold 标签和所有 pending task manifest；
 - 所有历史 selection request；
 - 当前/历史 CVAT task manifest；
 - Val/Test labels 与 ignored sidecar。
@@ -309,7 +308,7 @@ make export_finetune_gold \
   FINETUNE_SOURCE_MODE=selection_subset
 ```
 
-HLMF 为 new-recorded 和 disagreement 分别生成 `cvat/<source-id>/qc/cvat_job_plan.json`。人工按计划在 CVAT 完成完整 21 点和 handedness，或明确标 `no_hand` / `ignore_for_training`；返回的完整 XML 放入各自 `cvat/<source-id>/reviewed.xml`。
+HLMF 为每个批次生成 `GoldSource/<domain>/<source-id>/task/qc/cvat_job_plan.json`。人工按计划在 CVAT 完成完整 21 点和 handedness，或明确标 `no_hand` / `ignore_for_training`；返回的完整 XML 放入同一批次的 `task/reviewed.xml`。
 
 ```bash
 make import_finetune_gold HAND_FINETUNE_ID=<finetune-data-id>
@@ -322,22 +321,22 @@ make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 
 ### 10.1 按 Gold source_id 决定是否参与训练
 
-HLMF 的 `hmlf_gold_merged` 始终保留并认证全部 Gold；HLML 在 `configs/curate_finetune.yaml` 中单独决定哪些 source 进入当前训练快照：
+HLMF 的 `hmlf_gold_merged` 始终认证 GoldSource 中全部 published Gold。每次 finetune 必须先让 HLML 生成一份逐批选择清单：
 
-```yaml
-source_selection:
-  default_gold_enabled: true
-  gold:
-    <source-id-a>: false
-    <source-id-b>: true
+```bash
+make prepare-finetune-gold-selection \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  GOLD_ENABLE_SOURCE_IDS=<source-id-a>,<source-id-b>
 ```
 
-- 未列出的 Gold 使用 `default_gold_enabled`；
-- 列出的键必须是实际发现的 `source_id`，值必须是 YAML 布尔值 `true/false`；
+- 输出 `finetune/<id>/gold_selection.yaml`，列出每个领域下的每个 published 子批次；
+- 命令列出的批次为 `enabled: true`，其余批次明确写成 `false`，没有隐式默认；
+- 每项同时锁定 source kind、领域、descriptor 相对路径和 descriptor SHA256；
+- GoldSource 后来新增、遗漏、改名或 descriptor 变化时，门控会失败，不会静默加入训练；
 - disabled source 仍验证 descriptor、标签和聚合 SHA，但其行不进入训练、Gold 权重或 smoke；
-- `pretrain_replay` 不允许写入该表。代码强制 replay role 保持 `enabled: true`、`required: true`，且工作区中必须恰好有一个 replay source。
+- replay 不出现在选择清单中，代码强制它保持 `enabled: true`、`required: true`，且工作区中必须恰好有一个 replay source。
 
-先冻结 source 开关，再运行 curate。输出报告的 `source_selection` 和 `disabled_source_rows` 会说明每个来源的最终决定。已发布的 curation 快照不会因后来修改配置而自动变化；需要改变来源组合时使用新的 `HAND_FINETUNE_ID`。
+选择清单存在即拒绝重建。只有在所有计划 Gold 已发布、HLMF 聚合完成后生成；需要改变来源组合时使用新的 `HAND_FINETUNE_ID`。输出报告的 `source_selection_manifest`、`source_selection` 和 `disabled_source_rows` 会说明每个批次的最终决定。
 
 ### 10.2 Curate、检查和可视化
 

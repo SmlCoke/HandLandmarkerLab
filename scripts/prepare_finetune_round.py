@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -16,6 +17,7 @@ if __package__ in {None, ""}:
 from hand_landmarker.config import load_config, resolve_path
 from hand_landmarker.finetune_selection import (
     clean_row,
+    gold_repository_occupied,
     identity_tokens,
     select_teacher_student,
 )
@@ -31,21 +33,16 @@ def _existing_files(paths: Iterable[Path]) -> List[Path]:
 
 def _occupied(workspace: Path, config: Mapping[str, Any], target: Path) -> tuple[Set[str], Dict[str, Any]]:
     inputs = config.get("round_exclusion") or {}
+    gold_repository = resolve_path(str(config.get("gold_repository_root") or ""), config)
+    tokens, repository_report = gold_repository_occupied(gold_repository)
     paths: List[Path] = []
-    gold_root = workspace / "sources" / "gold"
-    if gold_root.is_dir():
-        paths.extend(gold_root.glob("*/03_reviewed/hand_landmarks_reviewed.jsonl"))
     mining = workspace / "mining"
     if mining.is_dir():
         paths.extend(path for path in mining.rglob("selection_request.jsonl") if path != target)
-    cvat_root = workspace / "cvat"
-    if cvat_root.is_dir():
-        paths.extend(cvat_root.glob("*/02_roi_crops/hand_roi_crops_manifest.jsonl"))
     for name in ("validation_labels", "validation_ignored", "test_labels", "test_ignored"):
         value = inputs.get(name)
         if value:
             paths.append(resolve_path(str(value), config))
-    tokens: Set[str] = set()
     records = 0
     reports = []
     for path in _existing_files(paths):
@@ -54,7 +51,12 @@ def _occupied(workspace: Path, config: Mapping[str, Any], target: Path) -> tuple
         for row in rows:
             tokens.update(identity_tokens(row))
         reports.append({"path": str(path), "sha256": sha256_file(path), "rows": len(rows)})
-    return tokens, {"files": reports, "records": records, "identity_token_count": len(tokens)}
+    return tokens, {
+        "gold_repository": repository_report,
+        "other_files": reports,
+        "other_records": records,
+        "identity_token_count": len(tokens),
+    }
 
 
 def _validate_gold_budget(value: int) -> int:
@@ -64,27 +66,43 @@ def _validate_gold_budget(value: int) -> int:
     return budget
 
 
-def _new_recorded_count(workspace: Path, source_id: str, budget: int) -> tuple[int, Dict[str, Any]]:
-    if not source_id:
-        return 0, {"status": "not_configured", "count": 0}
-    descriptor = workspace / "cvat" / source_id / "task_descriptor.json"
-    if not descriptor.is_file():
-        return 0, {"status": "task_missing", "source_id": source_id, "count": 0}
-    value = json.loads(descriptor.read_text(encoding="utf-8"))
-    manifest = workspace / "cvat" / source_id / str(value["artifacts"]["manifest"]["path"])
-    rows = read_jsonl(manifest)
-    if len(rows) > budget:
+def _new_recorded_counts(
+    config: Mapping[str, Any], source_ids: Iterable[str], budget: int
+) -> tuple[int, Dict[str, Any]]:
+    repository = resolve_path(str(config.get("gold_repository_root") or ""), config)
+    ids = [str(value) for value in source_ids if str(value)]
+    if len(ids) != len(set(ids)):
+        raise ValueError("new-recorded source IDs must be unique")
+    reports = []
+    total = 0
+    for source_id in ids:
+        descriptor = repository / "new_recorded_gold" / source_id / "task" / "task_descriptor.json"
+        if not descriptor.is_file():
+            raise FileNotFoundError("new-recorded task is missing: {}".format(descriptor))
+        value = json.loads(descriptor.read_text(encoding="utf-8"))
+        if str(value.get("source_id") or "") != source_id or str(value.get("source_kind") or "") != "new_recorded_gold":
+            raise ValueError("new-recorded task descriptor identity/kind mismatch: {}".format(descriptor))
+        manifest = descriptor.parent / str(value["artifacts"]["manifest"]["path"])
+        rows = read_jsonl(manifest)
+        total += len(rows)
+        reports.append(
+            {
+                "source_id": source_id,
+                "count": len(rows),
+                "descriptor_sha256": sha256_file(descriptor),
+                "manifest_sha256": sha256_file(manifest),
+            }
+        )
+    if total > budget:
         raise ValueError(
-            "new-recorded task exceeds the frozen Gold budget {}: {}".format(
-                budget, len(rows)
+            "combined new-recorded tasks exceed frozen Gold budget {}: {}".format(
+                budget, total
             )
         )
-    return len(rows), {
-        "status": "ok",
-        "source_id": source_id,
-        "count": len(rows),
-        "descriptor_sha256": sha256_file(descriptor),
-        "manifest_sha256": sha256_file(manifest),
+    return total, {
+        "status": "ok" if reports else "not_configured",
+        "count": total,
+        "sources": reports,
     }
 
 
@@ -93,7 +111,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--round-id", required=True)
     parser.add_argument("--gold-budget", required=True, type=int)
-    parser.add_argument("--new-recorded-source-id", default="")
+    parser.add_argument("--new-recorded-source-ids", default="")
     args = parser.parse_args()
     gold_budget = _validate_gold_budget(args.gold_budget)
     if not args.round_id or Path(args.round_id).name != args.round_id:
@@ -106,8 +124,11 @@ def main() -> None:
     if output.exists():
         raise FileExistsError("finetune round is immutable and already exists: {}".format(output))
 
-    new_count, new_report = _new_recorded_count(
-        workspace, args.new_recorded_source_id, gold_budget
+    new_source_ids = [
+        value for value in re.split(r"[\s,]+", args.new_recorded_source_ids) if value
+    ]
+    new_count, new_report = _new_recorded_counts(
+        config, new_source_ids, gold_budget
     )
     disagreement_budget = gold_budget - new_count
     score_path = workspace / "mining" / "teacher_student" / "disagreement_scores.jsonl"

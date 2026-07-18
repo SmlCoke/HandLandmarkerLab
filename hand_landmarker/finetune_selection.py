@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 from .contracts import HAND_CONNECTIONS, STRUCTURAL_BONES, ordered_landmarks
-from .io_utils import sha256_file
+from .io_utils import read_jsonl, sha256_file
 
 
 SELECTION_SCHEMA = "finetune_selection_v1"
@@ -71,6 +71,46 @@ def identity_tokens(row: Mapping[str, Any]) -> Set[str]:
 
 def overlaps_identity(row: Mapping[str, Any], occupied_tokens: Set[str]) -> bool:
     return bool(identity_tokens(row) & occupied_tokens)
+
+
+def gold_repository_occupied(root: Path) -> Tuple[Set[str], Dict[str, Any]]:
+    """Collect identities from every published or pending canonical Gold batch."""
+
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Gold repository is missing or a symlink: {}".format(root))
+    patterns = (
+        "*/*/published/03_reviewed/hand_landmarks_reviewed.jsonl",
+        "*/*/task/02_roi_crops/hand_roi_crops_manifest.jsonl",
+    )
+    paths = sorted({path for pattern in patterns for path in root.glob(pattern)}, key=str)
+    tokens: Set[str] = set()
+    reports: List[Dict[str, Any]] = []
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Gold repository identity file is invalid: {}".format(path))
+        relative = path.relative_to(root)
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("Gold repository identity path traverses a symlink: {}".format(current))
+        rows = read_jsonl(path)
+        for row in rows:
+            tokens.update(identity_tokens(row))
+        reports.append(
+            {
+                "path": str(path.resolve()),
+                "sha256": sha256_file(path),
+                "rows": len(rows),
+            }
+        )
+    return tokens, {
+        "repository": str(root.resolve()),
+        "files": reports,
+        "records": sum(int(item["rows"]) for item in reports),
+        "identity_token_count": len(tokens),
+    }
 
 
 def largest_remainder(total: int, weights: Mapping[str, float]) -> Dict[str, int]:

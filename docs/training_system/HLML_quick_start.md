@@ -66,7 +66,7 @@ conda activate anfab
 # 每一批 Dragon 使用不同批次 ID
 make prepare_dragon_gold \
   HAND_FINETUNE_ID=<finetune-data-id> \
-  DRAGON_SOURCE_ROOT=$HAND_DATASET_ROOT/<dragon-batch-root> \
+  DRAGON_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/dragon/<dragon-batch-id>/source \
   DRAGON_BATCH_ID=<dragon-batch-id>
 
 make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
@@ -86,7 +86,7 @@ make export_finetune_gold \
   HAND_FINETUNE_ID=<finetune-data-id> \
   FINETUNE_SOURCE_ID=new_recorded_gold_<round-id> \
   FINETUNE_SOURCE_MODE=native_existing \
-  FINETUNE_RAW_SOURCE_ROOT=$HAND_DATASET_ROOT/<source-id> \
+  FINETUNE_RAW_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/new_recorded_gold/new_recorded_gold_<round-id>/source \
   FINETUNE_MAX_ITEMS=<new-recorded-limit>
 ```
 
@@ -98,7 +98,7 @@ make prepare-finetune-round \
   HAND_FINETUNE_ID=<finetune-data-id> \
   FINETUNE_ROUND_ID=<round-id> \
   FINETUNE_GOLD_BUDGET=<round-budget> \
-  NEW_RECORDED_SOURCE_ID=new_recorded_gold_<round-id>
+  NEW_RECORDED_SOURCE_IDS=new_recorded_gold_<round-id>[,new_recorded_gold_<other-id>]
 ```
 
 HLMF 导出、人工 CVAT、导入并聚合：
@@ -110,18 +110,22 @@ make export_finetune_gold \
   FINETUNE_SOURCE_ID=disagreement_gold_<round-id> \
   FINETUNE_SOURCE_MODE=selection_subset
 
-# reviewed.xml 放入各 cvat/<source-id>/ 后
+# reviewed.xml 放入 GoldSource/<domain>/<source-id>/task/ 后
 make import_finetune_gold HAND_FINETUNE_ID=<finetune-data-id>
 make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
 ## 6. Finetune 候选
 
-先在 `configs/curate_finetune.yaml` 的 `source_selection.gold` 中为需要显式控制的 Gold `source_id` 设置 `true/false`。Replay 没有开关且必须存在。
+先为 GoldSource 中每个 published 子批次冻结显式决定。列出的 ID 启用，其余逐项写为禁用；replay 没有开关且必须存在：
 
 ```bash
 cd /root/HandLandmarkerLab
 conda activate hand-landmarker-tf29
+
+make prepare-finetune-gold-selection \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  GOLD_ENABLE_SOURCE_IDS=<id-a>,<id-b>,<id-c>
 
 make finetune-curate HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_PROFILE=<profile>
 make check-finetune-data HAND_FINETUNE_ID=<finetune-data-id>

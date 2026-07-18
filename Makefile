@@ -15,7 +15,8 @@ FINETUNE_EXPERIMENT_ID ?= $(HAND_FINETUNE_ID)
 FINETUNE_PROFILE ?= data_only
 FINETUNE_ROUND_ID ?= r01
 FINETUNE_GOLD_BUDGET ?=
-NEW_RECORDED_SOURCE_ID ?=
+NEW_RECORDED_SOURCE_IDS ?=
+GOLD_ENABLE_SOURCE_IDS ?=
 BASELINE_FINETUNE_ID ?= v3-finetune-r1
 CANDIDATE_FINETUNE_ID ?= $(FINETUNE_EXPERIMENT_ID)
 ANALYSIS_OVERWRITE ?= 0
@@ -60,7 +61,7 @@ TEST_ARGS ?=
 	inspect-geometry inspect-geometry-smoke inspect-multitask \
 	pretrain-geometry-smoke check-geometry-smoke pretrain-geometry \
 	check-multitask-data pretrain-multitask \
-	prepare-finetune-sources prepare-finetune-round check-finetune-sources finetune-curate \
+	prepare-finetune-sources prepare-finetune-round prepare-finetune-gold-selection check-finetune-sources finetune-curate \
 	check-finetune-data finetune-smoke check-finetune-smoke \
 	inspect-finetune finetune-train \
 	eval-val-geometry eval-test-geometry eval-val-multitask eval-test-multitask \
@@ -87,6 +88,7 @@ help:
 	@echo   make pretrain-multitask          Train multitask from geometry best
 	@echo   make prepare-finetune-sources    Select hard/disagreement Gold requests and replay
 	@echo   make prepare-finetune-round      Freeze one cumulative-disjoint Gold selection round
+	@echo   make prepare-finetune-gold-selection GOLD_ENABLE_SOURCE_IDS=id1,id2
 	@echo   make analyze-finetune-errors     Compare Val/infer failures and render at most 40 overlays
 	@echo   make compare-finetune-runs       Produce a paired candidate-versus-baseline report
 	@echo   make check-finetune-sources      Authenticate HLMF Gold sources and aggregate
@@ -173,7 +175,10 @@ prepare-finetune-sources:
 
 prepare-finetune-round:
 	$(if $(strip $(FINETUNE_GOLD_BUDGET)),,$(error FINETUNE_GOLD_BUDGET is required))
-	$(PYTHON) -B scripts/prepare_finetune_round.py --config "$(PREPARE_FINETUNE_CONFIG)" --round-id "$(FINETUNE_ROUND_ID)" --gold-budget "$(FINETUNE_GOLD_BUDGET)" $(if $(strip $(NEW_RECORDED_SOURCE_ID)),--new-recorded-source-id "$(NEW_RECORDED_SOURCE_ID)",)
+	$(PYTHON) -B scripts/prepare_finetune_round.py --config "$(PREPARE_FINETUNE_CONFIG)" --round-id "$(FINETUNE_ROUND_ID)" --gold-budget "$(FINETUNE_GOLD_BUDGET)" --new-recorded-source-ids "$(NEW_RECORDED_SOURCE_IDS)"
+
+prepare-finetune-gold-selection:
+	$(PYTHON) -B scripts/prepare_gold_selection.py --config "$(FINETUNE_CURATE_CONFIG)" --enable-source-ids "$(GOLD_ENABLE_SOURCE_IDS)"
 
 check-finetune-sources:
 	$(PYTHON) -B scripts/check_finetune_sources.py --config "$(FINETUNE_CURATE_CONFIG)" $(FINETUNE_SOURCE_GATE_ARGS)

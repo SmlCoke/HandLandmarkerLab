@@ -44,7 +44,8 @@ class FinetuneSourceCoreTest(unittest.TestCase):
     def test_gold_aggregate_rejects_overlapping_semantic_partitions(self):
         with tempfile.TemporaryDirectory() as directory:
             finetune = Path(directory) / "finetune-id"
-            source_descriptor = finetune / "sources" / "gold" / "s" / "finetune_source.json"
+            gold = Path(directory) / "GoldSource"
+            source_descriptor = gold / "dragon" / "s" / "published" / "finetune_source.json"
             source_descriptor.parent.mkdir(parents=True)
             source_descriptor.write_text("{}\n", encoding="utf-8")
             merged = finetune / "hmlf_gold_merged"
@@ -71,10 +72,11 @@ class FinetuneSourceCoreTest(unittest.TestCase):
                 {
                     "schema_version": "hmlf_gold_aggregate_v1",
                     "finetune_id": "finetune-id",
+                    "gold_repository_root": str(gold.resolve()),
                     "source_descriptors": [
                         {
                             "source_id": "s",
-                            "path": source_descriptor.relative_to(finetune).as_posix(),
+                            "path": source_descriptor.relative_to(gold).as_posix(),
                             "sha256": sha256_file(source_descriptor),
                         }
                     ],
@@ -92,7 +94,7 @@ class FinetuneSourceCoreTest(unittest.TestCase):
                 }
             ]
             with self.assertRaisesRegex(ValueError, "overlap"):
-                validate_gold_aggregate(descriptor, finetune, sources)
+                validate_gold_aggregate(descriptor, gold, sources)
 
     def test_hash_manifest_authenticates_physical_file_and_rejects_traversal(self):
         with tempfile.TemporaryDirectory() as directory:

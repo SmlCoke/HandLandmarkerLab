@@ -1,259 +1,175 @@
-# HLML 当前下一步优化计划
+# HLML 当前下一步计划
 
-更新时间：2026-07-18。可用时间约两天，人工最多标 800 个 Hand ROI，可多人分工。本文只记录本轮任务；通用操作见 [完整训练流程](HLML_training_workflow.md)。
+更新时间：2026-07-18。本文只记录当前冲刺安排；通用原理见 [完整训练流程](HLML_training_workflow.md)。
 
-## 1. 当前事实与本轮决策
+## 1. 当前结论
 
-- 数据根：`/root/autodl-tmp/DatesetFab`；工作根：`/root/autodl-tmp/TrainFab/HLML-3.0`。
-- pretrain ID：`v3-pretrain-r1`；finetune 数据 ID：`v3-finetune-r1`。
-- geometry smoke 曾跑满并生成 best checkpoint。此前 `pretrain-geometry` 并未真正开始，而是在它的前置 smoke gate 中因新数据结构兼容错误退出；本次服务器部署会保留旧 smoke 备份，并在新 commit 下重跑 smoke/gate。人工只需启动正式 geometry。
-- HLMF 中现有 Dragon Gold 是 `dragon_gold_0716_v1`：5,191 ROI，5,189 个标签本身可训练、2 ignored；但它来自 H.264 Main Profile、I420/YUV 4:2:0 视频抽帧 JPEG，与最终无损 TIFF 评测域不一致，因此当前 HLML 配置已将该 source 关闭。数据和认证报告继续保留，只是不进入 finetune。
-- 本轮新增人工 Gold 优先 800；若参与人数不足，在任何 disagreement task 生成前统一冻结为 600。800 方案中 new-recorded 最多 300、disagreement 补余量；600 方案中 new-recorded 最多 200、disagreement 补余量。
-- 必做候选：`data_only` 与 `structure`。只有 structure 明确减少塌缩且 Val 不退化时，才做 `structure_roi_aug`。
+1. 正式 geometry 正常训练，等待 `geometry/checkpoints/best.weights.h5`。
+2. `v3-pretrain-r1` 的负样本人工删除复核已经完成。
+3. `new_recorded_gold_r01` 已导出 300 个 TIFF 同域 ROI，人工标注进行中。
+4. HLML-2.0 的 `disagreement_gold` 和 `negative_removed_gold` 都是有效人工 Gold。此前未在 3.0 使用，是因为它们绑在旧训练工作区，而不是质量失效；归档到 GoldSource 后应重新纳入候选。
+5. Dragon Gold 保留但本次禁用：H.264/I420/JPEG 抽帧域与板端无损 TIFF 评测域不一致。
+6. 本轮可以制作多个 `new_recorded_gold_r*`，人工任务合计最多 800 个 ROI。
 
-## 2. 先恢复 geometry 正式训练
+## 2. 程序已经自动化的工作
 
-服务器更新后：
+- HLMF 把 Gold 固定发布为 `DatesetFab/GoldSource/<domain>/<source-id>/{task,published}`。
+- HLMF 聚合会认证 GoldSource 中所有 published 批次并跨来源去重。
+- HLML 生成 replay 和 disagreement score pool 时，会扫描所有历史 published Gold 和 pending task，排除已经标注/待标 ROI。
+- `prepare-finetune-round` 可同时接收多个 new-recorded source ID，先求其任务总数，再用总预算的剩余额度选择 disagreement。
+- HLML 为每次 finetune 生成 `gold_selection.yaml`，要求 GoldSource 中每个 published 子批次都有显式 true/false，并锁定 descriptor SHA256。
+- replay 不在 Gold 开关中，始终强制参与。
 
-```bash
-cd /root/HandLandmarkerLab
-conda activate hand-landmarker-tf29
-git pull --ff-only
-make doctor
-make check-geometry-smoke
-```
+## 3. 人工当前要做什么
 
-部署完成时标准 `smoke/` 已在当前 commit 下重新生成并通过 128 ROI 门控；这里再运行 `check-geometry-smoke` 只是快速复验，不会重新训练。随后人工在 `screen`/`tmux` 中启动：
+### 3.1 完成 r01
 
-```bash
-make pretrain-geometry
-```
+继续完成 `new_recorded_gold_r01` 的完整 21 点、presence 和 handedness 标注。确定无手使用 `no_hand`；无法可靠标注使用 `ignore_for_training`。
 
-观察：
+返回 XML 放到：
 
 ```text
-/root/autodl-tmp/TrainFab/HLML-3.0/hand_landmarker_runs/v3-pretrain-r1/geometry/training_report.json
-.../geometry/history.json
-.../geometry/checkpoints/best.weights.h5
+/root/autodl-tmp/DatesetFab/GoldSource/new_recorded_gold/new_recorded_gold_r01/task/reviewed.xml
 ```
 
-训练完成后：
+由 HLMF 单批导入：
+
+```bash
+make import_finetune_gold FINETUNE_SOURCE_ID=new_recorded_gold_r01
+```
+
+### 3.2 决定是否追加 r02/r03
+
+如果 r01 完成后仍有人工余量，优先录制以下薄弱姿态的新无损 TIFF 图片流：握拳及开合、数字 1、侧向张掌、指间遮挡、手腕旋转、画面边缘、不同距离和左右手。每批使用新的 source ID，并放在：
+
+```text
+DatesetFab/GoldSource/new_recorded_gold/<source-id>/source/images/
+```
+
+每批单独 autolabel、导出、标注和 import。多个批次的任务数之和不得超过团队剩余人工上限；不要为了凑 800 重复相似连续帧。
+
+## 4. Geometry 完成后
+
+只读取 best checkpoint，不改动旧 run 布局：
 
 ```bash
 make eval-val-geometry
 make infer-geometry
-```
-
-查看：
-
-```text
-.../hand_landmarker_runs/v3-pretrain-r1/eval/geometry/val/metrics.json
-.../hand_landmarker_inference/v3-pretrain-r1/geometry/
-```
-
-人工只需确认 loss 正常下降、无 NaN、Val/infer 不再“漫天飞舞”；不要为了追求几张样例提前改训练结构。
-
-## 3. geometry 训练期间并行完成两项人工工作
-
-### 3.1 复核 true negative
-
-候选目录：
-
-```text
-/root/autodl-tmp/TrainFab/HLML-3.0/hand_landmarker_reviews/v3-pretrain-r1/negative_candidates/
-```
-
-完整复制为同级 `negative_reviewed/`，逐图删除所有含手、疑似手、手指、手腕、模糊或无法确认的图片，只保留明确背景。可 7z/zip 往返传输；不编辑、不改名、不移动保留图片。
-
-```bash
-make pretrain-curate-reviewed
-make check-multitask-data
-make inspect-multitask
-```
-
-报告必须证明保留图片 SHA 与候选一致，并存在足够的人工确认 negative；不要绕过门控。
-
-### 3.2 录制 source e
-
-录制 20～40 分钟，分短 session，覆盖握拳、数字 1、侧向张掌、从张到握/从握到张、遮挡或两手靠近、远近变化、画面边缘、左右手、不同参与者/背景/光线。横屏 `1280×720`，避免长时间静止。
-
-原视频与稀疏 TIFF：
-
-```text
-/root/autodl-tmp/DatesetFab/finetune_source_e_r01/raw_videos/
-/root/autodl-tmp/DatesetFab/finetune_source_e_r01/images/
-```
-
-详细抽帧、00～03 和 CVAT 命令见 HLMF 的 `docs/annotating_system/HLMF_next_step_plan.md`。这部分可由未参与 negative 复核的人并行完成。
-
-## 4. Multitask
-
-geometry best 和 true negative 都就绪后：
-
-```bash
-cd /root/HandLandmarkerLab
-conda activate hand-landmarker-tf29
 make check-multitask-data
 make inspect-multitask
 make pretrain-multitask
-```
-
-程序从 geometry best 初始化，同时训练 landmarks、hand_flag 和 handedness，并按 `val_multitask_score` 保存 best。训练完成：
-
-```bash
 make eval-val-multitask
 make infer-multitask
 make export-multitask
 ```
 
-查看：
+人工负责观察握拳、侧向掌、数字 1 的 infer；程序负责指标、checkpoint 和导出门控。
 
-```text
-.../hand_landmarker_runs/v3-pretrain-r1/multitask/training_report.json
-.../hand_landmarker_runs/v3-pretrain-r1/eval/multitask/val/metrics.json
-.../hand_landmarker_inference/v3-pretrain-r1/multitask/
-.../hand_landmarker_exports/v3-pretrain-r1/multitask/
-```
+## 5. 建立 replay 和 disagreement 候选池
 
-人工抽看张掌、握拳、数字 1、侧掌与背景拒绝。multitask 的作用是提供可部署 pretrain 模型和后续 replay；它不替代 Gold finetune。
-
-## 5. 自动建立 replay 与 disagreement 分数池
+Multitask 完成后：
 
 ```bash
 make prepare-finetune-sources \
-  HAND_PRETRAIN_ID=v3-pretrain-r1 \
-  HAND_FINETUNE_ID=v3-finetune-r1
+  HAND_FINETUNE_ID=v3-finetune-r1 \
+  HAND_PRETRAIN_ID=v3-pretrain-r1
 ```
 
-程序自动认证 curated pretrain、geometry checkpoint 和 source registry，生成最多配置量的 replay，并对 positive 计算 student–teacher 分歧。查看：
+查看：
 
 ```text
-.../finetune/v3-finetune-r1/sources/replay/pretrain_replay/finetune_source.json
-.../finetune/v3-finetune-r1/mining/teacher_student/disagreement_scores.jsonl
-.../finetune/v3-finetune-r1/mining/prepare_finetune_sources_report.json
+HLML-3.0/finetune/v3-finetune-r1/sources/replay/pretrain_replay/finetune_source.json
+HLML-3.0/finetune/v3-finetune-r1/mining/teacher_student/disagreement_scores.jsonl
+HLML-3.0/finetune/v3-finetune-r1/mining/prepare_finetune_sources_report.json
 ```
 
-如果这些目录已存在且报告绑定旧 checkpoint，不覆盖；使用新的 `HAND_FINETUNE_ID` 重建。若它们尚不存在，就保持 `v3-finetune-r1`。
+报告中的 `historical_gold_exclusion` 应列出 GoldSource 的 published 标签和 pending task manifest。
 
-## 6. 冻结本轮 600/800 Gold
+## 6. 用多个 new-recorded task 冻结 disagreement
 
-先由 HLMF 导出并冻结 `new_recorded_gold_r01`。其实际数量记录在：
-
-```text
-.../finetune/v3-finetune-r1/cvat/new_recorded_gold_r01/task_descriptor.json
-```
-
-800 方案：
+假设当前已导出 `new_recorded_gold_r01,r02`，总人工预算为 800：
 
 ```bash
 make prepare-finetune-round \
   HAND_FINETUNE_ID=v3-finetune-r1 \
   FINETUNE_ROUND_ID=r01 \
   FINETUNE_GOLD_BUDGET=800 \
-  NEW_RECORDED_SOURCE_ID=new_recorded_gold_r01
+  NEW_RECORDED_SOURCE_IDS=new_recorded_gold_r01,new_recorded_gold_r02
 ```
 
-人手不足时在本命令第一次执行前改用 `FINETUNE_GOLD_BUDGET=600`。同一 `r01` 生成后不可改变预算；需要重选必须换新 round ID。程序会用 disagreement 补足余量并排除 Dragon、历史 Gold/CVAT/request、Val/Test 和像素重复项。
+程序读取每个 task descriptor，计算 new-recorded 合计数，再从 score pool 选择不重复 disagreement 补足剩余额度。若 new-recorded 已达到 800，disagreement 数量为 0；不会超预算。
 
-查看：
+输出：
 
 ```text
-.../finetune/v3-finetune-r1/mining/rounds/r01/disagreement_gold_r01/selection_report.json
-.../finetune/v3-finetune-r1/mining/rounds/r01/disagreement_gold_r01/selection_request.jsonl
+HLML-3.0/finetune/v3-finetune-r1/mining/rounds/r01/disagreement_gold_r01/
 ```
 
-然后 HLMF 导出 `disagreement_gold_r01`。人工对两个 task 分工标注，完整做 21 点、handedness、`no_hand` 或 `ignore_for_training`；HLMF 导入并 `finalize_train_finetune`。人工不用手工合并 JSONL。
+若选中数大于 0，回 HLMF 导出 `disagreement_gold_r01`、人工标注并 import。
 
-## 7. Curate、门控和 smoke
+## 7. HLMF 最终聚合
 
-HLMF 聚合通过后：
-
-```yaml
-# configs/curate_finetune.yaml（当前已配置）
-source_selection:
-  default_gold_enabled: true
-  gold:
-    dragon_gold_0716_v1: false
-```
-
-本轮 active Gold 由 `new_recorded_gold_r01` 和 `disagreement_gold_r01` 构成；Dragon 不参与权重或训练，replay 仍强制参与。确认配置后：
+确认所有本轮 task 均已 published，然后：
 
 ```bash
-cd /root/HandLandmarkerLab
-make finetune-curate HAND_FINETUNE_ID=v3-finetune-r1 FINETUNE_PROFILE=data_only
+cd /root/HandLandmarksFab
+make finalize_train_finetune HAND_FINETUNE_ID=v3-finetune-r1
+```
+
+不得在尚有计划任务未导入时提前冻结最终聚合；输出目录已存在时不要直接覆盖，应先确认它是不是旧契约产物。
+
+## 8. 逐批选择参与本次 finetune 的 Gold
+
+回到 HLML。当前建议启用：
+
+- `disagreement_gold`（历史人工 Gold）；
+- `negative_removed_gold`（历史困难正样本人工 Gold）；
+- 所有本轮完成的 `new_recorded_gold_r*`；
+- 本轮完成的 `disagreement_gold_r01`（如果存在）。
+
+不要启用 `dragon_gold_0716_v1`。命令示例：
+
+```bash
+make prepare-finetune-gold-selection \
+  HAND_FINETUNE_ID=v3-finetune-r1 \
+  GOLD_ENABLE_SOURCE_IDS=disagreement_gold,negative_removed_gold,new_recorded_gold_r01,new_recorded_gold_r02,disagreement_gold_r01
+```
+
+如果某示例批次实际上不存在，就从列表删除。命令会把仓库中其余每个 published 批次明确写成 `enabled: false`。
+
+人工查看：
+
+```text
+HLML-3.0/finetune/v3-finetune-r1/gold_selection.yaml
+```
+
+逐项确认领域、source ID 和 `enabled`。清单存在即不可重新生成；如需另一组合，使用新的 `HAND_FINETUNE_ID`。
+
+## 9. Curate、smoke 和正式 finetune
+
+```bash
+make check-finetune-sources HAND_FINETUNE_ID=v3-finetune-r1
+make finetune-curate HAND_FINETUNE_ID=v3-finetune-r1
 make check-finetune-data HAND_FINETUNE_ID=v3-finetune-r1
 make inspect-finetune HAND_FINETUNE_ID=v3-finetune-r1
+make finetune-smoke HAND_FINETUNE_ID=v3-finetune-r1 FINETUNE_EXPERIMENT_ID=<experiment-id>
+make finetune-train HAND_FINETUNE_ID=v3-finetune-r1 FINETUNE_EXPERIMENT_ID=<experiment-id>
 ```
 
-程序自动让 Gold 覆盖重复 replay、按 role 重平衡并生成冻结标签。检查：
+重点检查 `curation_report.json`：
 
-```text
-.../train_finetune_merged/v3-finetune-r1/qc/curation_report.json
-.../train_finetune_merged/v3-finetune-r1/05_labels/hand_training_labels_finetune.jsonl
-```
+- 每个 published 批次都出现在 `source_selection`；
+- Dragon 为 disabled；
+- 历史 disagreement、negative-removed 与选定 new-recorded 为 enabled；
+- replay 恰好一个且 mandatory；
+- `disabled_source_rows`、Gold/replay 数量和 Val/Test leakage 均符合预期。
 
-在 `curation_report.json` 中确认：
-
-- `source_selection` 对 Dragon 显示 `enabled_for_training=false`、`reason=source_disabled`；
-- `counts.disabled_source_rows` 记录被排除的 Dragon 行数；
-- replay 为 `present_valid`；
-- active Gold 计数只来自本轮两个新 source。
-
-先运行两个 profile 的 smoke；两者都必须通过再正式训练：
+## 10. 评估决策
 
 ```bash
-make finetune-smoke HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1a FINETUNE_PROFILE=data_only
-make check-finetune-smoke HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1a FINETUNE_PROFILE=data_only
-
-make finetune-smoke HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1b FINETUNE_PROFILE=structure
-make check-finetune-smoke HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1b FINETUNE_PROFILE=structure
+make eval-val-finetune FINETUNE_EXPERIMENT_ID=<experiment-id>
+make infer-finetune FINETUNE_EXPERIMENT_ID=<experiment-id>
+make analyze-finetune-errors BASELINE_FINETUNE_ID=<baseline> CANDIDATE_FINETUNE_ID=<experiment-id>
 ```
 
-## 8. 两个正式候选与自动比较
-
-候选 A 只验证数据改进：
-
-```bash
-make finetune-train HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1a FINETUNE_PROFILE=data_only
-make eval-val-finetune FINETUNE_EXPERIMENT_ID=v3-finetune-r1a
-make infer-finetune FINETUNE_EXPERIMENT_ID=v3-finetune-r1a
-```
-
-候选 B 在完全相同数据上增加 Gold-only 骨向量与整体 spread 结构约束：
-
-```bash
-make finetune-train HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1b FINETUNE_PROFILE=structure
-make eval-val-finetune FINETUNE_EXPERIMENT_ID=v3-finetune-r1b
-make infer-finetune FINETUNE_EXPERIMENT_ID=v3-finetune-r1b
-```
-
-```bash
-make analyze-finetune-errors \
-  BASELINE_FINETUNE_ID=v3-finetune-r1a \
-  CANDIDATE_FINETUNE_ID=v3-finetune-r1b
-make compare-finetune-runs \
-  BASELINE_FINETUNE_ID=v3-finetune-r1a \
-  CANDIDATE_FINETUNE_ID=v3-finetune-r1b
-```
-
-程序生成 overall/per-dataset/per-landmark、PCK、presence、handedness、spread、塌缩统计和最多 40 张代表 overlay。人工只查看摘要、overlay 和固定 infer 手势，不制作额外表格。
-
-选择优先级：塌缩明显减少；握拳/数字 1/侧掌改善；Val 误差和 PCK 不明显退化；presence 不恶化。只有 B 达到这些条件且仍对 ROI 偏移敏感，才用新的实验 ID 运行可选 `structure_roi_aug`。
-
-## 9. 冻结 winner
-
-只对 winner 运行：
-
-```bash
-make eval-test-finetune FINETUNE_EXPERIMENT_ID=<winner>
-make export-finetune FINETUNE_EXPERIMENT_ID=<winner>
-make conversion-data-finetune FINETUNE_EXPERIMENT_ID=<winner>
-```
-
-然后完成官方工具链转换和板端固定手势回归。locked Test 不用于反复调参。
+人工只需查看程序选出的代表性 overlays 和固定困难手势。以 Val 像素误差/PCK、infer 漏检与塌缩数共同决策；winner 冻结后才运行 Test、ONNX 导出和板端转换。

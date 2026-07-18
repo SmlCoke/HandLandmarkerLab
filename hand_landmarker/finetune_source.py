@@ -407,25 +407,23 @@ def validate_source_set(sources: Sequence[Mapping[str, Any]]) -> None:
 
 def validate_gold_aggregate(
     descriptor_path: Path,
-    finetune_root: Path,
+    gold_repository_root: Path,
     gold_sources: Sequence[Mapping[str, Any]],
 ) -> Dict[str, Any]:
     """Authenticate the one HLMF Gold aggregate consumed by HLML."""
 
     descriptor_path = Path(descriptor_path)
-    finetune_root = Path(finetune_root).resolve(strict=True)
+    gold_repository_root = Path(gold_repository_root).resolve(strict=True)
     if descriptor_path.is_symlink() or not descriptor_path.is_file():
         raise ValueError("Gold aggregate descriptor is missing or a symlink")
     aggregate_root = descriptor_path.parent.resolve(strict=True)
-    try:
-        aggregate_root.relative_to(finetune_root)
-    except ValueError as exc:
-        raise ValueError("Gold aggregate is outside finetune root") from exc
     descriptor = _read_json(descriptor_path)
     if str(descriptor.get("schema_version")) != AGGREGATE_SCHEMA:
         raise ValueError("Unsupported Gold aggregate schema")
     if not str(descriptor.get("finetune_id") or ""):
         raise ValueError("Gold aggregate requires finetune_id")
+    if Path(str(descriptor.get("gold_repository_root") or "")).resolve() != gold_repository_root:
+        raise ValueError("Gold aggregate repository root does not match configuration")
     artifacts = descriptor.get("artifacts")
     if not isinstance(artifacts, Mapping):
         raise ValueError("Gold aggregate artifacts must be an object")
@@ -478,7 +476,7 @@ def validate_gold_aggregate(
             raise ValueError("Invalid aggregate source descriptor reference")
         if source_id in listed:
             raise ValueError("Gold aggregate contains duplicate source_id: {}".format(source_id))
-        path = (finetune_root / relative)
+        path = gold_repository_root / relative
         if path.is_symlink() or not path.is_file():
             raise ValueError("Aggregate source descriptor is missing or a symlink: {}".format(path))
         digest = str(item.get("sha256") or "")

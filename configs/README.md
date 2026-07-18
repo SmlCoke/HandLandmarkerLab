@@ -9,7 +9,7 @@
 | `train_geometry.yaml` | 完整 pretrain geometry 训练 |
 | `train_multitask.yaml` | 从 geometry best 初始化的 pretrain multitask 训练 |
 | `prepare_finetune_sources.yaml` | 自动生成 b=`negative_removed_gold`、c=`disagreement_gold` 的 Gold 请求，并生成 d=`pretrain_replay` |
-| `curate_finetune.yaml` | 认证 HLMF Gold aggregate 与单源 descriptor、合并 replay、去重并发布 finetune 快照 |
+| `curate_finetune.yaml` | 从 DatesetFab/GoldSource 认证全仓 aggregate 和逐批 `gold_selection.yaml`，合并 mandatory replay、去重并发布 finetune 快照 |
 | `train_finetune_smoke.yaml` | 固定 256 ROI、三 head 全覆盖的 finetune 过拟合门禁 |
 | `train_finetune.yaml` | 从 multitask best 初始化的正式 Gold+pseudo finetune |
 | `eval_val.yaml` | 对 Make 目标显式注入的 stage/phase 执行 Val canonical ROI 评估 |

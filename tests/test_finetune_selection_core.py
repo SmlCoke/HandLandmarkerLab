@@ -9,6 +9,7 @@ from hand_landmarker.finetune_curation import build_smoke_snapshot
 from hand_landmarker.finetune_replay import select_replay_rows
 from hand_landmarker.finetune_selection import (
     disagreement_metrics,
+    gold_repository_occupied,
     largest_remainder,
     select_negative_removed,
 )
@@ -47,6 +48,19 @@ def row(identity, tier, sample_type, handedness="Left", present=True):
 
 
 class FinetuneSelectionCoreTest(unittest.TestCase):
+    def test_gold_repository_occupied_covers_pending_and_published_batches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "GoldSource"
+            pending = root / "disagreement_gold/d_r01/task/02_roi_crops/hand_roi_crops_manifest.jsonl"
+            published = root / "negative_removed_gold/n_r01/published/03_reviewed/hand_landmarks_reviewed.jsonl"
+            write_jsonl(pending, [{"crop_id": "pending", "image_sha256": "a" * 64}])
+            write_jsonl(published, [{"global_crop_id": "published", "image_sha256": "b" * 64}])
+            tokens, report = gold_repository_occupied(root)
+            self.assertIn("parent:pending", tokens)
+            self.assertIn("parent:published", tokens)
+            self.assertEqual(2, report["records"])
+            self.assertEqual(2, len(report["files"]))
+
     def test_selection_rejects_symlink_ancestor(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

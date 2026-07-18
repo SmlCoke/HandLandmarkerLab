@@ -20,6 +20,8 @@ from hand_landmarker.config import load_config, resolve_path
 from hand_landmarker.finetune_replay import build_replay_source
 from hand_landmarker.finetune_selection import (
     clean_row,
+    gold_repository_occupied,
+    identity_tokens,
     identity_value,
     select_negative_removed,
     select_teacher_student,
@@ -164,6 +166,8 @@ def main() -> None:
         raise FileNotFoundError("Missing prepare-finetune input(s): {}".format(missing))
 
     workspace = resolve_path(str(outputs.get("workspace") or ""), config)
+    gold_repository = resolve_path(str(config.get("gold_repository_root") or ""), config)
+    occupied_gold_tokens, occupied_gold_report = gold_repository_occupied(gold_repository)
     mining_target = workspace / "mining"
     replay_target = workspace / "sources" / "replay" / "pretrain_replay"
     if mining_target.exists() or (d_enabled and replay_target.exists()):
@@ -232,14 +236,19 @@ def main() -> None:
             removed_rows,
             catalog_rows,
             b_cfg,
+            occupied_identity_tokens=occupied_gold_tokens,
             provenance_hash_cache=provenance_hash_cache,
         )
         occupied = {str(row["parent_global_crop_id"]) for row in b_requests}
+        occupied_tokens = set(occupied_gold_tokens)
+        for row in b_requests:
+            occupied_tokens.update(identity_tokens(row))
         c_requests, c_report, scored_rows = select_teacher_student(
             restored_geometry,
             prediction_rows,
             c_cfg,
             occupied_parent_ids=occupied,
+            occupied_identity_tokens=occupied_tokens,
             provenance_hash_cache=provenance_hash_cache,
         )
         b_path = mining / "negative_removed_gold" / "selection_request.jsonl"
@@ -312,6 +321,7 @@ def main() -> None:
                 ),
             },
             "selectors": {"negative_removed": b_report, "teacher_student": c_report},
+            "historical_gold_exclusion": occupied_gold_report,
             "replay": replay_result,
         }
         write_json(mining / "prepare_finetune_sources_report.json", total_report)

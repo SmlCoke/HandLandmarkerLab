@@ -30,6 +30,8 @@ def main() -> None:
         "superseded_by_gold": len(checked["superseded_rows"]),
         "smoke_records": len(checked["smoke_rows"]),
         "source_roles": checked["reports"]["source_roles"],
+        "source_selection": checked["reports"]["source_selection"],
+        "source_selection_manifest": checked["reports"]["source_selection_manifest"],
         "leakage": checked["reports"]["leakage"],
         "gold_aggregate": {
             "path": checked["aggregate"]["path"],

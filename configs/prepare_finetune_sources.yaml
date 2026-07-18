@@ -3,6 +3,7 @@ task: prepare_finetune_sources
 
 pretrain_id: "${HAND_PRETRAIN_ID:-v3-pretrain-r1}"
 finetune_id: "${HAND_FINETUNE_ID:-v3-finetune-r1}"
+gold_repository_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}/GoldSource"
 
 inputs:
   pretrain_multitask_labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_training_labels_pretrain_multitask.jsonl"
