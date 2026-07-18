@@ -3,10 +3,27 @@ import unittest
 from pathlib import Path
 
 from hand_landmarker.io_utils import sha256_file, write_json
-from scripts.check_finetune_data import _checkpoint_gate, _sampling_gate
+from scripts.check_finetune_data import (
+    _aggregate_repository_root,
+    _checkpoint_gate,
+    _sampling_gate,
+)
 
 
 class FinetuneDataGateCoreTest(unittest.TestCase):
+    def test_aggregate_repository_root_comes_from_authenticated_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gold = root / "GoldSource"
+            gold.mkdir()
+            aggregate = root / "workspace" / "hmlf_gold_aggregate.json"
+            write_json(aggregate, {"gold_repository_root": str(gold.resolve())})
+            self.assertEqual(_aggregate_repository_root(aggregate), gold.resolve())
+
+            write_json(aggregate, {"gold_repository_root": "GoldSource"})
+            with self.assertRaisesRegex(ValueError, "missing or invalid"):
+                _aggregate_repository_root(aggregate)
+
     def test_checkpoint_gate_authenticates_complete_multitask_best(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

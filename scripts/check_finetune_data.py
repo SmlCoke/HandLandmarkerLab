@@ -49,6 +49,16 @@ def _artifact_gate(manifest: Mapping[str, Any], output_root: Path) -> None:
             raise ValueError("Curation artifact count mismatch: {}".format(path))
 
 
+def _aggregate_repository_root(aggregate_path: Path) -> Path:
+    """Recover the authenticated Gold repository root from its descriptor."""
+
+    descriptor = _read_json(aggregate_path)
+    value = Path(str(descriptor.get("gold_repository_root") or ""))
+    if not value.is_absolute() or value.is_symlink() or not value.is_dir():
+        raise ValueError("Gold aggregate repository root is missing or invalid")
+    return value.resolve(strict=True)
+
+
 def _sampling_gate(config: Mapping[str, Any], rows: Any) -> Dict[str, Any]:
     if str(config.get("stage")) != "finetune":
         raise ValueError("check_finetune_data accepts only stage=finetune")
@@ -278,7 +288,9 @@ def main() -> None:
     if not aggregate_path.is_file() or aggregate_path.is_symlink() or sha256_file(aggregate_path) != str(aggregate_ref.get("sha256") or ""):
         raise ValueError("Gold aggregate changed after curation")
     gold_sources = [source for source in validated_sources if source["source_kind"] != "pretrain_replay"]
-    validate_gold_aggregate(aggregate_path, aggregate_path.parent.parent, gold_sources)
+    validate_gold_aggregate(
+        aggregate_path, _aggregate_repository_root(aggregate_path), gold_sources
+    )
 
     smoke = manifest.get("smoke") or {}
     if int(smoke.get("count", -1)) != 256:
