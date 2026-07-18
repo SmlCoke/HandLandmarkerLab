@@ -6,12 +6,10 @@
 
 ## 1. 代码版本
 
-- HLML 当前契约：3.0，Git tag：`HLML-3.0`。
-- HLMF 当前契约：2.0，Git tag：`HLMF-2.0`。
+- HLML 当前契约：3.0；`HLML-3.0` tag 是初始发布点，后续修复继续位于同一契约，不再为本次更新打 tag。
+- HLMF 当前契约：2.0；`HLMF-2.0` tag 是初始发布点，本次 Dragon 多批次接口更新不改变数据契约主版本。
 - 两套系统均不兼容 HLML-2.0/HLMF-1.x 的旧配置和工作区。
-- HLML 服务器验收：70 个 Python 文件通过编译，155 项测试通过；TensorFlow 2.9 已实际验证结构损失、Gold-only mask 和 Keras sample-weight 契约。
-- HLMF 服务器验收：27 个 Python 文件通过编译，6 项测试通过。
-- 当前服务器验收时未挂载 `/dev/nvidia0`，因此没有运行正式训练；GPU 训练仍需在 GPU 可见后执行 `make doctor`。
+- 当前服务器可见 NVIDIA GeForce RTX 3090（24 GB）；TensorFlow 已成功使用 GPU 完成 geometry smoke。
 
 ## 2. 服务器与根目录
 
@@ -54,9 +52,12 @@ HLML-3.0/finetune/v3-finetune-r1/sources/gold/dragon_gold_0716_v1/qc/gold_source
 
 HLML-2.0 已完成 `v2-pretrain-r3` multitask 和 `v2-finetune-r1/r2`。历史观察是：正面张掌较准，握拳、侧向张掌和数字 1 等困难姿态较差；Val 平均关键点误差约 20 px 以上；infer 中仍有大量关键点塌缩；单独把 Gold batch 比例提高到 50% 没有改善。这些结果只用于解释 3.0 的 Gold 重平衡、自动错误分析和结构 loss 设计，不复制进新工作区。
 
-## 5. 尚未完成
+## 5. 当前训练进度
 
-- `v3-pretrain-r1` 尚未执行人工负样本复核和 geometry/multitask 正式训练。
+- `inspect-geometry`、`inspect-geometry-smoke` 和 `pretrain-geometry-smoke` 已运行；smoke 训练完成 300 epoch 并保存 best checkpoint。
+- 此前 `pretrain-geometry` 在前置 `check-geometry-smoke` 退出，报错为 `KeyError: 0`。根因是 gate 仍以旧列表下标读取 3.0 已改为语义 mapping 的 targets/sample weights；正式 geometry 训练没有启动，也没有生成 `geometry/` run 目录。
+- 本次代码更新修复 gate。由于 smoke provenance 严格绑定 Git commit，服务器部署时将旧 smoke 目录保留为备份，并在新 commit 下重新生成标准 `smoke/`、通过 gate；正式 geometry 仍由人工启动。此前执行的 `eval-val-geometry` 不能视为有效评估，因为正式 geometry checkpoint 尚不存在。
+- 人工 true-negative 复核和 multitask 正式训练尚未完成。
 - `v3-finetune-r1` 目前只有 Dragon Gold；新录制和 disagreement 的 600/800 总预算任务尚未冻结和标注。
 - `data_only`、`structure`、可选 `structure_roi_aug` 候选尚未正式训练。
 - 新模型的 ONNX 导出、厂商工具链转换和上板验收尚未执行。

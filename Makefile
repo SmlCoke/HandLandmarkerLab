@@ -14,7 +14,7 @@ HAND_FINETUNE_ID ?= v3-finetune-r1
 FINETUNE_EXPERIMENT_ID ?= $(HAND_FINETUNE_ID)
 FINETUNE_PROFILE ?= data_only
 FINETUNE_ROUND_ID ?= r01
-FINETUNE_GOLD_BUDGET ?= 800
+FINETUNE_GOLD_BUDGET ?=
 NEW_RECORDED_SOURCE_ID ?=
 BASELINE_FINETUNE_ID ?= v3-finetune-r1
 CANDIDATE_FINETUNE_ID ?= $(FINETUNE_EXPERIMENT_ID)
@@ -172,6 +172,7 @@ prepare-finetune-sources:
 	$(PYTHON) -B scripts/prepare_finetune_sources.py --config "$(PREPARE_FINETUNE_CONFIG)" $(PREPARE_FINETUNE_ARGS)
 
 prepare-finetune-round:
+	$(if $(strip $(FINETUNE_GOLD_BUDGET)),,$(error FINETUNE_GOLD_BUDGET is required))
 	$(PYTHON) -B scripts/prepare_finetune_round.py --config "$(PREPARE_FINETUNE_CONFIG)" --round-id "$(FINETUNE_ROUND_ID)" --gold-budget "$(FINETUNE_GOLD_BUDGET)" $(if $(strip $(NEW_RECORDED_SOURCE_ID)),--new-recorded-source-id "$(NEW_RECORDED_SOURCE_ID)",)
 
 check-finetune-sources:

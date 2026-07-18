@@ -6,6 +6,7 @@ from unittest import mock
 from hand_landmarker.io_utils import sha256_file, write_json
 from scripts.check_pretrain_smoke import (
     _jsonable,
+    _semantic_batch_value,
     _verify_run_provenance,
     check_smoke_run,
 )
@@ -100,6 +101,19 @@ class PretrainSmokeGateTests(unittest.TestCase):
         changed["smoke_gate"]["expected_records"] = 64
         with self.assertRaisesRegex(ValueError, "resolved_config differs"):
             _verify_run_provenance(changed, self.run_dir)
+
+    def test_semantic_batch_value_accepts_new_mapping_and_legacy_sequence(self):
+        landmarks = object()
+        self.assertIs(
+            landmarks,
+            _semantic_batch_value({"landmarks": landmarks}, "landmarks", 0, "weights"),
+        )
+        self.assertIs(
+            landmarks,
+            _semantic_batch_value([landmarks], "landmarks", 0, "weights"),
+        )
+        with self.assertRaisesRegex(KeyError, "available keys"):
+            _semantic_batch_value({"hand_flag": landmarks}, "landmarks", 0, "weights")
 
 
 if __name__ == "__main__":

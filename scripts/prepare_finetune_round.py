@@ -22,6 +22,9 @@ from hand_landmarker.finetune_selection import (
 from hand_landmarker.io_utils import read_jsonl, sha256_file, write_json, write_jsonl
 
 
+HARD_GOLD_LIMIT = 800
+
+
 def _existing_files(paths: Iterable[Path]) -> List[Path]:
     return sorted({path.resolve() for path in paths if path.is_file()}, key=str)
 
@@ -54,7 +57,14 @@ def _occupied(workspace: Path, config: Mapping[str, Any], target: Path) -> tuple
     return tokens, {"files": reports, "records": records, "identity_token_count": len(tokens)}
 
 
-def _new_recorded_count(workspace: Path, source_id: str, maximum: int) -> tuple[int, Dict[str, Any]]:
+def _validate_gold_budget(value: int) -> int:
+    budget = int(value)
+    if budget <= 0 or budget > HARD_GOLD_LIMIT:
+        raise ValueError("gold-budget must be in [1, {}]".format(HARD_GOLD_LIMIT))
+    return budget
+
+
+def _new_recorded_count(workspace: Path, source_id: str, budget: int) -> tuple[int, Dict[str, Any]]:
     if not source_id:
         return 0, {"status": "not_configured", "count": 0}
     descriptor = workspace / "cvat" / source_id / "task_descriptor.json"
@@ -63,9 +73,11 @@ def _new_recorded_count(workspace: Path, source_id: str, maximum: int) -> tuple[
     value = json.loads(descriptor.read_text(encoding="utf-8"))
     manifest = workspace / "cvat" / source_id / str(value["artifacts"]["manifest"]["path"])
     rows = read_jsonl(manifest)
-    if len(rows) > maximum:
+    if len(rows) > budget:
         raise ValueError(
-            "new-recorded task exceeds this budget's cap {}: {}".format(maximum, len(rows))
+            "new-recorded task exceeds the frozen Gold budget {}: {}".format(
+                budget, len(rows)
+            )
         )
     return len(rows), {
         "status": "ok",
@@ -80,9 +92,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     parser.add_argument("--round-id", required=True)
-    parser.add_argument("--gold-budget", required=True, type=int, choices=(600, 800))
+    parser.add_argument("--gold-budget", required=True, type=int)
     parser.add_argument("--new-recorded-source-id", default="")
     args = parser.parse_args()
+    gold_budget = _validate_gold_budget(args.gold_budget)
     if not args.round_id or Path(args.round_id).name != args.round_id:
         raise ValueError("round-id must be one safe path component")
     config = load_config(args.config)
@@ -93,11 +106,10 @@ def main() -> None:
     if output.exists():
         raise FileExistsError("finetune round is immutable and already exists: {}".format(output))
 
-    new_cap = 300 if args.gold_budget == 800 else 200
     new_count, new_report = _new_recorded_count(
-        workspace, args.new_recorded_source_id, new_cap
+        workspace, args.new_recorded_source_id, gold_budget
     )
-    disagreement_budget = args.gold_budget - new_count
+    disagreement_budget = gold_budget - new_count
     score_path = workspace / "mining" / "teacher_student" / "disagreement_scores.jsonl"
     if not score_path.is_file():
         raise FileNotFoundError(
@@ -126,7 +138,7 @@ def main() -> None:
     if len(requests) > disagreement_budget:
         raise RuntimeError("selector exceeded disagreement budget")
     combined = new_count + len(requests)
-    if combined > args.gold_budget or combined > 800:
+    if combined > gold_budget or combined > HARD_GOLD_LIMIT:
         raise RuntimeError("combined CVAT task count exceeds frozen budget")
     output.mkdir(parents=True)
     write_jsonl(request_path, requests)
@@ -136,8 +148,8 @@ def main() -> None:
         "status": "ok",
         "round_id": args.round_id,
         "source_id": source_id,
-        "frozen_gold_budget": args.gold_budget,
-        "hard_limit": 800,
+        "frozen_gold_budget": gold_budget,
+        "hard_limit": HARD_GOLD_LIMIT,
         "new_recorded": new_report,
         "disagreement_requested": disagreement_budget,
         "disagreement_selected": len(requests),

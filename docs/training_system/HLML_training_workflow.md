@@ -27,8 +27,8 @@ Makefile 默认：
 ```text
 HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
 HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-3.0
-HAND_PRETRAIN_ID=v3-pretrain-r1
-HAND_FINETUNE_ID=v3-finetune-r1
+HAND_PRETRAIN_ID=<pretrain-id>
+HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
 `DatesetFab` 是可再生数据仓库，包含来源级 manifest、伪标签和 ROI。HLMF/HLML 的聚合标签把 `crop_path` 直接指向该仓库；不再建立 `HLML-3.0/train_sources` 副本。
@@ -168,62 +168,124 @@ checkpoint 使用 geometry-first 的 `val_multitask_score`。若门控报告确�
 - `FINETUNE_EXPERIMENT_ID`：训练/评估/推理/导出目录，可在同一数据上运行多个候选。
 - `FINETUNE_PROFILE`：`data_only`、`structure`、`structure_roi_aug`。
 
-因此比较候选不复制图片或标签；只新建运行目录。
+因此比较模型候选时保持同一个 `HAND_FINETUNE_ID`，只更换 `FINETUNE_EXPERIMENT_ID`；不复制图片或标签，也不让候选使用不同数据。
 
-### 8.2 建立基础 Gold
+### 8.2 两类训练数据分别解决什么问题
+
+Finetune 不是“只用少量人工数据再训练”，而是把两类监督合成一个冻结快照：
+
+- **Gold**：人工确认的 presence、21 点和 handedness。它纠正教师漏检、关键点偏差、错误手势形状和 presence 错误。
+- **replay（回放数据）**：从 pretrain 来源中确定性抽出的高质量伪标签和背景样本。它不是 Gold；作用是保留原有场景覆盖、presence 和 handedness 能力，避免模型只记住少量人工场景。
+
+Gold 可以来自多个不可变 source：每批外部 Dragon Gold、新录制 Gold、student–teacher disagreement Gold，以及确有需要时由历史 hard case 转成的 reviewed Gold。多个同类 source 会一起聚合；不能覆盖或删除旧 source 来“腾位置”。
+
+数据流如下：
+
+```text
+HLMF sources/gold/* ──finalize──> hmlf_gold_merged ─┐
+                                                     ├─ finetune-curate ─> 冻结训练 JSONL
+pretrain registry ──prepare-finetune-sources──> replay┘
+                              └───────────────> disagreement score pool
+```
+
+### 8.3 在 HLMF 建立或继承 Gold
 
 ```bash
 cd /root/HandLandmarksFab
 conda activate anfab
-make prepare_dragon_gold HAND_FINETUNE_ID=v3-finetune-r1
+
+# 每批 Dragon 单独运行一次，批次 ID 不得复用
+make prepare_dragon_gold \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  DRAGON_SOURCE_ROOT=$HAND_DATASET_ROOT/<dragon-batch-root> \
+  DRAGON_BATCH_ID=<unique-dragon-batch-id>
+
+# 所有 Gold source 发布/导入后重新聚合
+make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
-需要从同一 3.0 数据契约的上一 finetune 快照继承认证 Gold 时：
+`sources/gold/<source-id>/finetune_source.json` 是单个来源的认证描述符；`hmlf_gold_merged/qc/finalize_finetune_report.json` 是所有 Gold 的聚合报告。只有聚合报告通过，HLML 才会接受数据。
+
+需要从同一数据契约的上一 finetune 快照继承认证 Gold 时：
 
 ```bash
 make seed_finetune_gold \
-  BASE_FINETUNE_ID=v3-finetune-r1 \
-  HAND_FINETUNE_ID=v3-finetune-r2
+  BASE_FINETUNE_ID=<old-data-id> \
+  HAND_FINETUNE_ID=<new-data-id>
 ```
 
-目标存在即失败；程序硬链接并验证全部历史 source。不要删除旧 disagreement/negative-removed Gold。
+目标存在即失败；程序硬链接并验证全部历史 source。随后只能用新的 source/round ID 增加 Gold，不删除旧 disagreement、new-recorded 或 reviewed Gold。
 
-### 8.3 建立 replay 和 disagreement score pool
+### 8.4 在 HLML 建立 replay 和 disagreement score pool
 
 ```bash
 cd /root/HandLandmarkerLab
 conda activate hand-landmarker-tf29
-make prepare-finetune-sources HAND_FINETUNE_ID=v3-finetune-r1
+make prepare-finetune-sources HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
-程序从 pretrain multitask 快照生成一次 replay，并用 geometry checkpoint 对全部可选 positive 计算 student–teacher 分歧。这里的 student 是当前自研模型，teacher 是 MediaPipe 伪标签；分歧大表示自研模型和教师对同一 ROI 的关键点差别大，不等同于教师一定正确，而是优先人工检查的信号。
+程序自动完成：
 
-## 9. 600/800 ROI 多轮 Gold
+1. 认证 HLMF 的 pretrain source registry、curated multitask 标签和 checkpoint；
+2. 从广泛来源中确定性选择 replay，保存其来源、标签和 SHA；
+3. 用当前 student checkpoint 对可选 positive 推理；
+4. 把 student 预测与 MediaPipe teacher 伪标签比较，生成逐 ROI disagreement 分数池。
 
-### 9.1 新录制来源
+这里的 **student** 是正在训练的自研 Hand Landmarker，**teacher** 是 MediaPipe 伪标签。分歧大只表示两者对同一 ROI 的关键点差别大，因此适合人工复核；不代表 teacher 必然正确。查看：
 
-人工用 20～30 分钟录制困难手势。HLMF 完成 00～03 后确定性限额导出，详细操作见 HLMF 文档。
+```text
+finetune/<id>/sources/replay/
+finetune/<id>/mining/teacher_student/disagreement_scores.jsonl
+finetune/<id>/mining/disagreement_gold/selection_report.json
+finetune/<id>/mining/prepare_finetune_sources_report.json
+```
 
-800 预算最多给新录制 300；600 预算最多给 200。人工不从原始目录挑图。
+这些产物绑定 checkpoint 和输入 SHA。输入或 checkpoint 变化时应使用新的 finetune 数据 ID 重新建立，不覆盖已有快照。
 
-### 9.2 累计排重 selection
+## 9. ROI 多轮 Gold
+
+### 9.1 为什么要分 round/source
+
+一个 `round-id` 表示一次冻结选样，一个 `source-id` 表示一份不可变 CVAT/Gold 来源。以后想从同一原始来源继续取样时，创建新 round/source ID；程序会保留并排除历史 ROI，因此旧人工标注不会浪费，也不需要删除。
+
+### 9.2 先制作新录制任务
+
+1. 人工录制当前模型薄弱的姿态，并在 HLMF 跑完 00～03；
+2. HLMF 使用 `native_existing` 和本轮计划给出的显式限额确定性抽样；
+3. 任务生成后，查看 `task_descriptor.json` 得到实际任务数；
+4. 不要人工从原始目录随意挑图，也不要在任务冻结后改限额。
+
+HLMF 命令：
+
+```bash
+make export_finetune_gold \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_SOURCE_ID=new_recorded_gold_<round-id> \
+  FINETUNE_SOURCE_MODE=native_existing \
+  FINETUNE_RAW_SOURCE_ROOT=$HAND_DATASET_ROOT/<source-id> \
+  FINETUNE_MAX_ITEMS=<new-recorded-limit>
+```
+
+### 9.3 冻结本轮 disagreement selection
+
+新录制任务存在后，在 HLML 执行：
 
 ```bash
 make prepare-finetune-round \
-  HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_ROUND_ID=r01 \
-  FINETUNE_GOLD_BUDGET=800 \
-  NEW_RECORDED_SOURCE_ID=new_recorded_gold_r01
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_ROUND_ID=<round-id> \
+  FINETUNE_GOLD_BUDGET=<round-budget> \
+  NEW_RECORDED_SOURCE_ID=new_recorded_gold_<round-id>
 ```
 
-程序自动读取：
+`FINETUNE_GOLD_BUDGET` 是本轮两个 CVAT task 的合计上限，必须由执行计划显式指定。程序读取：
 
 - 所有已发布 Gold source；
 - 所有历史 selection request；
 - 当前/历史 CVAT task manifest；
 - Val/Test labels 与 ignored sidecar。
 
-并按 `parent_global_crop_id`、`global_crop_id`、来源图片身份、ROI SHA-256、归一化像素 SHA-256 排除重复。实际 disagreement 数量等于“冻结总预算减新录制实际任务数”，候选不足可少于预算，但绝不能超过 800。
+并按 `parent_global_crop_id`、`global_crop_id`、来源图片身份、ROI SHA256、归一化像素 SHA256 排除重复。disagreement 上限等于“本轮总预算减新录制实际任务数”；候选不足时任务可以少于预算，但不会用低价值重复项硬凑。
 
 输出：
 
@@ -234,34 +296,47 @@ finetune/<id>/mining/rounds/<round-id>/disagreement_gold_<round-id>/
 └── ranked_eligible.jsonl
 ```
 
-同一来源以后可继续 `r02/r03`；历史 Gold 保留，程序会自动排除，不浪费人工标注。
+`selection_report.json` 必须确认冻结预算、新录制计数、排除文件和最终选中数都符合预期。
 
-### 9.3 HLMF CVAT
+### 9.4 HLMF 导出、人工标注和导入
 
-HLMF 分别导出 new-recorded 和 disagreement task。程序生成每 100 张/job 的计划。人工只在 CVAT 完成：完整 21 点 + handedness、`no_hand` 或 `ignore_for_training`。
+回到 HLMF 导出 disagreement：
 
-团队冻结 600 或 800，总上限 800。多人开始前共同标 10 张校准图，正式任务不重叠，负责人抽查每人约 5%。
+```bash
+make export_finetune_gold \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_SOURCE_ID=disagreement_gold_<round-id> \
+  FINETUNE_SOURCE_MODE=selection_subset
+```
 
-导入聚合后返回 HLML。
+HLMF 为 new-recorded 和 disagreement 分别生成 `cvat/<source-id>/qc/cvat_job_plan.json`。人工按计划在 CVAT 完成完整 21 点和 handedness，或明确标 `no_hand` / `ignore_for_training`；返回的完整 XML 放入各自 `cvat/<source-id>/reviewed.xml`。
+
+```bash
+make import_finetune_gold HAND_FINETUNE_ID=<finetune-data-id>
+make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
+```
+
+每次增加一轮 Gold 后都重新 finalize；最终聚合会保留所有历史来源并跨轮去重。然后返回 HLML。
 
 ## 10. Finetune curate 和门控
 
 ```bash
-make finetune-curate HAND_FINETUNE_ID=v3-finetune-r1 FINETUNE_PROFILE=data_only
-make check-finetune-data HAND_FINETUNE_ID=v3-finetune-r1
-make inspect-finetune HAND_FINETUNE_ID=v3-finetune-r1
+make finetune-curate HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_PROFILE=<profile>
+make check-finetune-data HAND_FINETUNE_ID=<finetune-data-id>
+make inspect-finetune HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
-Gold role 目标权重：
+`finetune-curate` 自动认证 HLMF 聚合、合并 Gold 与 replay、执行身份去重，并把角色权重和 batch 中 Gold 比例解析进冻结报告。具体数值由当前 profile/config 决定，不属于通用流程。每个 role 内先跨轮去重，再按 source 规模分配；Gold 与 replay 重复时保留 Gold、删除 replay 重复行。
 
-| role | 目标权重 |
-|---|---:|
-| Dragon external Gold | 0.40 |
-| negative-removed Gold | 0.15 |
-| disagreement Gold（多轮合并） | 0.30 |
-| new-recorded Gold（多轮合并） | 0.15 |
+重点查看：
 
-Gold 总比例仍为 0.35。每个 role 内先跨轮去重，再按 source 规模平方根分配，防止一个大 source 吞没其余来源。Gold 与 replay 重复时保留 Gold、删除 replay 重复行。
+```text
+train_finetune_merged/<id>/qc/curation_report.json
+train_finetune_merged/<id>/05_labels/hand_training_labels_finetune.jsonl
+train_finetune_merged/<id>/05_labels/hand_training_labels_finetune_smoke.jsonl
+```
+
+`check-finetune-data` 验证 Gold/replay 数量、role 覆盖、训练权重、结构 loss mask、图片/SHA 和 Val 隔离；`inspect-finetune` 生成抽样可视化。任何门控失败都应回到数据来源修正，不跳过。
 
 ## 11. 三种 profile
 
@@ -270,10 +345,10 @@ Gold 总比例仍为 0.35。每个 role 内先跨轮去重，再按 source 规�
 只验证新 Gold 和来源重平衡，不增加结构 loss。
 
 ```bash
-make finetune-smoke HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1a FINETUNE_PROFILE=data_only
-make finetune-train HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1a FINETUNE_PROFILE=data_only
+make finetune-smoke HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_EXPERIMENT_ID=<data-only-experiment-id> FINETUNE_PROFILE=data_only
+make finetune-train HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_EXPERIMENT_ID=<data-only-experiment-id> FINETUNE_PROFILE=data_only
 ```
 
 ### 11.2 structure
@@ -286,10 +361,10 @@ make finetune-train HAND_FINETUNE_ID=v3-finetune-r1 \
 结构 mask 只在人工 Gold、presence=true、landmark loss 有效时非零。pseudo replay、negative、ignored 均为 0；没有固定骨长、固定关节方向或手势模板。
 
 ```bash
-make finetune-smoke HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1b FINETUNE_PROFILE=structure
-make finetune-train HAND_FINETUNE_ID=v3-finetune-r1 \
-  FINETUNE_EXPERIMENT_ID=v3-finetune-r1b FINETUNE_PROFILE=structure
+make finetune-smoke HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_EXPERIMENT_ID=<structure-experiment-id> FINETUNE_PROFILE=structure
+make finetune-train HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_EXPERIMENT_ID=<structure-experiment-id> FINETUNE_PROFILE=structure
 ```
 
 ### 11.3 structure_roi_aug

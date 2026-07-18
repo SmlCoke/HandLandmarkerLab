@@ -44,6 +44,32 @@ def _matching_hash_record(records: Any, path: Path, digest: str) -> bool:
     return False
 
 
+def _semantic_batch_value(container: Any, semantic: str, index: int, label: str) -> Any:
+    """Read a model field from either the semantic mapping or legacy sequence form."""
+
+    if isinstance(container, Mapping):
+        if semantic not in container:
+            raise KeyError(
+                "{} do not contain {!r}; available keys: {}".format(
+                    label, semantic, sorted(str(key) for key in container)
+                )
+            )
+        return container[semantic]
+    if isinstance(container, (list, tuple)):
+        if index >= len(container):
+            raise IndexError(
+                "{} do not contain index {} for {!r}; length={}".format(
+                    label, index, semantic, len(container)
+                )
+            )
+        return container[index]
+    raise TypeError(
+        "{} must be a semantic mapping or output sequence; got {}".format(
+            label, type(container).__name__
+        )
+    )
+
+
 def _verify_run_provenance(
     config: Mapping[str, Any], run_dir: Path
 ) -> Dict[str, Any]:
@@ -188,7 +214,10 @@ def _full_smoke_metrics(
     coordinate_errors = []
     for batch_index in range(len(sequence)):
         inputs, targets, sample_weights = sequence[batch_index]
-        landmark_weights = np.asarray(sample_weights[0], dtype=np.float64).reshape(-1)
+        landmark_weights = np.asarray(
+            _semantic_batch_value(sample_weights, "landmarks", 0, "Smoke sample weights"),
+            dtype=np.float64,
+        ).reshape(-1)
         if np.any(~np.isfinite(landmark_weights)) or np.any(landmark_weights <= 0.0):
             raise ValueError("Every smoke ROI must have a positive finite landmark weight")
         outputs = backbone.predict_on_batch(inputs)
@@ -202,7 +231,10 @@ def _full_smoke_metrics(
         elif isinstance(outputs, (list, tuple)):
             outputs = outputs[0]
         predicted = np.asarray(outputs, dtype=np.float64).reshape((-1, 42))
-        expected = np.asarray(targets[0], dtype=np.float64).reshape((-1, 42))
+        expected = np.asarray(
+            _semantic_batch_value(targets, "landmarks", 0, "Smoke targets"),
+            dtype=np.float64,
+        ).reshape((-1, 42))
         if predicted.shape != expected.shape:
             raise ValueError(
                 "Smoke prediction/target shape mismatch: {} != {}".format(
