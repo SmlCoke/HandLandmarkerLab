@@ -20,7 +20,9 @@ Pretrain 原始来源的规范入口已经统一为：
 /root/autodl-tmp/DatesetFab/PretrainSource/HandViolenceEnhanced0714/
 ```
 
-HLMF 的 source registry 也应只记录这些规范路径。旧顶层别名 `HandViolence0708/`、`HandViolenceEnhanced0714/` 和旧 Dragon 原始目录 `HandViolenceEnhanced0716/` 已完成真实性核对后清理；训练清单仍通过 registry 恢复到 DatesetFab 真源，不复制图片。
+HLMF 的 source registry 也只记录这些规范路径。旧顶层别名 `HandViolence0708/`、`HandViolenceEnhanced0714/` 和旧 Dragon 原始目录 `HandViolenceEnhanced0716/` 已完成真实性核对后清理。
+
+已经完成训练的 pretrain 冻结标签仍保留当时的绝对路径，不能在删除旧入口后拿它们重新启动 geometry/multitask；现有 checkpoint、历史和评估结果不受删除影响。本版 `prepare-finetune-sources` 会先用新 registry 逐行认证并把 geometry/multitask 标签恢复到 `PretrainSource` 真源，再生成预测、replay 和 finetune 产物，因此接下来的 finetune 不依赖旧入口，也不复制图片。
 
 ## 2. Geometry 与 multitask 已完成
 
