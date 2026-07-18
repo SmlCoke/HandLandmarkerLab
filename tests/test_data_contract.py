@@ -871,6 +871,9 @@ class CanonicalDataContractTests(unittest.TestCase):
                     gold_fraction=0.4,
                     epoch_size=25,
                 ),
+                losses_config={
+                    "supervision_tier_weights": {"gold": 2.0, "pseudo": 0.5}
+                },
             )
 
             gold_per_batch = []
@@ -889,6 +892,17 @@ class CanonicalDataContractTests(unittest.TestCase):
                 [{"gold": 4, "pseudo": 6}, {"gold": 4, "pseudo": 6}, {"gold": 2, "pseudo": 3}],
                 report["drawn_supervision_tiers_per_batch"],
             )
+            self.assertEqual(
+                {"gold": 2.0, "pseudo": 0.5},
+                report["supervision_tier_loss_weights"],
+            )
+            first_indices = sequence.batch_record_indices(0)
+            first_weights = sequence[0][2]["hand_flag"]
+            expected = [
+                2.0 if records[int(index)]["supervision_tier"] == "gold" else 0.35
+                for index in first_indices
+            ]
+            self.assertTrue(np.allclose(first_weights, expected))
 
     def test_set_epoch_is_absolute_reproducible_and_changes_random_stream(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -69,17 +69,22 @@ class StageConfigRouteTests(unittest.TestCase):
                 self.assertEqual("v2", config["model"]["version"])
                 self.assertEqual("finetune", config["model"]["checkpoint_stage"])
 
-    def test_finetune_smoke_keeps_the_full_optimization_window(self):
+    def test_finetune_smoke_keeps_patience_but_uses_the_fixed_overfit_probe(self):
         full = load_config(CONFIGS / "train_finetune.yaml")
         smoke = load_config(CONFIGS / "train_finetune_smoke.yaml")
         full_training = full["training"]
         smoke_training = smoke["training"]
 
         self.assertEqual(5.0e-5, full_training["optimizer"]["learning_rate"])
-        self.assertEqual(
-            full_training["optimizer"]["learning_rate"],
-            smoke_training["optimizer"]["learning_rate"],
-        )
+        self.assertEqual(1.0e-3, smoke_training["optimizer"]["learning_rate"])
+        for tier in ("gold", "pseudo"):
+            fractions = smoke["sampling"]["sample_type_fractions_by_tier"][tier]
+            self.assertEqual(0.5, fractions["POS_RUNTIME"] + fractions["POS_LOW_PALM"])
+            self.assertEqual(
+                0.5,
+                fractions["NEG_RUNTIME_CANDIDATE"]
+                + fractions["NEG_LOW_PALM_CANDIDATE"],
+            )
         for component, patience in (
             ("learning_rate_schedule", 20),
             ("early_stopping", 60),

@@ -18,7 +18,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from hand_landmarker.config import load_config, resolve_path
-from hand_landmarker.contracts import effective_head_weights
+from hand_landmarker.contracts import (
+    effective_head_weights,
+    normalize_supervision_tier_loss_weights,
+)
 from hand_landmarker.io_utils import read_jsonl, sha256_file, write_json
 
 
@@ -40,11 +43,26 @@ FIXED_GATE: Dict[str, Any] = {
     "maximum_handedness_bce": 0.15,
     "minimum_handedness_accuracy": 0.95,
 }
+FIXED_SMOKE_TYPE_FRACTIONS = {
+    "gold": {
+        "POS_RUNTIME": 0.35,
+        "POS_LOW_PALM": 0.15,
+        "NEG_RUNTIME_CANDIDATE": 0.25,
+        "NEG_LOW_PALM_CANDIDATE": 0.25,
+    },
+    "pseudo": {
+        "POS_RUNTIME": 0.35,
+        "POS_LOW_PALM": 0.15,
+        "NEG_RUNTIME_CANDIDATE": 0.25,
+        "NEG_LOW_PALM_CANDIDATE": 0.25,
+    },
+}
 ALLOWED_SMOKE_DIFFS = {
     "experiment.name",
     "data.labels",
     "training.epochs",
     "training.batch_size",
+    "training.optimizer.learning_rate",
     "training.checkpoint.monitor",
     "training.checkpoint.mode",
     "training.learning_rate_schedule.monitor",
@@ -52,6 +70,11 @@ ALLOWED_SMOKE_DIFFS = {
     "training.early_stopping.monitor",
     "training.early_stopping.mode",
     "sampling.epoch_size",
+    *{
+        "sampling.sample_type_fractions_by_tier.{}.{}".format(tier, sample_type)
+        for tier in ("gold", "pseudo")
+        for sample_type in SAMPLE_TYPES
+    },
     "augmentation.enabled",
     "validation.enabled",
     "outputs.run_dir",
@@ -249,6 +272,7 @@ def _assert_runtime_contract(config: Mapping[str, Any], label: str) -> None:
     losses = _require_mapping(config.get("losses"), "{}.losses".format(label))
     if losses.get("honor_record_loss_weights") is not True:
         raise ValueError("{}.losses must honor record loss weights".format(label))
+    normalize_supervision_tier_loss_weights(losses.get("supervision_tier_weights"))
     for head, expected_name in (
         ("landmarks", "huber"),
         ("hand_flag", "binary_crossentropy"),
@@ -322,6 +346,26 @@ def compare_smoke_and_full_configs(
         raise ValueError("Smoke config must disable augmentation")
     if int((smoke_config.get("sampling") or {}).get("epoch_size", -1)) != 256:
         raise ValueError("Smoke sampling.epoch_size must be exactly 256")
+    smoke_learning_rate = float(
+        ((smoke_training.get("optimizer") or {}).get("learning_rate", math.nan))
+    )
+    if not math.isclose(smoke_learning_rate, 1.0e-3, rel_tol=0.0, abs_tol=1.0e-12):
+        raise ValueError("Smoke optimizer learning rate must be exactly 0.001")
+    smoke_fractions = (smoke_config.get("sampling") or {}).get(
+        "sample_type_fractions_by_tier"
+    )
+    try:
+        normalized_smoke_fractions = {
+            str(tier): {
+                str(sample_type): float(fraction)
+                for sample_type, fraction in dict(fractions).items()
+            }
+            for tier, fractions in dict(smoke_fractions).items()
+        }
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("Smoke sample-type fractions are invalid") from exc
+    if normalized_smoke_fractions != FIXED_SMOKE_TYPE_FRACTIONS:
+        raise ValueError("Smoke sample-type fractions must equal the fixed balanced probe")
     for component in ("checkpoint", "learning_rate_schedule", "early_stopping"):
         full_monitor = _require_mapping(full_training.get(component), "Full training.{}".format(component))
         smoke_monitor = _require_mapping(smoke_training.get(component), "Smoke training.{}".format(component))
@@ -913,6 +957,24 @@ def _prediction_heads(outputs: Any) -> Tuple[Any, Any, Any]:
     return outputs[0], outputs[1], outputs[2]
 
 
+def _metric_head_weights(sample_weights: Any) -> Tuple[Any, Any, Any]:
+    """Return landmark, hand-flag and handedness weights in semantic order."""
+
+    if not isinstance(sample_weights, Mapping):
+        raise ValueError("Smoke sequence sample weights must be a semantic mapping")
+    missing = [
+        name for name in ("landmarks", "hand_flag", "handedness")
+        if name not in sample_weights
+    ]
+    if missing:
+        raise ValueError("Smoke sequence sample weights are missing {}".format(missing))
+    return (
+        sample_weights["landmarks"],
+        sample_weights["hand_flag"],
+        sample_weights["handedness"],
+    )
+
+
 def _binary_metrics(predictions: Any, targets: Any, label: str, np: Any) -> Tuple[float, float]:
     predicted = np.asarray(predictions, dtype=np.float64).reshape(-1)
     expected = np.asarray(targets, dtype=np.float64).reshape(-1)
@@ -1003,7 +1065,10 @@ def full_smoke_metrics(
         expected_landmarks = np.asarray(targets[0], dtype=np.float64).reshape((batch_size, 42))
         expected_hand = np.asarray(targets[1], dtype=np.float64).reshape((batch_size, 1))
         expected_handedness = np.asarray(targets[2], dtype=np.float64).reshape((batch_size, 1))
-        masks = [np.asarray(value, dtype=np.float64).reshape(batch_size) for value in sample_weights]
+        masks = [
+            np.asarray(value, dtype=np.float64).reshape(batch_size)
+            for value in _metric_head_weights(sample_weights)
+        ]
         if any(np.any(~np.isfinite(value)) or np.any(value < 0.0) for value in masks):
             raise FloatingPointError("Smoke inference encountered an invalid head mask")
         if np.any(masks[1] <= 0.0):

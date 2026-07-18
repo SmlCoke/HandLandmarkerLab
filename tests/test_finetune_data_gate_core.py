@@ -132,6 +132,7 @@ class FinetuneDataGateCoreTest(unittest.TestCase):
         for tier in ("gold", "pseudo"):
             for sample_type in sample_types:
                 for index in range(4):
+                    present = sample_type.startswith("POS_")
                     rows.append(
                         {
                             "crop_id": "{}:{}:{}".format(tier, sample_type, index),
@@ -140,6 +141,9 @@ class FinetuneDataGateCoreTest(unittest.TestCase):
                             "sample_type": sample_type,
                             "sampling_bucket": tier + ":" + sample_type,
                             "sampling_weight": 1.0,
+                            "hand_presence": {"present": present},
+                            "handedness": {"label": "Right" if present else "unknown"},
+                            "supervision_loss_weight": 1.0,
                         }
                     )
         fractions = {name: 0.25 for name in sample_types}
@@ -147,6 +151,9 @@ class FinetuneDataGateCoreTest(unittest.TestCase):
             "stage": "finetune",
             "experiment": {"seed": 7},
             "training": {"batch_size": 8, "gold_fraction": 0.5},
+            "losses": {
+                "supervision_tier_weights": {"gold": 2.0, "pseudo": 1.0}
+            },
             "sampling": {
                 "epoch_size": 16,
                 "sample_type_fractions_by_tier": {"gold": fractions, "pseudo": fractions},
@@ -160,6 +167,14 @@ class FinetuneDataGateCoreTest(unittest.TestCase):
         report = _sampling_gate(config, rows)
         self.assertEqual(sum(sum(cell.values()) for cell in report["epoch0_plan"]["epoch_draw_quota_by_tier_type"].values()), 16)
         self.assertEqual(len(report["epoch0_plan"]["batch_type_schedule_sha256"]), 64)
+        weighting = report["loss_weighting"]
+        self.assertEqual(
+            weighting["configured_supervision_tier_weights"],
+            {"gold": 2.0, "pseudo": 1.0},
+        )
+        self.assertAlmostEqual(
+            weighting["nominal_tier_loss_mass_fraction"]["gold"], 2.0 / 3.0
+        )
 
 
 if __name__ == "__main__":

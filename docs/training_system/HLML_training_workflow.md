@@ -430,6 +430,61 @@ train_finetune_merged/<id>/05_labels/hand_training_labels_finetune_smoke.jsonl
 
 `check-finetune-data` 验证 Gold/replay 数量、role 覆盖、训练权重、结构 loss mask、图片/SHA 和 Val 隔离；`inspect-finetune` 生成抽样可视化。任何门控失败都应回到数据来源修正，不跳过。
 
+Finetune smoke 对冻结的 256 ROI 使用固定的正/负均衡 overfit 抽样和较快的 smoke-only 学习率；这是为了让小集合同时检验 presence、landmarks、handedness，而不是复制正式训练的类别先验。正式 `sample_type_fractions_by_tier` 和学习率没有被改写，仍由 `check-finetune-data` 单独认证。门控会严格检查这两个 smoke-only 覆盖参数，不能在命令行随意改变。
+
+### 10.4 区分“抽样占比”和“Loss 权重占比”
+
+这两个概念互相独立，不能把其中一个当成另一个：
+
+- `training.gold_fraction` 决定每个训练 batch 抽取多少 Gold ROI；它是**数据抽样占比**。
+- `sampling_weight` 只决定同一个抽样格子内某行被抽到的概率；它也不是 Loss 权重。
+- `FINETUNE_GOLD_LOSS_WEIGHT` 与 `FINETUNE_PSEUDO_LOSS_WEIGHT` 是 Gold/pseudo 的**真实 Loss 倍率**。默认都是 `1.0`，即不额外偏向任一监督层。
+
+对某个训练样本和输出 head，最终 sample weight 为：
+
+```text
+监督层倍率 × supervision_loss_weight × 该 head 的 loss_weight × 该 head 的 quality_weight
+```
+
+`sampling_weight` 不进入这个乘式。训练器再用这些 sample weight 计算该 head 的加权平均 Loss；`landmarks`、`hand_flag`、`handedness` 各自的 `coefficient` 最后决定不同 head 之间的组合比例。因此，仅看 Gold/pseudo 目录中的图片数量，不能推出它们对梯度的实际影响。
+
+查看当前设置和 epoch 0 的有效权重质量分数：
+
+```bash
+make check-finetune-data \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_EXPERIMENT_ID=<experiment-id> \
+  FINETUNE_PROFILE=<profile> \
+  FINETUNE_GOLD_LOSS_WEIGHT=<gold-multiplier> \
+  FINETUNE_PSEUDO_LOSS_WEIGHT=<pseudo-multiplier>
+
+python -m json.tool \
+  /root/autodl-tmp/TrainFab/HLML-3.0/hand_landmarker_runs/<experiment-id>/finetune_data_gate.json
+```
+
+重点看 `sampling.loss_weighting`：
+
+- `configured_supervision_tier_weights`：命令传入的真实 Loss 倍率；
+- `nominal_tier_loss_mass_fraction`：只考虑 `gold_fraction` 和层倍率得到的直观比例；
+- `epoch0_effective_head_weight_mass_fraction`：把实际抽样行的 record/head/quality 权重也算进去后，各 head 的 Gold/pseudo 权重质量分数；
+- `epoch0_mean_per_batch_head_weight_fraction`：考虑训练器逐 batch 归一化后的等误差基准比例。
+
+这些仍是“权重质量”而不是训练结束后的真实梯度占比，因为真实贡献还取决于每行预测误差。若 `gold_fraction=f`、Gold 倍率为 `g`、pseudo 倍率为 `p`，忽略行级权重时 Gold 的名义 Loss 质量分数为 `f*g / (f*g + (1-f)*p)`。
+
+开启一个不同 Loss 比例的候选时，数据快照可以复用，但必须换新的 `FINETUNE_EXPERIMENT_ID`，并在 `check-finetune-data`、`finetune-smoke`、`check-finetune-smoke`、`finetune-train` 的每条命令中传入完全相同的两个倍率。smoke 会把倍率绑定进 resolved config；改变倍率后不能复用旧 smoke。
+
+```bash
+# 示例：Gold 每个有效样本的 Loss 倍率为 pseudo 的 2 倍；这不是 Gold 50% 抽样。
+COMMON="HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_EXPERIMENT_ID=<new-experiment-id> FINETUNE_PROFILE=data_only FINETUNE_GOLD_LOSS_WEIGHT=2.0 FINETUNE_PSEUDO_LOSS_WEIGHT=1.0"
+
+make check-finetune-data $COMMON
+make finetune-smoke $COMMON
+make check-finetune-smoke $COMMON
+make finetune-train $COMMON
+```
+
+两个倍率必须为有限正数；不能把 replay 倍率设为 `0` 来绕过 mandatory replay。倍率变化属于新的训练实验，不要求重新制作 Gold/replay 或重新 `finetune-curate`。
+
 ## 11. 三种 profile
 
 ### 11.1 data_only

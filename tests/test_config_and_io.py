@@ -4,7 +4,10 @@ import unittest
 from pathlib import Path
 
 from hand_landmarker.config import load_config
-from hand_landmarker.contracts import effective_head_weights
+from hand_landmarker.contracts import (
+    effective_head_weights,
+    normalize_supervision_tier_loss_weights,
+)
 from hand_landmarker.io_utils import resolve_record_image
 from hand_landmarker.runtime import decode_hand_outputs, normalize_runtime_config
 from hand_landmarker.training import _guard_training_outputs
@@ -48,6 +51,21 @@ class IoContractTests(unittest.TestCase):
             "sampling_weight": 999.0,
         }
         self.assertEqual(effective_head_weights(row), (0.025, 0.1, 0.1))
+
+    def test_supervision_tier_multiplier_is_a_true_loss_weight(self):
+        row = {
+            "hand_presence": {"present": True},
+            "handedness": {"label": "Right"},
+            "supervision_tier": "gold",
+        }
+        self.assertEqual(
+            effective_head_weights(row, {"gold": 2.0, "pseudo": 0.5}),
+            (2.0, 2.0, 2.0),
+        )
+        with self.assertRaisesRegex(ValueError, "exactly gold and pseudo"):
+            normalize_supervision_tier_loss_weights({"gold": 1.0})
+        with self.assertRaisesRegex(ValueError, "finite and positive"):
+            normalize_supervision_tier_loss_weights({"gold": 1.0, "pseudo": 0.0})
 
 
 class RuntimeConfigContractTests(unittest.TestCase):

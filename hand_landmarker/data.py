@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from .config import load_config
-from .contracts import effective_head_weights
+from .contracts import effective_head_weights, normalize_supervision_tier_loss_weights
 from .inspect import (
     EVALUATION_SCHEMA,
     DatasetContractError,
@@ -964,6 +964,7 @@ class CanonicalSequence(_KerasSequence):
         augmentation_config: Optional[Mapping[str, Any]] = None,
         training_config: Optional[Mapping[str, Any]] = None,
         sampling_config: Optional[Mapping[str, Any]] = None,
+        losses_config: Optional[Mapping[str, Any]] = None,
         output_order: Sequence[str] = OUTPUT_ORDER,
     ) -> None:
         self.records = [dict(row) for row in records]
@@ -980,6 +981,10 @@ class CanonicalSequence(_KerasSequence):
         self.augmentation = dict(augmentation_config or {})
         self.training_config = dict(training_config or {})
         self.sampling_config = dict(sampling_config or {})
+        self.losses_config = dict(losses_config or {})
+        self.supervision_tier_loss_weights = normalize_supervision_tier_loss_weights(
+            self.losses_config.get("supervision_tier_weights")
+        )
         self.output_order = tuple(str(value) for value in output_order)
         if self.output_order != OUTPUT_ORDER:
             raise DatasetContractError(
@@ -1276,7 +1281,10 @@ class CanonicalSequence(_KerasSequence):
             landmark_targets.append(points.reshape(42).astype(np.float32))
             presence_targets.append([1.0 if present else 0.0])
             handedness_targets.append([float(handedness_value) if handedness_known else 0.0])
-            presence_weight, landmark_weight, handedness_weight = effective_head_weights(row)
+            tier_weights = self.supervision_tier_loss_weights if self.training else None
+            presence_weight, landmark_weight, handedness_weight = effective_head_weights(
+                row, tier_weights
+            )
             presence_weights.append(float(presence_weight))
             landmark_weights.append(float(landmark_weight))
             handedness_weights.append(float(handedness_weight))
@@ -1351,6 +1359,7 @@ class CanonicalSequence(_KerasSequence):
             "epoch_size_resolution": self.epoch_resolution,
             "epoch_type_plan": self.sampler.last_epoch_plan,
             "definition": self.sampler.report(),
+            "supervision_tier_loss_weights": dict(self.supervision_tier_loss_weights),
         }
 
 
@@ -1453,6 +1462,7 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
         augmentation_config=cfg.get("augmentation", {}),
         training_config=training_cfg,
         sampling_config=sampling_cfg,
+        losses_config=cfg.get("losses", {}),
         output_order=cfg.get("model", {}).get("output_order", OUTPUT_ORDER),
     )
 

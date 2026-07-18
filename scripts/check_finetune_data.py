@@ -16,6 +16,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from hand_landmarker.config import load_config, resolve_path
+from hand_landmarker.contracts import (
+    effective_head_weights,
+    normalize_supervision_tier_loss_weights,
+)
 from hand_landmarker.finetune_curation import verify_finetune_curation_manifest
 from hand_landmarker.finetune_source import (
     validate_finetune_source,
@@ -25,6 +29,83 @@ from hand_landmarker.finetune_source import (
 from hand_landmarker.io_utils import read_jsonl, sha256_file
 from hand_landmarker.io_utils import write_json
 from hand_landmarker.data import WeightedStratifiedSampler
+
+
+def _loss_weighting_report(
+    config: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    sampled: Sequence[int],
+    batch_sizes: Sequence[int],
+    gold_fraction: float,
+) -> Dict[str, Any]:
+    """Expose tier loss multipliers separately from sampling proportions."""
+
+    tier_weights = normalize_supervision_tier_loss_weights(
+        (config.get("losses") or {}).get("supervision_tier_weights")
+    )
+    nominal_mass = {
+        "gold": gold_fraction * tier_weights["gold"],
+        "pseudo": (1.0 - gold_fraction) * tier_weights["pseudo"],
+    }
+    nominal_total = sum(nominal_mass.values())
+    nominal_fraction = {
+        tier: value / nominal_total for tier, value in nominal_mass.items()
+    }
+
+    heads = ("hand_flag", "landmarks", "handedness")
+    aggregate = {head: {"gold": 0.0, "pseudo": 0.0} for head in heads}
+    per_batch = {head: {"gold": [], "pseudo": []} for head in heads}
+    cursor = 0
+    for batch_size in batch_sizes:
+        batch_mass = {head: {"gold": 0.0, "pseudo": 0.0} for head in heads}
+        for record_index in sampled[cursor : cursor + batch_size]:
+            row = rows[int(record_index)]
+            tier = str(row.get("supervision_tier") or "").lower()
+            if tier not in tier_weights:
+                raise ValueError("Unsupported supervision tier in finetune epoch plan")
+            presence, landmarks, handedness = effective_head_weights(row, tier_weights)
+            values = {
+                "hand_flag": presence,
+                "landmarks": landmarks,
+                "handedness": handedness,
+            }
+            for head, value in values.items():
+                aggregate[head][tier] += value
+                batch_mass[head][tier] += value
+        for head in heads:
+            total = sum(batch_mass[head].values())
+            if total <= 0.0:
+                raise ValueError("Finetune epoch plan has an unsupervised {} batch".format(head))
+            for tier in ("gold", "pseudo"):
+                per_batch[head][tier].append(batch_mass[head][tier] / total)
+        cursor += batch_size
+    if cursor != len(sampled):
+        raise RuntimeError("Loss-weight report did not cover the epoch plan")
+
+    aggregate_fraction = {}
+    mean_batch_fraction = {}
+    for head in heads:
+        total = sum(aggregate[head].values())
+        aggregate_fraction[head] = {
+            tier: aggregate[head][tier] / total for tier in ("gold", "pseudo")
+        }
+        mean_batch_fraction[head] = {
+            tier: sum(per_batch[head][tier]) / len(per_batch[head][tier])
+            for tier in ("gold", "pseudo")
+        }
+    return {
+        "configured_supervision_tier_weights": tier_weights,
+        "sampling_gold_fraction": gold_fraction,
+        "nominal_tier_loss_mass_fraction": nominal_fraction,
+        "epoch0_effective_head_weight_mass": aggregate,
+        "epoch0_effective_head_weight_mass_fraction": aggregate_fraction,
+        "epoch0_mean_per_batch_head_weight_fraction": mean_batch_fraction,
+        "interpretation": (
+            "tier multipliers affect Loss sample weights; gold_fraction and sampling_weight "
+            "affect selection only; actual gradient contribution also depends on per-record "
+            "errors and head coefficients"
+        ),
+    }
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -163,6 +244,9 @@ def _sampling_gate(config: Mapping[str, Any], rows: Any) -> Dict[str, Any]:
         "tail_batch_records": tail_records,
         "sampler_definition": sampler.report(),
         "epoch0_plan": sampler.last_epoch_plan,
+        "loss_weighting": _loss_weighting_report(
+            config, rows, sampled, batch_sizes, gold_fraction
+        ),
     }
 
 

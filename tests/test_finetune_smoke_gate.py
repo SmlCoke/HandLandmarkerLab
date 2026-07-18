@@ -8,14 +8,31 @@ from unittest import mock
 from hand_landmarker.io_utils import sha256_file, write_json, write_jsonl
 from scripts.check_finetune_smoke import (
     FIXED_GATE,
+    FIXED_SMOKE_TYPE_FRACTIONS,
     _EXPECTED_INTERFACE,
     _jsonable,
+    _metric_head_weights,
     compare_smoke_and_full_configs,
     validate_epoch_plan_coverage,
     validate_smoke_snapshot,
     verify_curation_binding,
     verify_smoke_run_provenance,
 )
+
+
+class SmokeRuntimeWeightTests(unittest.TestCase):
+    def test_metric_weights_follow_semantic_mapping_order(self):
+        weights = {
+            "hand_flag": "flag",
+            "structure": "structure",
+            "landmarks": "points",
+            "handedness": "side",
+        }
+        self.assertEqual(
+            _metric_head_weights(weights), ("points", "flag", "side")
+        )
+        with self.assertRaisesRegex(ValueError, "missing"):
+            _metric_head_weights({"landmarks": 1, "hand_flag": 1})
 
 
 def _full_config(root: Path):
@@ -76,7 +93,23 @@ def _full_config(root: Path):
                 "patience": 8,
             },
         },
-        "sampling": {"epoch_size": 12000},
+        "sampling": {
+            "epoch_size": 12000,
+            "sample_type_fractions_by_tier": {
+                "gold": {
+                    "POS_RUNTIME": 0.70,
+                    "POS_LOW_PALM": 0.20,
+                    "NEG_RUNTIME_CANDIDATE": 0.07,
+                    "NEG_LOW_PALM_CANDIDATE": 0.03,
+                },
+                "pseudo": {
+                    "POS_RUNTIME": 0.72,
+                    "POS_LOW_PALM": 0.18,
+                    "NEG_RUNTIME_CANDIDATE": 0.06,
+                    "NEG_LOW_PALM_CANDIDATE": 0.04,
+                },
+            },
+        },
         "losses": {
             "landmarks": {"name": "huber", "delta": 0.05, "coefficient": 20.0},
             "hand_flag": {
@@ -103,10 +136,14 @@ def _smoke_config(root: Path):
     value["data"]["labels"] = str(root / "snapshot" / "05_labels" / "smoke.jsonl")
     value["training"]["epochs"] = 300
     value["training"]["batch_size"] = 32
+    value["training"]["optimizer"]["learning_rate"] = 1.0e-3
     for component in ("checkpoint", "learning_rate_schedule", "early_stopping"):
         value["training"][component]["monitor"] = "total_loss"
         value["training"][component]["mode"] = "min"
     value["sampling"]["epoch_size"] = 256
+    value["sampling"]["sample_type_fractions_by_tier"] = copy.deepcopy(
+        FIXED_SMOKE_TYPE_FRACTIONS
+    )
     value["augmentation"]["enabled"] = False
     value["validation"]["enabled"] = False
     value["outputs"]["run_dir"] = str(root / "smoke_run")
@@ -199,9 +236,14 @@ class FinetuneSmokeConfigDiffTests(unittest.TestCase):
             smoke["training"]["early_stopping"]["patience"] = 60
             with self.assertRaisesRegex(ValueError, "non-permitted"):
                 compare_smoke_and_full_configs(smoke, _full_config(root))
+
+            smoke = _smoke_config(root)
+            smoke["sampling"]["sample_type_fractions_by_tier"]["gold"]["POS_RUNTIME"] = 0.34
+            with self.assertRaisesRegex(ValueError, "fixed balanced"):
+                compare_smoke_and_full_configs(smoke, _full_config(root))
             smoke = _smoke_config(root)
             smoke["training"]["optimizer"]["learning_rate"] = 2e-5
-            with self.assertRaisesRegex(ValueError, "non-permitted"):
+            with self.assertRaisesRegex(ValueError, "learning rate"):
                 compare_smoke_and_full_configs(smoke, _full_config(root))
 
 

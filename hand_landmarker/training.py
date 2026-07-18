@@ -24,7 +24,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .config import resolve_path
-from .contracts import STRUCTURAL_BONES, validate_model_checkpoint_stage
+from .contracts import (
+    STRUCTURAL_BONES,
+    normalize_supervision_tier_loss_weights,
+    validate_model_checkpoint_stage,
+)
 from .io_utils import sha256_file, write_json
 
 
@@ -224,6 +228,7 @@ def _validate_loss_config(config: Mapping[str, Any]) -> Dict[str, Dict[str, Any]
             raise ValueError("{} uses a sigmoid model output; from_logits must be false".format(semantic))
     if not bool(losses.get("honor_record_loss_weights", True)):
         raise ValueError("losses.honor_record_loss_weights must remain true for canonical labels")
+    normalize_supervision_tier_loss_weights(losses.get("supervision_tier_weights"))
     return normalized
 
 

@@ -130,26 +130,48 @@ make prepare-finetune-gold-selection \
   GOLD_ENABLE_SOURCE_IDS=<id-a>,<id-b>,<id-c>
 
 make finetune-curate HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_PROFILE=<profile>
-make check-finetune-data HAND_FINETUNE_ID=<finetune-data-id>
+make check-finetune-data \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_EXPERIMENT_ID=<experiment-id> \
+  FINETUNE_PROFILE=<profile> \
+  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
+  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
 make inspect-finetune HAND_FINETUNE_ID=<finetune-data-id>
 
 make finetune-smoke \
   HAND_FINETUNE_ID=<finetune-data-id> \
   FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile>
+  FINETUNE_PROFILE=<profile> \
+  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
+  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
 make check-finetune-smoke \
   HAND_FINETUNE_ID=<finetune-data-id> \
   FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile>
+  FINETUNE_PROFILE=<profile> \
+  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
+  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
 make finetune-train \
   HAND_FINETUNE_ID=<finetune-data-id> \
   FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile>
+  FINETUNE_PROFILE=<profile> \
+  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
+  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
 make eval-val-finetune FINETUNE_EXPERIMENT_ID=<experiment-id>
 make infer-finetune FINETUNE_EXPERIMENT_ID=<experiment-id>
 ```
 
 同一数据快照比较多个 profile 时，保持 `HAND_FINETUNE_ID` 不变，每个候选使用新的 `FINETUNE_EXPERIMENT_ID`。
+
+`training.gold_fraction` 是每批 Gold 的**抽样占比**；上面两个 `*_LOSS_WEIGHT` 才是进入 Loss 的 Gold/pseudo 倍率，二者不要混淆。默认 `1.0:1.0`。改变倍率时换新 `FINETUNE_EXPERIMENT_ID`，并在 data gate、smoke、smoke gate、正式训练四条命令中始终传同一组值。查看：
+
+```bash
+python -m json.tool \
+  /root/autodl-tmp/TrainFab/HLML-3.0/hand_landmarker_runs/<experiment-id>/finetune_data_gate.json
+```
+
+重点读取 `sampling.loss_weighting.configured_supervision_tier_weights` 和 `epoch0_effective_head_weight_mass_fraction`。倍率必须大于 0；不能把 mandatory replay 设为 0。若要让 Gold 的逐样本 Loss 倍率为 pseudo 的两倍，把四条命令中的值统一改成 `FINETUNE_GOLD_LOSS_WEIGHT=2.0 FINETUNE_PSEUDO_LOSS_WEIGHT=1.0`；无需重做数据快照。
+
+补充：finetune smoke 内部固定使用正/负均衡 overfit 抽样和 smoke-only 较快学习率，以便 256 ROI 同时检验三个输出 head；正式训练的抽样与学习率仍以 `train_finetune.yaml` 和 data gate 为准，不要手工覆盖 smoke 的内部探针配置。
 
 ## 7. 比较、Test 和导出
 

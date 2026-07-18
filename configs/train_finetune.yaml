@@ -124,6 +124,10 @@ sampling:
   honor_record_sampling_weight: true
 
 losses:
+  # True loss multipliers; independent of training.gold_fraction and sampling_weight.
+  supervision_tier_weights:
+    gold: "${FINETUNE_GOLD_LOSS_WEIGHT:-1.0}"
+    pseudo: "${FINETUNE_PSEUDO_LOSS_WEIGHT:-1.0}"
   landmarks: {name: huber, delta: 0.05, coefficient: 20.0}
   hand_flag: {name: binary_crossentropy, from_logits: false, coefficient: 0.25}
   handedness: {name: binary_crossentropy, from_logits: false, coefficient: 0.02}

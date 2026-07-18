@@ -213,7 +213,37 @@ def validate_label_record(row: Mapping[str, Any], split: str = "train") -> List[
     return errors
 
 
-def effective_head_weights(row: Mapping[str, Any]) -> Tuple[float, float, float]:
+def normalize_supervision_tier_loss_weights(
+    value: Any = None,
+) -> Dict[str, float]:
+    """Return the strict Gold/pseudo multipliers used by finetune losses.
+
+    These multipliers are deliberately independent from ``sampling_weight``
+    and ``training.gold_fraction``.  Both tiers must remain active; setting a
+    multiplier to zero would silently bypass the mandatory replay contract.
+    """
+
+    if value is None:
+        return {"gold": 1.0, "pseudo": 1.0}
+    if not isinstance(value, Mapping) or set(value) != {"gold", "pseudo"}:
+        raise ValueError(
+            "losses.supervision_tier_weights must contain exactly gold and pseudo"
+        )
+    normalized = {str(tier): float(weight) for tier, weight in value.items()}
+    for tier, weight in normalized.items():
+        if not math.isfinite(weight) or weight <= 0.0:
+            raise ValueError(
+                "losses.supervision_tier_weights.{} must be finite and positive".format(
+                    tier
+                )
+            )
+    return normalized
+
+
+def effective_head_weights(
+    row: Mapping[str, Any],
+    supervision_tier_weights: Any = None,
+) -> Tuple[float, float, float]:
     """Return presence, landmark, handedness loss weights for a canonical row.
 
     ``sampling_weight`` deliberately does not participate here; it belongs only
@@ -221,6 +251,12 @@ def effective_head_weights(row: Mapping[str, Any]) -> Tuple[float, float, float]
     """
 
     supervision = float(row.get("supervision_loss_weight", 1.0))
+    if supervision_tier_weights is not None:
+        tier_weights = normalize_supervision_tier_loss_weights(supervision_tier_weights)
+        tier = str(row.get("supervision_tier") or "").lower()
+        if tier not in tier_weights:
+            raise ValueError("unsupported supervision_tier for loss weighting: {!r}".format(tier))
+        supervision *= tier_weights[tier]
     presence = (
         float(row.get("hand_presence_loss_weight", 1.0))
         * supervision
