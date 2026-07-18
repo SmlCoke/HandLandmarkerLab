@@ -10,7 +10,7 @@ import math
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, List, Mapping, Sequence
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -57,6 +57,30 @@ def _aggregate_repository_root(aggregate_path: Path) -> Path:
     if not value.is_absolute() or value.is_symlink() or not value.is_dir():
         raise ValueError("Gold aggregate repository root is missing or invalid")
     return value.resolve(strict=True)
+
+
+def _aggregate_gold_sources(
+    aggregate_path: Path,
+    gold_repository_root: Path,
+    allowed_roots: Sequence[Path],
+) -> List[Dict[str, Any]]:
+    """Revalidate every published Gold source frozen by the aggregate."""
+
+    descriptor = _read_json(aggregate_path)
+    result: List[Dict[str, Any]] = []
+    for item in descriptor.get("source_descriptors") or []:
+        if not isinstance(item, Mapping):
+            raise ValueError("Gold aggregate source descriptor row must be an object")
+        relative = Path(str(item.get("path") or ""))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("Gold aggregate source descriptor path is invalid")
+        path = gold_repository_root / relative
+        source = validate_finetune_source(path, allowed_roots)
+        if source["source_kind"] == "pretrain_replay":
+            raise ValueError("Gold aggregate cannot contain a replay source")
+        result.append(source)
+    validate_source_set(result)
+    return result
 
 
 def _sampling_gate(config: Mapping[str, Any], rows: Any) -> Dict[str, Any]:
@@ -288,8 +312,21 @@ def main() -> None:
     if not aggregate_path.is_file() or aggregate_path.is_symlink() or sha256_file(aggregate_path) != str(aggregate_ref.get("sha256") or ""):
         raise ValueError("Gold aggregate changed after curation")
     gold_sources = [source for source in validated_sources if source["source_kind"] != "pretrain_replay"]
+    gold_repository_root = _aggregate_repository_root(aggregate_path)
+    aggregate_gold_sources = _aggregate_gold_sources(
+        aggregate_path, gold_repository_root, allowed_roots
+    )
+    aggregate_gold_by_id = {
+        str(source["source_id"]): source for source in aggregate_gold_sources
+    }
+    for source in gold_sources:
+        aggregate_source = aggregate_gold_by_id.get(str(source["source_id"]))
+        if aggregate_source is None or (
+            str(aggregate_source["path"]), str(aggregate_source["sha256"])
+        ) != (str(source["path"]), str(source["sha256"])):
+            raise ValueError("Enabled Gold source is not bound to the aggregate")
     validate_gold_aggregate(
-        aggregate_path, _aggregate_repository_root(aggregate_path), gold_sources
+        aggregate_path, gold_repository_root, aggregate_gold_sources
     )
 
     smoke = manifest.get("smoke") or {}

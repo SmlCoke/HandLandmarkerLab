@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hand_landmarker.io_utils import sha256_file, write_json
 from scripts.check_finetune_data import (
+    _aggregate_gold_sources,
     _aggregate_repository_root,
     _checkpoint_gate,
     _sampling_gate,
@@ -23,6 +25,46 @@ class FinetuneDataGateCoreTest(unittest.TestCase):
             write_json(aggregate, {"gold_repository_root": "GoldSource"})
             with self.assertRaisesRegex(ValueError, "missing or invalid"):
                 _aggregate_repository_root(aggregate)
+
+    def test_aggregate_gold_sources_include_disabled_published_batches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gold = root / "GoldSource"
+            paths = [
+                gold / "dragon/enabled/published/finetune_source.json",
+                gold / "dragon/disabled/published/finetune_source.json",
+            ]
+            for path in paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{}\n", encoding="utf-8")
+            aggregate = root / "hmlf_gold_aggregate.json"
+            write_json(
+                aggregate,
+                {
+                    "source_descriptors": [
+                        {"path": str(path.relative_to(gold))} for path in paths
+                    ]
+                },
+            )
+            values = {
+                path: {
+                    "source_id": path.parts[-3],
+                    "dataset_id": path.parts[-3],
+                    "source_kind": "external_gold",
+                    "path": str(path.resolve()),
+                    "sha256": path.parts[-3][0] * 64,
+                }
+                for path in paths
+            }
+            with mock.patch(
+                "scripts.check_finetune_data.validate_finetune_source",
+                side_effect=lambda path, *_: dict(values[path]),
+            ):
+                sources = _aggregate_gold_sources(aggregate, gold, [root])
+            self.assertEqual(
+                ["enabled", "disabled"],
+                [source["source_id"] for source in sources],
+            )
 
     def test_checkpoint_gate_authenticates_complete_multitask_best(self):
         with tempfile.TemporaryDirectory() as directory:
