@@ -215,6 +215,14 @@ make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 
 `DatesetFab/GoldSource/<domain>/<source-id>/published/finetune_source.json` 是单个批次的认证描述符。GoldSource 与训练版本无关；新 finetune 不再 seed 或复制旧 Gold，而是直接发现所有 published 子批次。HLMF 的 `hmlf_gold_merged` 是本次训练版本可重建的全仓认证聚合。
 
+Gold 的“发布”和“本次训练启用”不是一回事：
+
+- 发布把一批人工真值变成长期、不可变、跨实验复用的 GoldSource；
+- HLMF finalize 认证并聚合仓库中 **全部** published 批次，用于统一做重复、冲突和 SHA 检查；
+- HLML 随后通过 `gold_selection.yaml` 对每个 source ID 明确写 `enabled: true/false`；只有 true 的批次进入本次训练。
+
+因此发布 Dragon 或新录制 Gold 不需要在语义上绑定某个 finetune ID。命令里的 `HAND_FINETUNE_ID` 只是让 selection 类任务找到对应 mining request，以及指定本次聚合快照的输出工作区；published Gold 未来仍可被其他数据 ID 直接复用。disabled 也只是本次不用，不会删除或贬低该批数据。
+
 ### 8.4 在 HLML 建立 replay 和 disagreement score pool
 
 ```bash
@@ -230,6 +238,16 @@ make prepare-finetune-sources HAND_FINETUNE_ID=<finetune-data-id>
 3. 用当前 student checkpoint 对可选 positive 推理；
 4. 把 student 预测与 MediaPipe teacher 伪标签比较，生成逐 ROI disagreement 分数池。
 
+程序不是按目录名猜 replay，也不要求人工列出 replay source ID。默认规则写在 `configs/prepare_finetune_sources.yaml` 的 `selection.pretrain_replay`：
+
+1. 输入只能来自已经认证的 pretrain source registry 和当前 pretrain ID 的 curated multitask 标签；registry 把每行恢复到 DatesetFab 的真实来源路径并校验图片 SHA；
+2. 所有人工确认的背景负样本都必须保留；若其数量已经超过 `max_records`，程序直接失败，不能偷偷丢负例；
+3. 在剩余容量中确定性抽取 positive。默认总上限为 10000，positive 的 `POS_RUNTIME` / `POS_LOW_PALM` 目标比例为 0.75 / 0.25，并在各原始 dataset 间分配；
+4. 排序和抽样使用固定 salt，相同配置、标签与 SHA 会得到相同 replay；
+5. replay descriptor 保存父 pretrain ID、标签、真实图片路径和内容 SHA，之后由 finetune 门控再次认证。
+
+如确实要改变 replay 上限或正样本比例，应先修改上述配置，再用一个全新的 `HAND_FINETUNE_ID` 运行；不要修改已经生成的 replay JSONL。replay 是强制来源，不能像 Gold 一样通过选择清单关闭。
+
 这里的 **student** 是正在训练的自研 Hand Landmarker，**teacher** 是 MediaPipe 伪标签。分歧大只表示两者对同一 ROI 的关键点差别大，因此适合人工复核；不代表 teacher 必然正确。查看：
 
 ```text
@@ -240,6 +258,17 @@ finetune/<id>/mining/prepare_finetune_sources_report.json
 ```
 
 这些产物绑定 checkpoint 和输入 SHA。输入或 checkpoint 变化时应使用新的 finetune 数据 ID 重新建立，不覆盖已有快照。
+
+### 8.5 本轮没有时间标 disagreement/negative-removed 时
+
+这两类都是可选的增量 Gold，不是 finetune 的硬前置。仍然运行一次 `prepare-finetune-sources` 来建立 mandatory replay 和 disagreement 分数池，但可以：
+
+- 不运行 `prepare-finetune-round`；
+- 不在 HLMF 导出新的 disagreement/negative-removed task；
+- 只导入已经完成的 CVAT task；
+- 在 Gold 选择中复用历史 published 困难样本 Gold，或把这些领域全部设为 disabled。
+
+之后照常让 HLMF finalize 全部 published Gold，再冻结本次选择。只要至少一个启用的 Gold 来源满足 Gold 门控，mandatory replay 完整，finetune 就可以继续。自动生成的 disagreement 分数池保留在当前 finetune 工作区，未来要人工处理时应创建新的 round/source ID，不能把未冻结的分数列表手改成训练标签。
 
 ## 9. ROI 多轮 Gold
 
@@ -317,6 +346,28 @@ make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 
 每次增加一轮 Gold 后都重新 finalize；最终聚合会保留所有历史 published 来源并跨轮去重。`source` 是原始真源、`task` 是暂存人工任务、`published` 是认证训练来源，三者不能因文件名相似而混用。Dragon 原始整图/标注与生成 ROI 不同，长期保留 `source + published`；新录制批次也可保留不可再生的 source，但不会长期保留已完成 task。然后返回 HLML。
 
+### 9.5 negative-removed 的多轮做法
+
+如果计划新增这类 Gold，先在 **新的 finetune 数据 ID** 下修改 `configs/prepare_finetune_sources.yaml`：
+
+```yaml
+selection:
+  negative_removed:
+    enabled: true
+    max_items: <本轮数量>
+```
+
+再运行 `make prepare-finetune-sources`。程序从当前 pretrain 的 `negative_removed_manifest.jsonl` 选择候选，并排除历史 Gold、pending task、Val/Test 及同轮其他 request。随后用新的批次 ID 在 HLMF 执行：
+
+```bash
+make export_finetune_gold \
+  HAND_FINETUNE_ID=<finetune-data-id> \
+  FINETUNE_SOURCE_ID=negative_removed_gold_<round-id> \
+  FINETUNE_SOURCE_MODE=selection_subset
+```
+
+CVAT/import/published 流程与 disagreement 完全相同。每次新增批次必须换 source ID；旧 `negative_removed_gold_*` 保留并参与未来排重，绝不能为了重新抽样而删除宝贵的历史 Gold。默认配置关闭该候选任务，是为了避免每次 finetune 都无意中产生额外人工工作，而不是禁止复用历史 published 数据。
+
 ## 10. Finetune curate 和门控
 
 ### 10.1 按 Gold source_id 决定是否参与训练
@@ -338,7 +389,28 @@ make prepare-finetune-gold-selection \
 
 选择清单存在即拒绝重建。只有在所有计划 Gold 已发布、HLMF 聚合完成后生成；需要改变来源组合时使用新的 `HAND_FINETUNE_ID`。输出报告的 `source_selection_manifest`、`source_selection` 和 `disabled_source_rows` 会说明每个批次的最终决定。
 
-### 10.2 Curate、检查和可视化
+### 10.2 从 GoldSource 到最终训练 JSONL 的完整聚合顺序
+
+按下面的固定顺序操作，不能把“聚合”和“选择”颠倒：
+
+1. HLMF 对每个已完成人工复核的 task 执行 import，得到各自 `published/finetune_source.json`；未标完的 task 不发布，也不参与训练。
+2. HLMF 执行 `make finalize_train_finetune HAND_FINETUNE_ID=<id>`，扫描并认证 GoldSource 中全部 published descriptor，把去重后的全仓 Gold 写到 `finetune/<id>/hmlf_gold_merged/`。
+3. HLML 已通过 `make prepare-finetune-sources` 在同一 `<id>` 下建立唯一 mandatory replay。
+4. HLML 执行 `make prepare-finetune-gold-selection ... GOLD_ENABLE_SOURCE_IDS=...`，为聚合中每个 Gold 批次冻结 true/false 决定。
+5. `make check-finetune-sources` 同时认证全仓 Gold 聚合、逐批选择清单和 replay；来源缺失、新增、descriptor 改动或 SHA 不一致都会失败。
+6. `make finetune-curate` 只抽取 enabled Gold，再和 replay 合并；跨来源相同标签去重，Gold 与 replay 重合时保留 Gold。
+7. `check-finetune-data` 和 `inspect-finetune` 通过后，生成的 `train_finetune_merged/<id>/05_labels/hand_training_labels_finetune.jsonl` 才是训练直接读取的冻结标签。
+
+对应数据流：
+
+```text
+GoldSource 全部 published --HLMF认证--> hmlf_gold_merged --逐source启用/禁用--┐
+pretrain curated + registry --确定性选择--> mandatory replay --------------┤
+                                                                           v
+                                                            finetune-curate 冻结训练集
+```
+
+### 10.3 Curate、检查和可视化
 
 ```bash
 make finetune-curate HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_PROFILE=<profile>

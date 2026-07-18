@@ -207,9 +207,13 @@ def main() -> None:
         )
         prediction_path = mining / "teacher_student" / "train_predictions.jsonl"
         prediction_report_path = mining / "teacher_student" / "prediction_report.json"
+        restored_geometry_path = (
+            mining / "teacher_student" / "restored_geometry_labels.jsonl"
+        )
         if c_enabled:
+            write_jsonl(restored_geometry_path, restored_geometry)
             predict_training_labels(
-                input_paths["pretrain_geometry_labels"],
+                restored_geometry_path,
                 input_paths["geometry_checkpoint"],
                 config.get("model") or {},
                 prediction_path,
@@ -220,6 +224,13 @@ def main() -> None:
                 prediction_report = json.load(handle)
             prediction_report["output"]["path"] = str(
                 (mining_target / "teacher_student" / "train_predictions.jsonl").resolve()
+            )
+            prediction_report["input"]["labels"] = str(
+                (
+                    mining_target
+                    / "teacher_student"
+                    / "restored_geometry_labels.jsonl"
+                ).resolve()
             )
             write_json(prediction_report_path, prediction_report)
             prediction_rows = [clean_row(row) for row in read_jsonl(prediction_path)]
@@ -271,6 +282,7 @@ def main() -> None:
         }
         c_report["inputs"] = ({
             "geometry_labels_sha256": sha256_file(input_paths["pretrain_geometry_labels"]),
+            "restored_geometry_labels_sha256": sha256_file(restored_geometry_path),
             "predictions_sha256": sha256_file(prediction_path),
             "checkpoint_sha256": sha256_file(input_paths["geometry_checkpoint"]),
             "source_registry_sha256": sha256_file(registry_path),
@@ -318,6 +330,14 @@ def main() -> None:
                 **(
                     {"source_registry_report_sha256": registry_report["sha256"]}
                     if registry_report else {}
+                ),
+                **(
+                    {
+                        "restored_geometry_labels_sha256": sha256_file(
+                            restored_geometry_path
+                        )
+                    }
+                    if c_enabled else {}
                 ),
             },
             "selectors": {"negative_removed": b_report, "teacher_student": c_report},
