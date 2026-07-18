@@ -102,6 +102,7 @@ class FinetuneCurationCoreTest(unittest.TestCase):
                 "source_kind": "external_gold",
                 "path": str(dragon_path),
                 "sha256": "d" * 64,
+                "descriptor": {"sampling": {"source_weight": 0.5}},
             },
             recorded_path: {
                 "source_id": "new_recorded_r01",
@@ -109,6 +110,7 @@ class FinetuneCurationCoreTest(unittest.TestCase):
                 "source_kind": "new_recorded_gold",
                 "path": str(recorded_path),
                 "sha256": "n" * 64,
+                "descriptor": {"sampling": {"source_weight": 1.5}},
             },
             replay_path: {
                 "source_id": "pretrain_replay",
@@ -116,6 +118,7 @@ class FinetuneCurationCoreTest(unittest.TestCase):
                 "source_kind": "pretrain_replay",
                 "path": str(replay_path),
                 "sha256": "r" * 64,
+                "descriptor": {},
             },
         }
         with mock.patch(
@@ -136,6 +139,10 @@ class FinetuneCurationCoreTest(unittest.TestCase):
         self.assertEqual(
             ["new_recorded_r01"],
             [source["source_id"] for source in loaded["gold"]],
+        )
+        self.assertEqual(
+            {"sampling": {"source_weight": 1.5}},
+            loaded["gold"][0]["descriptor"],
         )
         decisions = {row["source_id"]: row for row in loaded["source_selection"]}
         self.assertEqual("source_disabled", decisions["dragon_batch"]["reason"])

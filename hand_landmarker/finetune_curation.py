@@ -393,7 +393,12 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
         role = kind_to_role.get(str(source["source_kind"]))
         if role is None:
             raise ValueError("Discovered Gold kind has no configured role: {}".format(source["source_kind"]))
-        source.update(_gold_repository_entry(gold_root, path, source))
+        repository_entry = _gold_repository_entry(gold_root, path, source)
+        # validate_finetune_source() returns the parsed JSON object under
+        # ``descriptor``.  The repository entry also calls its relative path
+        # ``descriptor`` for the selection-manifest schema, so merging the two
+        # mappings would replace the parsed object with a string.
+        source["domain"] = repository_entry["domain"]
         source["role"] = role
         gold_all.append(source)
     source_enabled, source_selection, selection_manifest = _gold_source_selection(
