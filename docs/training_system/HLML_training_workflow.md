@@ -36,7 +36,7 @@ HAND_FINETUNE_ID=<finetune-data-id>
 ```text
 DatesetFab/
 ├── PretrainSource/   # 原图、00～03 和 pseudo 标签
-├── GoldSource/       # domain/source-id/{source,task,published}
+├── GoldSource/       # domain/source-id；task 是待标态，published 是发布态
 └── eval_sources/     # 固定 Val/Test 真源
 ```
 
@@ -308,14 +308,14 @@ make export_finetune_gold \
   FINETUNE_SOURCE_MODE=selection_subset
 ```
 
-HLMF 为每个批次生成 `GoldSource/<domain>/<source-id>/task/qc/cvat_job_plan.json`。人工按计划在 CVAT 完成完整 21 点和 handedness，或明确标 `no_hand` / `ignore_for_training`；返回的完整 XML 放入同一批次的 `task/reviewed.xml`。
+HLMF 为每个批次生成 `GoldSource/<domain>/<source-id>/task/qc/cvat_job_plan.json`。人工按计划在 CVAT 完成完整 21 点和 handedness，或明确标 `no_hand` / `ignore_for_training`；返回的完整 XML 放入同一批次的 `task/reviewed.xml`。严格 import 成功后，必要审计文件移入 `published/audit/`，task 自动删除；此后该批次只以 published 身份参与聚合和训练。
 
 ```bash
 make import_finetune_gold HAND_FINETUNE_ID=<finetune-data-id>
 make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
-每次增加一轮 Gold 后都重新 finalize；最终聚合会保留所有历史来源并跨轮去重。然后返回 HLML。
+每次增加一轮 Gold 后都重新 finalize；最终聚合会保留所有历史 published 来源并跨轮去重。`source` 是原始真源、`task` 是暂存人工任务、`published` 是认证训练来源，三者不能因文件名相似而混用。Dragon 原始整图/标注与生成 ROI 不同，长期保留 `source + published`；新录制批次也可保留不可再生的 source，但不会长期保留已完成 task。然后返回 HLML。
 
 ## 10. Finetune curate 和门控
 

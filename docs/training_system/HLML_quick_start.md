@@ -115,6 +115,8 @@ make import_finetune_gold HAND_FINETUNE_ID=<finetune-data-id>
 make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 ```
 
+import 成功后 task 自动退休，最终批次应看到 `published/finetune_source.json`，不应继续保留同批 task。Dragon 保留 `source + published`；其他目录按 source/task/published 的真实语义判断，不手工合并或复制。
+
 ## 6. Finetune 候选
 
 先为 GoldSource 中每个 published 子批次冻结显式决定。列出的 ID 启用，其余逐项写为禁用；replay 没有开关且必须存在：

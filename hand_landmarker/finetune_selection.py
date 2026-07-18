@@ -81,7 +81,7 @@ def gold_repository_occupied(root: Path) -> Tuple[Set[str], Dict[str, Any]]:
         raise ValueError("Gold repository is missing or a symlink: {}".format(root))
     patterns = (
         "*/*/published/03_reviewed/hand_landmarks_reviewed.jsonl",
-        "*/*/task/02_roi_crops/hand_roi_crops_manifest.jsonl",
+        "*/*/task/hand_roi_crops_manifest.jsonl",
     )
     paths = sorted({path for pattern in patterns for path in root.glob(pattern)}, key=str)
     tokens: Set[str] = set()

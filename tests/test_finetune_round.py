@@ -27,7 +27,7 @@ class FinetuneRoundTests(unittest.TestCase):
             root = Path(directory) / "GoldSource"
             for source_id, count in (("r01", 2), ("r02", 3)):
                 task = root / "new_recorded_gold" / source_id / "task"
-                manifest = task / "02_roi_crops/hand_roi_crops_manifest.jsonl"
+                manifest = task / "hand_roi_crops_manifest.jsonl"
                 write_jsonl(manifest, [{"crop_id": f"{source_id}:{i}"} for i in range(count)])
                 (task / "task_descriptor.json").write_text(
                     json.dumps(
@@ -36,7 +36,7 @@ class FinetuneRoundTests(unittest.TestCase):
                             "source_kind": "new_recorded_gold",
                             "artifacts": {
                                 "manifest": {
-                                    "path": "02_roi_crops/hand_roi_crops_manifest.jsonl"
+                                    "path": "hand_roi_crops_manifest.jsonl"
                                 }
                             },
                         }

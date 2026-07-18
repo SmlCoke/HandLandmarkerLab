@@ -51,7 +51,7 @@ class FinetuneSelectionCoreTest(unittest.TestCase):
     def test_gold_repository_occupied_covers_pending_and_published_batches(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "GoldSource"
-            pending = root / "disagreement_gold/d_r01/task/02_roi_crops/hand_roi_crops_manifest.jsonl"
+            pending = root / "disagreement_gold/d_r01/task/hand_roi_crops_manifest.jsonl"
             published = root / "negative_removed_gold/n_r01/published/03_reviewed/hand_landmarks_reviewed.jsonl"
             write_jsonl(pending, [{"crop_id": "pending", "image_sha256": "a" * 64}])
             write_jsonl(published, [{"global_crop_id": "published", "image_sha256": "b" * 64}])
