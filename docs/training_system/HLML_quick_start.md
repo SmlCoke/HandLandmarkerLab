@@ -117,6 +117,8 @@ make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 
 ## 6. Finetune 候选
 
+先在 `configs/curate_finetune.yaml` 的 `source_selection.gold` 中为需要显式控制的 Gold `source_id` 设置 `true/false`。Replay 没有开关且必须存在。
+
 ```bash
 cd /root/HandLandmarkerLab
 conda activate hand-landmarker-tf29

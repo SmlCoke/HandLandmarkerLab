@@ -320,6 +320,27 @@ make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
 
 ## 10. Finetune curate 和门控
 
+### 10.1 按 Gold source_id 决定是否参与训练
+
+HLMF 的 `hmlf_gold_merged` 始终保留并认证全部 Gold；HLML 在 `configs/curate_finetune.yaml` 中单独决定哪些 source 进入当前训练快照：
+
+```yaml
+source_selection:
+  default_gold_enabled: true
+  gold:
+    <source-id-a>: false
+    <source-id-b>: true
+```
+
+- 未列出的 Gold 使用 `default_gold_enabled`；
+- 列出的键必须是实际发现的 `source_id`，值必须是 YAML 布尔值 `true/false`；
+- disabled source 仍验证 descriptor、标签和聚合 SHA，但其行不进入训练、Gold 权重或 smoke；
+- `pretrain_replay` 不允许写入该表。代码强制 replay role 保持 `enabled: true`、`required: true`，且工作区中必须恰好有一个 replay source。
+
+先冻结 source 开关，再运行 curate。输出报告的 `source_selection` 和 `disabled_source_rows` 会说明每个来源的最终决定。已发布的 curation 快照不会因后来修改配置而自动变化；需要改变来源组合时使用新的 `HAND_FINETUNE_ID`。
+
+### 10.2 Curate、检查和可视化
+
 ```bash
 make finetune-curate HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_PROFILE=<profile>
 make check-finetune-data HAND_FINETUNE_ID=<finetune-data-id>

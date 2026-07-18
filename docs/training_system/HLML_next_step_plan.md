@@ -7,7 +7,7 @@
 - 数据根：`/root/autodl-tmp/DatesetFab`；工作根：`/root/autodl-tmp/TrainFab/HLML-3.0`。
 - pretrain ID：`v3-pretrain-r1`；finetune 数据 ID：`v3-finetune-r1`。
 - geometry smoke 曾跑满并生成 best checkpoint。此前 `pretrain-geometry` 并未真正开始，而是在它的前置 smoke gate 中因新数据结构兼容错误退出；本次服务器部署会保留旧 smoke 备份，并在新 commit 下重跑 smoke/gate。人工只需启动正式 geometry。
-- 现有 Gold 是 `dragon_gold_0716_v1`：5,191 ROI，5,189 可训练、2 ignored。
+- HLMF 中现有 Dragon Gold 是 `dragon_gold_0716_v1`：5,191 ROI，5,189 个标签本身可训练、2 ignored；但它来自 H.264 Main Profile、I420/YUV 4:2:0 视频抽帧 JPEG，与最终无损 TIFF 评测域不一致，因此当前 HLML 配置已将该 source 关闭。数据和认证报告继续保留，只是不进入 finetune。
 - 本轮新增人工 Gold 优先 800；若参与人数不足，在任何 disagreement task 生成前统一冻结为 600。800 方案中 new-recorded 最多 300、disagreement 补余量；600 方案中 new-recorded 最多 200、disagreement 补余量。
 - 必做候选：`data_only` 与 `structure`。只有 structure 明确减少塌缩且 Val 不退化时，才做 `structure_roi_aug`。
 
@@ -168,6 +168,16 @@ make prepare-finetune-round \
 
 HLMF 聚合通过后：
 
+```yaml
+# configs/curate_finetune.yaml（当前已配置）
+source_selection:
+  default_gold_enabled: true
+  gold:
+    dragon_gold_0716_v1: false
+```
+
+本轮 active Gold 由 `new_recorded_gold_r01` 和 `disagreement_gold_r01` 构成；Dragon 不参与权重或训练，replay 仍强制参与。确认配置后：
+
 ```bash
 cd /root/HandLandmarkerLab
 make finetune-curate HAND_FINETUNE_ID=v3-finetune-r1 FINETUNE_PROFILE=data_only
@@ -181,6 +191,13 @@ make inspect-finetune HAND_FINETUNE_ID=v3-finetune-r1
 .../train_finetune_merged/v3-finetune-r1/qc/curation_report.json
 .../train_finetune_merged/v3-finetune-r1/05_labels/hand_training_labels_finetune.jsonl
 ```
+
+在 `curation_report.json` 中确认：
+
+- `source_selection` 对 Dragon 显示 `enabled_for_training=false`、`reason=source_disabled`；
+- `counts.disabled_source_rows` 记录被排除的 Dragon 行数；
+- replay 为 `present_valid`；
+- active Gold 计数只来自本轮两个新 source。
 
 先运行两个 profile 的 smoke；两者都必须通过再正式训练：
 

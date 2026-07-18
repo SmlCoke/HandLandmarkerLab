@@ -36,7 +36,7 @@ HLMF 2.0 已完成真实数据聚合：
 | Val included/ignored | 1,226 / 8 条 |
 | Test included/ignored | 985 / 24 条 |
 | Dragon Gold manifest | 5,191 ROI |
-| Dragon Gold trainable/ignored | 5,189 / 2 ROI |
+| Dragon Gold 标签本身 trainable/ignored | 5,189 / 2 ROI |
 
 主要报告：
 
@@ -58,7 +58,7 @@ HLML-2.0 已完成 `v2-pretrain-r3` multitask 和 `v2-finetune-r1/r2`。历史�
 - 此前 `pretrain-geometry` 在前置 `check-geometry-smoke` 退出，报错为 `KeyError: 0`。根因是 gate 仍以旧列表下标读取 3.0 已改为语义 mapping 的 targets/sample weights；正式 geometry 训练没有启动，也没有生成 `geometry/` run 目录。
 - 本次代码更新修复 gate。由于 smoke provenance 严格绑定 Git commit，服务器部署时将旧 smoke 目录保留为备份，并在新 commit 下重新生成标准 `smoke/`、通过 gate；正式 geometry 仍由人工启动。此前执行的 `eval-val-geometry` 不能视为有效评估，因为正式 geometry checkpoint 尚不存在。
 - 人工 true-negative 复核和 multitask 正式训练尚未完成。
-- `v3-finetune-r1` 目前只有 Dragon Gold；新录制和 disagreement 的 600/800 总预算任务尚未冻结和标注。
+- `v3-finetune-r1` 当前已保存并认证 Dragon Gold，但 `configs/curate_finetune.yaml` 已按 source ID 禁用它：视频 H.264/I420 及 JPEG 抽帧域与板端无损 TIFF 评测域不一致。它不会进入后续 finetune；新录制和 disagreement 的 600/800 总预算任务尚未冻结和标注。
 - `data_only`、`structure`、可选 `structure_roi_aug` 候选尚未正式训练。
 - 新模型的 ONNX 导出、厂商工具链转换和上板验收尚未执行。
 

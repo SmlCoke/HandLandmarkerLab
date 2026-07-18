@@ -1,10 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hand_landmarker.finetune_curation import (
     _check_leakage,
+    _gold_source_selection,
     _gold_weights,
+    _load_sources,
     merge_gold_over_replay,
     verify_finetune_curation_manifest,
 )
@@ -27,6 +30,121 @@ def sample(identity, dataset, tier="gold", sample_type="POS_RUNTIME", image_sha=
 
 
 class FinetuneCurationCoreTest(unittest.TestCase):
+    def _source_config(self):
+        return {
+            "gold_source_descriptor_root": "/gold",
+            "replay_source_descriptor_root": "/replay",
+            "sources": {
+                "dragon_gold": {
+                    "discover_kind": "external_gold",
+                    "enabled": "auto",
+                    "required": False,
+                },
+                "new_recorded_gold": {
+                    "discover_kind": "new_recorded_gold",
+                    "enabled": "auto",
+                    "required": False,
+                },
+                "pretrain_replay": {
+                    "discover_kind": "pretrain_replay",
+                    "enabled": True,
+                    "required": True,
+                },
+            },
+            "source_selection": {
+                "default_gold_enabled": True,
+                "gold": {"dragon_batch": False},
+            },
+        }
+
+    def test_load_sources_authenticates_disabled_gold_but_excludes_it_from_training(self):
+        config = self._source_config()
+        dragon_path = Path("/gold/dragon/finetune_source.json")
+        recorded_path = Path("/gold/recorded/finetune_source.json")
+        replay_path = Path("/replay/pretrain/finetune_source.json")
+        values = {
+            dragon_path: {
+                "source_id": "dragon_batch",
+                "dataset_id": "dragon",
+                "source_kind": "external_gold",
+            },
+            recorded_path: {
+                "source_id": "new_recorded_r01",
+                "dataset_id": "recorded",
+                "source_kind": "new_recorded_gold",
+            },
+            replay_path: {
+                "source_id": "pretrain_replay",
+                "dataset_id": "replay",
+                "source_kind": "pretrain_replay",
+            },
+        }
+        with mock.patch(
+            "hand_landmarker.finetune_curation._discover_descriptors",
+            side_effect=[[dragon_path, recorded_path], [replay_path]],
+        ), mock.patch(
+            "hand_landmarker.finetune_curation.validate_finetune_source",
+            side_effect=lambda path, *_: dict(values[path]),
+        ) as validate, mock.patch(
+            "hand_landmarker.finetune_curation.validate_source_set"
+        ):
+            loaded = _load_sources(config, [Path("/")])
+        self.assertEqual(3, validate.call_count)
+        self.assertEqual(
+            ["dragon_batch", "new_recorded_r01"],
+            [source["source_id"] for source in loaded["gold_all"]],
+        )
+        self.assertEqual(
+            ["new_recorded_r01"],
+            [source["source_id"] for source in loaded["gold"]],
+        )
+        decisions = {row["source_id"]: row for row in loaded["source_selection"]}
+        self.assertEqual("source_disabled", decisions["dragon_batch"]["reason"])
+        self.assertFalse(decisions["dragon_batch"]["enabled_for_training"])
+
+    def test_replay_role_cannot_be_disabled(self):
+        config = self._source_config()
+        config["sources"]["pretrain_replay"]["enabled"] = False
+        config["source_selection"]["gold"] = {}
+        with mock.patch(
+            "hand_landmarker.finetune_curation._discover_descriptors",
+            side_effect=[[], []],
+        ), self.assertRaisesRegex(ValueError, "must be enabled=true"):
+            _load_sources(config, [Path("/")])
+
+    def test_gold_sources_can_be_enabled_individually(self):
+        sources = [
+            {"source_id": "dragon_batch", "dataset_id": "dragon", "source_kind": "external_gold"},
+            {"source_id": "new_recorded_r01", "dataset_id": "recorded", "source_kind": "new_recorded_gold"},
+        ]
+        selected, report = _gold_source_selection(
+            {
+                "source_selection": {
+                    "default_gold_enabled": True,
+                    "gold": {"dragon_batch": False},
+                }
+            },
+            sources,
+        )
+        self.assertEqual(
+            {"dragon_batch": False, "new_recorded_r01": True}, selected
+        )
+        self.assertEqual(
+            {"dragon_batch": "explicit", "new_recorded_r01": "default"},
+            {row["source_id"]: row["selection_origin"] for row in report},
+        )
+
+    def test_gold_source_selection_rejects_unknown_ids_and_non_boolean_values(self):
+        sources = [{"source_id": "known", "dataset_id": "known", "source_kind": "external_gold"}]
+        with self.assertRaisesRegex(ValueError, "undiscovered"):
+            _gold_source_selection(
+                {"source_selection": {"gold": {"typo": False}}}, sources
+            )
+        with self.assertRaisesRegex(ValueError, "must be boolean"):
+            _gold_source_selection(
+                {"source_selection": {"gold": {"known": "false"}}}, sources
+            )
+
     def test_training_manifest_verifier_authenticates_labels(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

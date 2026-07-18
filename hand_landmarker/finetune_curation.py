@@ -172,6 +172,54 @@ def _role_configuration(config: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
     return roles
 
 
+def _gold_source_selection(
+    config: Mapping[str, Any], sources: Sequence[Mapping[str, Any]]
+) -> Tuple[Dict[str, bool], List[Dict[str, Any]]]:
+    raw = config.get("source_selection") or {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("source_selection must be an object")
+    unknown_options = sorted(set(raw) - {"default_gold_enabled", "gold"})
+    if unknown_options:
+        raise ValueError(
+            "Unknown source_selection options: {}".format(unknown_options)
+        )
+    default = raw.get("default_gold_enabled", True)
+    if not isinstance(default, bool):
+        raise ValueError("source_selection.default_gold_enabled must be boolean")
+    overrides = raw.get("gold") or {}
+    if not isinstance(overrides, Mapping):
+        raise ValueError("source_selection.gold must be an object of source_id: boolean")
+    discovered = {str(source["source_id"]) for source in sources}
+    unknown_ids = sorted(set(str(key) for key in overrides) - discovered)
+    if unknown_ids:
+        raise ValueError(
+            "source_selection.gold references undiscovered Gold source IDs: {}".format(
+                unknown_ids
+            )
+        )
+    for source_id, enabled in overrides.items():
+        if not isinstance(enabled, bool):
+            raise ValueError(
+                "source_selection.gold.{} must be boolean".format(source_id)
+            )
+    selected = {
+        source_id: bool(overrides.get(source_id, default)) for source_id in discovered
+    }
+    report = [
+        {
+            "source_id": str(source["source_id"]),
+            "dataset_id": str(source["dataset_id"]),
+            "source_kind": str(source["source_kind"]),
+            "enabled_by_source": selected[str(source["source_id"])],
+            "selection_origin": (
+                "explicit" if str(source["source_id"]) in overrides else "default"
+            ),
+        }
+        for source in sorted(sources, key=lambda value: str(value["source_id"]))
+    ]
+    return selected, report
+
+
 def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> Dict[str, Any]:
     gold_root = resolve_path(str(config.get("gold_source_descriptor_root") or ""), config)
     replay_root = resolve_path(str(config.get("replay_source_descriptor_root") or ""), config)
@@ -184,6 +232,7 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
         kind_to_role[kind] = role
 
     gold: List[Dict[str, Any]] = []
+    gold_all: List[Dict[str, Any]] = []
     role_status: Dict[str, Dict[str, Any]] = {}
     gold_paths = _discover_descriptors(gold_root)
     # A malformed descriptor under the enabled discovery root is always fatal:
@@ -195,11 +244,29 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
         role = kind_to_role.get(str(source["source_kind"]))
         if role is None:
             raise ValueError("Discovered Gold kind has no configured role: {}".format(source["source_kind"]))
-        enabled = roles[role].get("enabled", "auto")
-        if enabled is False:
-            continue
         source["role"] = role
-        gold.append(source)
+        gold_all.append(source)
+    source_enabled, source_selection = _gold_source_selection(config, gold_all)
+    selection_by_id = {row["source_id"]: row for row in source_selection}
+    for source in gold_all:
+        role_enabled = roles[str(source["role"])].get("enabled", "auto") is not False
+        enabled = role_enabled and source_enabled[str(source["source_id"])]
+        selection_by_id[str(source["source_id"])].update(
+            {
+                "role": str(source["role"]),
+                "enabled_by_role": role_enabled,
+                "enabled_for_training": enabled,
+                "reason": (
+                    "enabled"
+                    if enabled
+                    else "role_disabled"
+                    if not role_enabled
+                    else "source_disabled"
+                ),
+            }
+        )
+        if enabled:
+            gold.append(source)
     for role, role_cfg in roles.items():
         if str(role_cfg["discover_kind"]) == "pretrain_replay":
             continue
@@ -214,7 +281,13 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
                 raise ValueError("Required Gold source role is absent: {}".format(role))
         else:
             status = "present_valid"
-        role_status[role] = {"status": status, "source_count": len(present)}
+        all_for_role = [source for source in gold_all if source.get("role") == role]
+        role_status[role] = {
+            "status": status,
+            "source_count": len(present),
+            "discovered_source_count": len(all_for_role),
+            "disabled_source_count": len(all_for_role) - len(present),
+        }
 
     replay_paths = _discover_descriptors(replay_root)
     replay_cfgs = [
@@ -225,8 +298,8 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
     if len(replay_cfgs) != 1:
         raise ValueError("Exactly one pretrain_replay role must be configured")
     replay_role, replay_cfg = replay_cfgs[0]
-    if replay_cfg.get("enabled", True) is False:
-        replay_paths = []
+    if replay_cfg.get("enabled") is not True or replay_cfg.get("required") is not True:
+        raise ValueError("pretrain_replay must be enabled=true and required=true")
     replay = [validate_finetune_source(path, allowed_roots) for path in replay_paths]
     if any(source["source_kind"] != "pretrain_replay" for source in replay):
         raise ValueError("Only pretrain_replay may appear under sources/replay")
@@ -238,8 +311,15 @@ def _load_sources(config: Mapping[str, Any], allowed_roots: Sequence[Path]) -> D
         "status": "present_valid" if replay else "absent_optional",
         "source_count": len(replay),
     }
-    validate_source_set([*gold, *replay])
-    return {"gold": gold, "replay": replay, "roles": roles, "role_status": role_status}
+    validate_source_set([*gold_all, *replay])
+    return {
+        "gold": gold,
+        "gold_all": gold_all,
+        "replay": replay,
+        "roles": roles,
+        "role_status": role_status,
+        "source_selection": source_selection,
+    }
 
 
 def _source_by_dataset(sources: Sequence[Mapping[str, Any]]) -> Dict[str, Mapping[str, Any]]:
@@ -287,9 +367,13 @@ def _validate_gold_row(row: Mapping[str, Any], source: Mapping[str, Any]) -> Non
         raise ValueError("Gold row sampling_bucket does not match tier/sample_type")
 
 
-def _ignored_rows(aggregate: Mapping[str, Any]) -> List[Dict[str, Any]]:
+def _ignored_rows(
+    aggregate: Mapping[str, Any], active_dataset_ids: Set[str]
+) -> List[Dict[str, Any]]:
     result = []
     for row in aggregate["excluded"]:
+        if str(row.get("dataset_id") or "") not in active_dataset_ids:
+            continue
         if bool(row.get("ignore_for_training")) or str(row.get("selection_action")) == "drop_ignore":
             value = clean_row(row)
             value["finetune_curation_action"] = "EXCLUDE_IGNORE"
@@ -560,7 +644,9 @@ def check_finetune_sources_from_config(config: Union[Mapping[str, Any], str, Pat
     allowed_roots = _resolved_allowed_roots(cfg)
     loaded = _load_sources(cfg, allowed_roots)
     gate = cfg.get("gate") or {}
-    if bool(gate.get("require_replay", True)) and len(loaded["replay"]) != 1:
+    if gate.get("require_replay", True) is not True:
+        raise ValueError("gate.require_replay must remain true")
+    if len(loaded["replay"]) != 1:
         raise ValueError("Finetune curation requires exactly one replay source")
     if bool(gate.get("require_at_least_one_gold_source", True)) and not loaded["gold"]:
         raise ValueError("Finetune curation requires at least one Gold source")
@@ -568,15 +654,25 @@ def check_finetune_sources_from_config(config: Union[Mapping[str, Any], str, Pat
     if not loaded["gold"]:
         raise ValueError("Gold aggregate cannot be validated without Gold source descriptors")
     finetune_root = resolve_path(str(cfg.get("gold_source_descriptor_root")), cfg).parent.parent
-    aggregate = validate_gold_aggregate(aggregate_path, finetune_root, loaded["gold"])
+    aggregate = validate_gold_aggregate(aggregate_path, finetune_root, loaded["gold_all"])
     dataset_sources = _source_by_dataset(loaded["gold"])
+    all_dataset_sources = _source_by_dataset(loaded["gold_all"])
+    active_dataset_ids = set(dataset_sources)
     gold_rows: List[Dict[str, Any]] = []
+    disabled_rows: List[Dict[str, Any]] = []
     for raw in aggregate["included"]:
         row = clean_row(raw)
         dataset_id = str(row.get("dataset_id") or "")
+        if dataset_id not in all_dataset_sources:
+            raise ValueError(
+                "Aggregate Gold row references an undiscovered dataset: {}".format(dataset_id)
+            )
+        if dataset_id not in active_dataset_ids:
+            row["finetune_curation_action"] = "EXCLUDE_SOURCE_DISABLED"
+            row["disabled_source_id"] = str(all_dataset_sources[dataset_id]["source_id"])
+            disabled_rows.append(row)
+            continue
         source = dataset_sources.get(dataset_id)
-        if source is None:
-            raise ValueError("Aggregate Gold row references an undiscovered dataset: {}".format(dataset_id))
         _validate_gold_row(row, source)
         crop_path, digest = _check_row_crop(row, allowed_roots)
         row["crop_path"] = crop_path
@@ -592,7 +688,14 @@ def check_finetune_sources_from_config(config: Union[Mapping[str, Any], str, Pat
         raise ValueError("Gold positives {} are below configured minimum {}".format(gold_positive, minimum))
     _assert_unique_tokens(gold_rows, "Gold aggregate")
 
-    ignored = _ignored_rows(aggregate)
+    ignored = _ignored_rows(aggregate, active_dataset_ids)
+    for raw in aggregate["excluded"]:
+        dataset_id = str(raw.get("dataset_id") or "")
+        if dataset_id in all_dataset_sources and dataset_id not in active_dataset_ids:
+            row = clean_row(raw)
+            row["finetune_curation_action"] = "EXCLUDE_SOURCE_DISABLED"
+            row["disabled_source_id"] = str(all_dataset_sources[dataset_id]["source_id"])
+            disabled_rows.append(row)
     _assert_unique_tokens(ignored, "Gold ignored")
     included_tokens = {token for row in gold_rows for token in _identity_tokens(row)}
     ignored_overlap = [_canonical_id(row) for row in ignored if included_tokens & _identity_tokens(row)]
@@ -632,12 +735,14 @@ def check_finetune_sources_from_config(config: Union[Mapping[str, Any], str, Pat
         "gold_rows": gold_rows,
         "replay_rows": kept_replay,
         "ignored_rows": ignored,
+        "disabled_rows": disabled_rows,
         "superseded_rows": superseded,
         "final_rows": final_rows,
         "smoke_rows": smoke,
         "smoke_selection": smoke_selection,
         "reports": {
             "source_roles": loaded["role_status"],
+            "source_selection": loaded["source_selection"],
             "source_weights": weight_report,
             "leakage": leakage_report,
             "smoke": smoke_report,
@@ -720,7 +825,12 @@ def curate_finetune_from_config(
             for row in checked["final_rows"]
         ]
         excluded = sorted(
-            [*checked["ignored_rows"], *checked["superseded_rows"]], key=_canonical_id
+            [
+                *checked["ignored_rows"],
+                *checked["disabled_rows"],
+                *checked["superseded_rows"],
+            ],
+            key=_canonical_id,
         )
         write_jsonl(labels_path, checked["final_rows"])
         write_jsonl(ignored_path, checked["ignored_rows"])
@@ -738,10 +848,12 @@ def curate_finetune_from_config(
                 "replay_after_gold_override": len(checked["replay_rows"]),
                 "included": len(checked["final_rows"]),
                 "ignored": len(checked["ignored_rows"]),
+                "disabled_source_rows": len(checked["disabled_rows"]),
                 "superseded_by_gold": len(checked["superseded_rows"]),
                 "smoke": len(checked["smoke_rows"]),
             },
             "source_roles": checked["reports"]["source_roles"],
+            "source_selection": checked["reports"]["source_selection"],
             "source_weights": checked["reports"]["source_weights"],
             "leakage": checked["reports"]["leakage"],
             "smoke": checked["reports"]["smoke"],

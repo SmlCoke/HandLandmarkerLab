@@ -12,6 +12,14 @@ allowed_crop_roots:
   - "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/finetune/${HAND_FINETUNE_ID:-v3-finetune-r1}"
   - "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
 
+# Gold sources are authenticated even when disabled, but disabled rows do not
+# enter training, weighting or smoke. Unlisted Gold sources follow the default.
+# Replay is deliberately absent from this map because it is mandatory.
+source_selection:
+  default_gold_enabled: true
+  gold:
+    dragon_gold_0716_v1: false
+
 sources:
   dragon_gold:
     discover_kind: external_gold
