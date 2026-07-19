@@ -527,6 +527,41 @@ class CanonicalDataContractTests(unittest.TestCase):
         gold = sum(records[int(index)]["supervision_tier"] == "gold" for index in indices)
         self.assertEqual(40, gold)
 
+    def test_weighted_sampler_cached_cdf_matches_repeated_numpy_choice(self):
+        records = []
+        for sample_type in SAMPLE_TYPE_FRACTIONS:
+            for index, weight in enumerate((0.5, 1.0, 2.5)):
+                records.append(
+                    {
+                        "crop_id": "{}-{}".format(sample_type, index),
+                        "supervision_tier": "pseudo",
+                        "sample_type": sample_type,
+                        "sampling_bucket": "pseudo:{}".format(sample_type),
+                        "sampling_weight": weight,
+                    }
+                )
+        sampler = WeightedStratifiedSampler(
+            records,
+            "pretrain",
+            seed=29,
+            sample_type_fractions=SAMPLE_TYPE_FRACTIONS,
+        )
+        actual = sampler.sample(64, epoch=3, stream=7)
+
+        rng = np.random.RandomState((29 + 3 * 1000003 + 7 * 9176) % (2 ** 32 - 1))
+        quota = sampler.batch_quota(64)
+        cells = []
+        for tier in sampler._tier_order():
+            for sample_type in sampler.quota_tie_break:
+                cells.extend([(tier, sample_type)] * int(quota[tier][sample_type]))
+        rng.shuffle(cells)
+        expected = []
+        for tier, sample_type in cells:
+            indices = np.asarray(sampler.groups[tier][sample_type], dtype=np.int64)
+            weights = sampler.weights[indices]
+            expected.append(int(rng.choice(indices, p=weights / float(np.sum(weights)))))
+        np.testing.assert_array_equal(np.asarray(expected, dtype=np.int64), actual)
+
     def test_pretrain_auto_epoch_size_uses_exact_batch_quota_and_row_weights(self):
         fractions = {
             "POS_RUNTIME": 0.72,

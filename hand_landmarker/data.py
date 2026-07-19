@@ -331,6 +331,22 @@ class WeightedStratifiedSampler:
             if "gold" not in self.groups or "pseudo" not in self.groups:
                 raise DatasetContractError("Finetune requires both gold and pseudo supervision tiers")
         self._validate_groups()
+        self._cell_indices: Dict[Tuple[str, str], np.ndarray] = {}
+        self._cell_cdfs: Dict[Tuple[str, str], np.ndarray] = {}
+        for tier, type_groups in self.groups.items():
+            for sample_type, values in type_groups.items():
+                indices = np.asarray(values, dtype=np.int64)
+                if not len(indices):
+                    continue
+                weights = self.weights[indices]
+                total = float(np.sum(weights))
+                if total <= 0.0:
+                    continue
+                cdf = np.cumsum(weights / total, dtype=np.float64)
+                cdf[-1] = 1.0
+                key = (tier, sample_type)
+                self._cell_indices[key] = indices
+                self._cell_cdfs[key] = cdf
 
     def _validate_groups(self) -> None:
         if np.any(~np.isfinite(self.weights)) or np.any(self.weights < 0.0):
@@ -789,12 +805,18 @@ class WeightedStratifiedSampler:
         rng: np.random.RandomState,
     ) -> np.ndarray:
         result = np.empty((len(cells),), dtype=np.int64)
-        for position, (tier, sample_type) in enumerate(cells):
-            indices = np.asarray(self.groups[tier][sample_type], dtype=np.int64)
-            row_weights = self.weights[indices]
-            result[position] = int(
-                rng.choice(indices, p=row_weights / float(np.sum(row_weights)))
-            )
+        if not cells:
+            return result
+        uniforms = rng.random_sample(len(cells))
+        positions_by_cell: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        for position, cell in enumerate(cells):
+            positions_by_cell[cell].append(position)
+        for cell, positions in positions_by_cell.items():
+            indices = self._cell_indices[cell]
+            cdf = self._cell_cdfs[cell]
+            position_array = np.asarray(positions, dtype=np.int64)
+            selected = np.searchsorted(cdf, uniforms[position_array], side="right")
+            result[position_array] = indices[selected]
         return result
 
     def sample_epoch(self, batch_sizes: Sequence[int], epoch: int = 0) -> np.ndarray:
@@ -894,12 +916,7 @@ class WeightedStratifiedSampler:
             for sample_type in CANONICAL_SAMPLE_TYPES:
                 cells.extend([(tier, sample_type)] * int(quota[tier][sample_type]))
         rng.shuffle(cells)
-        result = np.empty((count,), dtype=np.int64)
-        for position, (tier, sample_type) in enumerate(cells):
-            indices = np.asarray(self.groups[tier][sample_type], dtype=np.int64)
-            row_weights = self.weights[indices]
-            result[position] = int(rng.choice(indices, p=row_weights / float(np.sum(row_weights))))
-        return result
+        return self._sample_cells(cells, rng)
 
     def report(self) -> Dict[str, Any]:
         return {
