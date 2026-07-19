@@ -37,11 +37,14 @@ make finalize_test
 cd /root/HandLandmarkerLab
 conda activate hand-landmarker-tf29
 
+# 可选：只允许某一代 dataset_id 参与完整来源自动留出；不挑单张图片
+export HAND_PRETRAIN_HOLDOUT_DATASET_PATTERN='.*-<batch-token>-.*'
 make pretrain-curate
 # 人工复制 negative_candidates 为 negative_reviewed，删除含手/模糊图片
 make pretrain-curate-reviewed
 
 make inspect-geometry
+make audit-geometry-sampling
 make inspect-geometry-smoke
 make pretrain-geometry-smoke
 make check-geometry-smoke
@@ -56,6 +59,8 @@ make eval-val-multitask
 make infer-multitask
 make export-multitask
 ```
+
+`pretrain-curate` 自动生成 5,000～10,000 个完整来源隔离的 teacher holdout；`audit-geometry-sampling` 必须通过后才能正式训练。正式 geometry 的每个 epoch 是固定数量随机抽样。训练始终逐轮维护 `best` 和 `last`，并按配置每 5 epoch 在 `geometry/checkpoints/periodic/` 保存一次当前权重与恢复状态。
 
 ## 4. 建立 Finetune Gold 和 replay
 

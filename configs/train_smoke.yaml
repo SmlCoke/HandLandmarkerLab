@@ -9,6 +9,8 @@ data:
 training:
   epochs: 300
   batch_size: 32
+  max_wall_time_hours: null
+  periodic_checkpoint: {enabled: false}
   checkpoint: {monitor: landmark_mae, mode: min}
   learning_rate_schedule:
     monitor: landmark_mae
@@ -26,6 +28,9 @@ losses:
 
 augmentation: {enabled: false}
 validation: {enabled: false}
+
+sampling:
+  epoch_size: 128
 
 outputs:
   run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/smoke"

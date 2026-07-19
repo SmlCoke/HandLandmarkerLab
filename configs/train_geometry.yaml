@@ -53,7 +53,9 @@ targets:
   handedness_encoding: {Left: 0, Right: 1, unknown: null}
 
 training:
-  epochs: 160
+  # 102400 samples / epoch gives 1600 optimizer steps. The hard epoch cap is
+  # secondary to max_wall_time_hours, which safely stops an overnight run.
+  epochs: 80
   batch_size: 64
   steps_per_epoch: null
   initial_checkpoint: null
@@ -67,18 +69,25 @@ training:
     beta_2: 0.999
     epsilon: 1.0e-7
   checkpoint: {monitor: val_landmark_mae, mode: min}
+  periodic_checkpoint:
+    enabled: true
+    every_epochs: 5
+    max_to_keep: 16
+  max_wall_time_hours: 10.0
   learning_rate_schedule:
     name: reduce_on_plateau
     monitor: val_landmark_mae
     mode: min
     factor: 0.5
     patience: 5
+    min_delta: 0.0002
     min_learning_rate: 1.0e-6
   early_stopping:
     enabled: true
     monitor: val_landmark_mae
     mode: min
     patience: 20
+    min_delta: 0.0002
     restore_best_weights: true
 
 sampling:
@@ -87,6 +96,8 @@ sampling:
   tier_key: supervision_tier
   bucket_key: sampling_bucket
   sample_type_key: sample_type
+  dataset_key: dataset_id
+  source_group_key: source_group_id
   weight_key: sampling_weight
   sample_type_fractions:
     POS_RUNTIME: 0.75
@@ -96,9 +107,12 @@ sampling:
   quota_rounding: largest_remainder
   quota_tie_break: [POS_RUNTIME, POS_LOW_PALM, NEG_RUNTIME_CANDIDATE, NEG_LOW_PALM_CANDIDATE]
   require_all_tier_sample_type_cells: true
-  epoch_size: null
+  epoch_size: 102400
   replacement: true
   honor_record_sampling_weight: true
+  source_audit:
+    maximum_expected_dataset_fraction: 0.15
+    maximum_expected_source_group_draws: 25.0
 
 losses:
   landmarks: {name: huber, delta: 0.05, coefficient: 20.0}
@@ -125,8 +139,23 @@ validation:
   batch_size: 128
   every_epochs: 1
 
+teacher_holdout:
+  enabled: true
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_teacher_holdout_labels.jsonl"
+  minimum_positive_records: 5000
+  maximum_positive_records: 10000
+
 inspection:
+  sampling_audit_report: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/qc/geometry_sampling_audit.json"
   compare_datasets:
+    teacher_holdout:
+      labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/train_pretrain_curated/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/05_labels/hand_teacher_holdout_labels.jsonl"
+      crop_path_key: crop_path
+      path_policy: canonical_crop_path_only
+      require_schema_version: train_finalize_v1
+      require_training_stage: pretrain
+      image_size: [256, 256]
+      channels: 1
     test:
       data_root: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}"
       labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/test_merged/05_labels/hand_test_labels.jsonl"

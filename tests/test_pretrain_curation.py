@@ -8,6 +8,7 @@ from unittest import mock
 from hand_landmarker.inspect import DatasetContractError, audit_canonical_dataset
 from hand_landmarker.io_utils import read_jsonl, sha256_file, write_jsonl
 from hand_landmarker.pretrain_curation import (
+    _select_teacher_holdout_datasets,
     curate_pretrain_from_config,
     verify_curation_manifest,
 )
@@ -142,6 +143,86 @@ class PretrainCurationTests(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
         return manifest
+
+    def test_teacher_holdout_selects_complete_datasets_deterministically(self):
+        rows = []
+        for dataset_id, count in (("old", 8), ("new-a", 3), ("new-b", 4), ("new-c", 6)):
+            rows.extend({"dataset_id": dataset_id} for _ in range(count))
+        config = {
+            "enabled": True,
+            "eligible_dataset_pattern": "new-.*",
+            "minimum_positive_records": 5,
+            "target_positive_records": 7,
+            "maximum_positive_records": 8,
+            "selection_salt": "unit-test",
+        }
+        first, report = _select_teacher_holdout_datasets(rows, config)
+        second, _ = _select_teacher_holdout_datasets(rows, config)
+        self.assertEqual(first, second)
+        self.assertEqual({"new-a", "new-b"}, first)
+        self.assertEqual(7, report["selected_positive_records"])
+        self.assertEqual(14, report["remaining_training_positive_records"])
+
+    def test_teacher_holdout_fails_when_whole_sources_cannot_meet_bounds(self):
+        rows = [{"dataset_id": "new-a"} for _ in range(11)]
+        with self.assertRaisesRegex(ValueError, "no eligible dataset"):
+            _select_teacher_holdout_datasets(
+                rows,
+                {
+                    "enabled": True,
+                    "eligible_dataset_pattern": "new-.*",
+                    "minimum_positive_records": 5,
+                    "target_positive_records": 7,
+                    "maximum_positive_records": 8,
+                },
+            )
+
+    def test_curated_teacher_holdout_is_disjoint_and_authenticated(self):
+        extra_paths = []
+        for index in range(5, 9):
+            path = self.images / "{}.png".format(index)
+            path.write_bytes(("image-{}".format(index)).encode("ascii"))
+            extra_paths.append(path)
+        rows = [
+            _positive("train-1", extra_paths[0], group="train-frame-1"),
+            _positive("train-2", extra_paths[1], group="train-frame-2"),
+            _positive("holdout-1", extra_paths[2], group="holdout-frame-1"),
+            _positive("holdout-2", extra_paths[3], group="holdout-frame-2"),
+        ]
+        rows[0]["dataset_id"] = "train-source"
+        rows[1]["dataset_id"] = "train-source"
+        rows[2]["dataset_id"] = "holdout-source"
+        rows[3]["dataset_id"] = "holdout-source"
+        write_jsonl(self.labels, rows)
+        output = self.root / "automatic-holdout"
+        config = self._config(output)
+        config["curation"]["teacher_holdout"] = {
+            "enabled": True,
+            "eligible_dataset_pattern": "holdout-.*",
+            "minimum_positive_records": 2,
+            "target_positive_records": 2,
+            "maximum_positive_records": 2,
+            "selection_salt": "integration-test",
+        }
+        report = curate_pretrain_from_config(config)
+        train = read_jsonl(
+            output / "05_labels" / "hand_training_labels_pretrain_landmarks.jsonl"
+        )
+        holdout = read_jsonl(
+            output / "05_labels" / "hand_teacher_holdout_labels.jsonl"
+        )
+        self.assertEqual({"train-source"}, {row["dataset_id"] for row in train})
+        self.assertEqual({"holdout-source"}, {row["dataset_id"] for row in holdout})
+        self.assertEqual(2, report["counts"]["teacher_holdout_positives"])
+        self.assertEqual(
+            ["holdout-source"], report["teacher_holdout"]["selected_dataset_ids"]
+        )
+        with (output / "qc" / "sha256_manifest.json").open(encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        relative = "05_labels/hand_teacher_holdout_labels.jsonl"
+        self.assertEqual(
+            sha256_file(output / relative), manifest["artifacts"][relative]["sha256"]
+        )
 
     def test_positive_snapshot_and_negative_quarantine_are_persisted(self):
         output = self.root / "curated"

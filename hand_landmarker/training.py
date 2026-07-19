@@ -20,6 +20,7 @@ import platform
 import random
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
@@ -713,6 +714,11 @@ def _build_callbacks(
             )
 
     multitask_monitor = dict(training.get("multitask_monitor") or {})
+    periodic = dict(training.get("periodic_checkpoint") or {})
+    wall_time_value = training.get("max_wall_time_hours")
+    wall_time_hours = None if wall_time_value in (None, "") else float(wall_time_value)
+    if wall_time_hours is not None and (not math.isfinite(wall_time_hours) or wall_time_hours <= 0.0):
+        raise ValueError("training.max_wall_time_hours must be a finite positive number or null")
 
     class DerivedMultitaskMonitor(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch: int, logs: Optional[MutableMapping[str, Any]] = None) -> None:
@@ -782,6 +788,85 @@ def _build_callbacks(
                 },
             )
 
+    class PeriodicCheckpoint(tf.keras.callbacks.Callback):
+        def __init__(self):
+            super().__init__()
+            self.every_epochs = int(periodic.get("every_epochs", 5))
+            self.max_to_keep = int(periodic.get("max_to_keep", 16))
+            if self.every_epochs <= 0 or self.max_to_keep <= 0:
+                raise ValueError(
+                    "training.periodic_checkpoint every_epochs and max_to_keep must be positive"
+                )
+            configured = outputs.get("periodic_checkpoints_dir")
+            self.directory = (
+                resolve_path(str(configured), config)
+                if configured
+                else best_path.parent / "periodic"
+            )
+            self.directory.mkdir(parents=True, exist_ok=True)
+            self.manager = tf.train.CheckpointManager(
+                training_checkpoint,
+                directory=str(self.directory / "training_state"),
+                max_to_keep=self.max_to_keep,
+                checkpoint_name="ckpt",
+            )
+
+        def on_epoch_end(self, epoch: int, logs: Optional[Mapping[str, Any]] = None) -> None:
+            completed_epoch = int(epoch) + 1
+            if completed_epoch % self.every_epochs:
+                return
+            epoch_variable.assign(completed_epoch)
+            weights_path = self.directory / "epoch_{:04d}.weights.h5".format(
+                completed_epoch
+            )
+            _atomic_save_weights(trainer.backbone, weights_path)
+            state_checkpoint = self.manager.save(checkpoint_number=completed_epoch)
+            metrics = {}
+            for key, value in sorted((logs or {}).items()):
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    continue
+                metrics[str(key)] = number if math.isfinite(number) else None
+            write_json(
+                weights_path.with_suffix(".json"),
+                {
+                    "completed_epoch": completed_epoch,
+                    "weights_path": str(weights_path),
+                    "training_state_checkpoint": state_checkpoint,
+                    "metrics": metrics,
+                    "saved_at_utc": _utc_now(),
+                },
+            )
+
+    class MaxWallTime(tf.keras.callbacks.Callback):
+        def __init__(self, hours: float):
+            super().__init__()
+            self.hours = float(hours)
+            self.started = None
+
+        def on_train_begin(self, logs=None) -> None:
+            del logs
+            self.started = time.monotonic()
+
+        def on_epoch_end(self, epoch: int, logs: Optional[Mapping[str, Any]] = None) -> None:
+            del logs
+            if self.started is None:
+                return
+            elapsed_seconds = time.monotonic() - self.started
+            if elapsed_seconds < self.hours * 3600.0:
+                return
+            self.model.stop_training = True
+            write_json(
+                logs_dir / "wall_time_stop.json",
+                {
+                    "completed_epoch": int(epoch) + 1,
+                    "configured_hours": self.hours,
+                    "elapsed_seconds": elapsed_seconds,
+                    "stopped_at_utc": _utc_now(),
+                },
+            )
+
     class FailOnNonFinite(tf.keras.callbacks.Callback):
         @staticmethod
         def _check(where: str, logs: Optional[Mapping[str, Any]]) -> None:
@@ -828,6 +913,10 @@ def _build_callbacks(
             BackboneCheckpoint(last_path, save_best_only=False),
         ]
     )
+    if bool(periodic.get("enabled", False)):
+        callbacks.append(PeriodicCheckpoint())
+    if wall_time_hours is not None:
+        callbacks.append(MaxWallTime(wall_time_hours))
     if str(lr_schedule.get("name", "reduce_on_plateau")).lower() != "reduce_on_plateau":
         raise ValueError("Only training.learning_rate_schedule.name=reduce_on_plateau is supported")
     callbacks.append(
@@ -835,6 +924,7 @@ def _build_callbacks(
             monitor=lr_monitor,
             factor=float(lr_schedule.get("factor", 0.5)),
             patience=int(lr_schedule.get("patience", 4)),
+            min_delta=float(lr_schedule.get("min_delta", 1.0e-4)),
             min_lr=float(lr_schedule.get("min_learning_rate", 0.0)),
             cooldown=int(lr_schedule.get("cooldown", 0)),
             mode=lr_mode,

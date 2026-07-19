@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -37,6 +38,7 @@ REVIEW_DECISIONS = {"CONFIRMED_NEGATIVE", "FALSE_NEGATIVE_HAND_VISIBLE", "HOLD"}
 REVIEW_TRANSACTION_SCHEMA = "negative_review_transaction_v1"
 REMOVED_MANIFEST_SCHEMA = "negative_removed_manifest_v1"
 QUARANTINE_MANIFEST_SCHEMA = "negative_quarantine_manifest_v1"
+TEACHER_HOLDOUT_SCHEMA = "pretrain_teacher_holdout_v1"
 
 
 def _config_mapping(config: Union[Mapping[str, Any], str, Path]) -> Dict[str, Any]:
@@ -1472,6 +1474,115 @@ def _counter_dict(values: Iterable[Any]) -> Dict[str, int]:
     return dict(sorted(Counter(str(value) for value in values).items()))
 
 
+def _select_teacher_holdout_datasets(
+    valid_positive_rows: Sequence[Mapping[str, Any]],
+    config: Mapping[str, Any],
+) -> Tuple[set, Dict[str, Any]]:
+    """Select whole datasets for a deterministic teacher-labelled holdout.
+
+    Dataset IDs are the isolation unit because every row from a selected ID,
+    including teacher abstentions, must stay out of all pretrain stages.  A
+    bounded subset-sum search chooses a combination close to the configured
+    target without splitting a source or requiring an operator to pick files.
+    """
+
+    holdout = dict(config or {})
+    enabled = bool(holdout.get("enabled", False))
+    base_report: Dict[str, Any] = {
+        "schema_version": TEACHER_HOLDOUT_SCHEMA,
+        "enabled": enabled,
+        "selection_unit": "dataset_id",
+    }
+    if not enabled:
+        return set(), dict(base_report, status="disabled", selected_dataset_ids=[])
+    if str(holdout.get("selection_unit", "dataset_id")) != "dataset_id":
+        raise ValueError("curation.teacher_holdout.selection_unit must be dataset_id")
+
+    minimum = int(holdout.get("minimum_positive_records", 5000))
+    target = int(holdout.get("target_positive_records", 8192))
+    maximum = int(holdout.get("maximum_positive_records", 10000))
+    if minimum <= 0 or not minimum <= target <= maximum:
+        raise ValueError(
+            "curation.teacher_holdout requires 0 < minimum <= target <= maximum"
+        )
+    salt = str(holdout.get("selection_salt", "pretrain_teacher_holdout_v1"))
+    pattern_text = str(holdout.get("eligible_dataset_pattern", ".*"))
+    try:
+        pattern = re.compile(pattern_text)
+    except re.error as exc:
+        raise ValueError(
+            "curation.teacher_holdout.eligible_dataset_pattern is invalid: {}".format(exc)
+        ) from exc
+
+    counts = Counter(str(row.get("dataset_id") or "") for row in valid_positive_rows)
+    if "" in counts:
+        raise ValueError("Teacher holdout requires dataset_id on every valid positive")
+    eligible = {
+        dataset_id: int(count)
+        for dataset_id, count in counts.items()
+        if pattern.fullmatch(dataset_id) and int(count) <= maximum
+    }
+    if not eligible:
+        raise ValueError(
+            "Teacher holdout has no eligible dataset matching {!r} with at most {} positives".format(
+                pattern_text, maximum
+            )
+        )
+
+    ordered = sorted(
+        eligible,
+        key=lambda dataset_id: hashlib.sha256(
+            (salt + "\0" + dataset_id).encode("utf-8")
+        ).hexdigest(),
+    )
+    combinations: Dict[int, Tuple[str, ...]] = {0: ()}
+    for dataset_id in ordered:
+        count = eligible[dataset_id]
+        for total, selected in sorted(list(combinations.items()), reverse=True):
+            candidate_total = total + count
+            if candidate_total > maximum or candidate_total in combinations:
+                continue
+            combinations[candidate_total] = selected + (dataset_id,)
+    feasible = [total for total in combinations if minimum <= total <= maximum]
+    if not feasible:
+        raise ValueError(
+            "No whole-dataset teacher holdout can satisfy [{}, {}]; eligible positive counts: {}".format(
+                minimum, maximum, dict(sorted(eligible.items()))
+            )
+        )
+
+    def candidate_key(total: int) -> Tuple[Any, ...]:
+        selected = combinations[total]
+        digest = hashlib.sha256(
+            (salt + "\0" + "\0".join(sorted(selected))).encode("utf-8")
+        ).hexdigest()
+        return abs(total - target), 0 if total >= target else 1, digest
+
+    selected_total = min(feasible, key=candidate_key)
+    selected_ids = set(combinations[selected_total])
+    remaining = len(valid_positive_rows) - selected_total
+    if remaining <= 0:
+        raise ValueError("Teacher holdout selection would remove every valid positive")
+    report = dict(
+        base_report,
+        status="ok",
+        eligible_dataset_pattern=pattern_text,
+        selection_salt=salt,
+        minimum_positive_records=minimum,
+        target_positive_records=target,
+        maximum_positive_records=maximum,
+        selected_positive_records=int(selected_total),
+        remaining_training_positive_records=int(remaining),
+        selected_dataset_ids=sorted(selected_ids),
+        selected_positive_records_by_dataset={
+            dataset_id: eligible[dataset_id] for dataset_id in sorted(selected_ids)
+        },
+        eligible_positive_records_by_dataset=dict(sorted(eligible.items())),
+        all_valid_positive_records_by_dataset=dict(sorted(counts.items())),
+    )
+    return selected_ids, report
+
+
 def curate_pretrain_from_config(
     config: Union[Mapping[str, Any], str, Path],
     overwrite: Optional[bool] = None,
@@ -1558,6 +1669,16 @@ def curate_pretrain_from_config(
             )
     if not any(not reasons for reasons in positive_reasons_by_id.values()):
         raise ValueError("Curation produced no valid positive landmark records")
+    valid_positive_rows = [
+        row
+        for row in records
+        if bool((row.get("hand_presence") or {}).get("present", False))
+        and not positive_reasons_by_id[str(row["crop_id"])]
+    ]
+    holdout_dataset_ids, teacher_holdout_report = _select_teacher_holdout_datasets(
+        valid_positive_rows,
+        dict(rules.get("teacher_holdout") or {}),
+    )
 
     overlap_by_id: Dict[str, int] = {}
     for row in records:
@@ -1606,6 +1727,7 @@ def curate_pretrain_from_config(
 
     catalog: List[Dict[str, Any]] = []
     included_positive_source: List[Dict[str, Any]] = []
+    teacher_holdout_source: List[Dict[str, Any]] = []
     confirmed_negative_source: List[Dict[str, Any]] = []
     excluded: List[Dict[str, Any]] = []
     negative_review_queue: List[Dict[str, Any]] = []
@@ -1614,6 +1736,23 @@ def curate_pretrain_from_config(
     for row in records:
         present = bool((row.get("hand_presence") or {}).get("present", False))
         crop_id = str(row["crop_id"])
+        if str(row.get("dataset_id") or "") in holdout_dataset_ids:
+            positive_reasons = list(positive_reasons_by_id.get(crop_id, [])) if present else []
+            reasons = ["AUTOMATIC_TEACHER_HOLDOUT"] + positive_reasons
+            if present and not positive_reasons:
+                action = "HOLDOUT_TEACHER_EVAL"
+            elif present:
+                action = "QUARANTINE_HOLDOUT_POSITIVE"
+            else:
+                action = "EXCLUDE_HOLDOUT_DATASET"
+            value = dict(row)
+            value["pretrain_curation"] = _decision_metadata(action, reasons, source_hash)
+            if action == "HOLDOUT_TEACHER_EVAL":
+                teacher_holdout_source.append(value)
+            excluded.append(value)
+            catalog.append(value)
+            reason_counts.update(reasons)
+            continue
         if present:
             reasons = list(positive_reasons_by_id[crop_id])
             action = "INCLUDE_LANDMARKS" if not reasons else "QUARANTINE_POSITIVE"
@@ -1685,7 +1824,14 @@ def curate_pretrain_from_config(
         image_manifest: List[Dict[str, Any]] = []
         for row in included_positive_source + confirmed_negative_source:
             value, image_entry = _reference_crop(row)
+            image_entry["partition"] = "train"
             referenced_by_id[str(row["crop_id"])] = value
+            image_manifest.append(image_entry)
+        teacher_holdout: List[Dict[str, Any]] = []
+        for row in teacher_holdout_source:
+            value, image_entry = _reference_crop(row)
+            image_entry["partition"] = "teacher_holdout"
+            teacher_holdout.append(value)
             image_manifest.append(image_entry)
         review_referenced: List[Dict[str, Any]] = []
         review_image_manifest: List[Dict[str, Any]] = []
@@ -1707,6 +1853,7 @@ def curate_pretrain_from_config(
         ]
         included_landmarks.sort(key=lambda row: str(row["crop_id"]))
         multitask.sort(key=lambda row: str(row["crop_id"]))
+        teacher_holdout.sort(key=lambda row: str(row["crop_id"]))
         image_manifest.sort(key=lambda row: str(row["crop_id"]))
         review_image_manifest.sort(key=lambda row: str(row["crop_id"]))
         _verify_existing_source_snapshot(
@@ -1736,6 +1883,8 @@ def curate_pretrain_from_config(
         landmarks_path = labels_dir / "hand_training_labels_pretrain_landmarks.jsonl"
         multitask_path = labels_dir / "hand_training_labels_pretrain_multitask.jsonl"
         smoke_path = labels_dir / "hand_training_labels_pretrain_smoke.jsonl"
+        holdout_path = labels_dir / "hand_teacher_holdout_labels.jsonl"
+        holdout_report_path = qc_dir / "teacher_holdout_report.json"
         catalog_path = audit_dir / "pretrain_curation_catalog.jsonl"
         included_path = audit_dir / "included_landmarks.jsonl"
         excluded_path = audit_dir / "excluded_and_held.jsonl"
@@ -1745,6 +1894,8 @@ def curate_pretrain_from_config(
         write_jsonl(landmarks_path, included_landmarks)
         write_jsonl(multitask_path, multitask)
         write_jsonl(smoke_path, smoke)
+        write_jsonl(holdout_path, teacher_holdout)
+        write_json(holdout_report_path, teacher_holdout_report)
         write_jsonl(catalog_path, catalog)
         write_jsonl(included_path, included_landmarks)
         write_jsonl(excluded_path, excluded)
@@ -1756,6 +1907,8 @@ def curate_pretrain_from_config(
             landmarks_path,
             multitask_path,
             smoke_path,
+            holdout_path,
+            holdout_report_path,
             catalog_path,
             included_path,
             excluded_path,
@@ -1823,6 +1976,15 @@ def curate_pretrain_from_config(
                 "decisions_file": str(review_paths["decisions_file"]),
             },
             "negative_review_transaction": authenticated_review_transaction,
+            "teacher_holdout": {
+                "enabled": bool(teacher_holdout_report.get("enabled")),
+                "labels": holdout_path.relative_to(temporary_dir).as_posix(),
+                "positive_records": len(teacher_holdout),
+                "selected_dataset_ids": list(
+                    teacher_holdout_report.get("selected_dataset_ids") or []
+                ),
+                "report": holdout_report_path.relative_to(temporary_dir).as_posix(),
+            },
             "config_path": str(config_path_value) if config_path_value else None,
             "config_sha256": config_hash,
             "output_dir": str(output_dir),
@@ -1859,6 +2021,8 @@ def curate_pretrain_from_config(
             "counts": {
                 "source_records": len(records),
                 "included_landmark_positives": len(included_landmarks),
+                "teacher_holdout_positives": len(teacher_holdout),
+                "teacher_holdout_datasets": len(holdout_dataset_ids),
                 "included_confirmed_negatives": len(confirmed_negative_source),
                 "multitask_records": len(multitask),
                 "excluded_or_held": len(excluded),
@@ -1887,12 +2051,19 @@ def curate_pretrain_from_config(
             "included_by_sample_type": _counter_dict(
                 row.get("sample_type") for row in included_landmarks
             ),
+            "teacher_holdout": teacher_holdout_report,
             "reason_counts": dict(sorted(reason_counts.items())),
             "negative_policy": "unverified teacher negatives are held; only non-conflicting human-confirmed negatives enter multitask",
             "artifacts": {
                 "landmark_labels": str(output_dir / landmarks_path.relative_to(temporary_dir)),
                 "multitask_labels": str(output_dir / multitask_path.relative_to(temporary_dir)),
                 "smoke_labels": str(output_dir / smoke_path.relative_to(temporary_dir)),
+                "teacher_holdout_labels": str(
+                    output_dir / holdout_path.relative_to(temporary_dir)
+                ),
+                "teacher_holdout_report": str(
+                    output_dir / holdout_report_path.relative_to(temporary_dir)
+                ),
                 "catalog": str(output_dir / catalog_path.relative_to(temporary_dir)),
                 "excluded": str(output_dir / excluded_path.relative_to(temporary_dir)),
                 "negative_review_queue": str(output_dir / review_queue_path.relative_to(temporary_dir)),

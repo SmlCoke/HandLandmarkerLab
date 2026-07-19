@@ -39,11 +39,9 @@ finetune 实验 ID:     v3-finetune-final-autopseudo-dataonly-g20-r1
 
 每种失败姿态都录制一段缓慢连续变化。这样即使 MediaPipe 在最困难一帧弃权，相邻较容易角度仍可能提供监督。
 
-### 1.3 留出纯自动 holdout
+### 1.3 程序自动留出 teacher holdout
 
-每名队员至少留出一个完整录制批次，约占其数据的 10%。该批同样跑 MediaPipe，但**不登记到 `configs/finalize_train.yaml`**。不能从同一段连续序列随机抽 10%，必须整段/整场留出。
-
-holdout 只用于检查学生是否学到教师，不需要人工标点。提交时间不够时，至少保留目录，不能把所有图片都塞入 Train。
+所有合格批次都正常运行 HLMF 并登记到 `configs/finalize_train.yaml`，人工不再决定留出哪张图。HLML `pretrain-curate` 会在指定的 0719 来源范围内，以完整 `dataset_id` 为原子，自动组合出 5,000～10,000 个 MediaPipe positive；被选来源的全部记录都不进入 geometry/multitask。这样不会把同一段连续录制随机拆到 Train 和 holdout 两侧。
 
 ## 2. 每个训练批次分别运行 HLMF
 
@@ -112,7 +110,7 @@ grep -c '"present": false' \
 
 ## 3. HLMF 聚合新的 pretrain
 
-在 `/root/HandLandmarksFab/configs/finalize_train.yaml` 中为每个训练批次增加一条 source。每条必须使用不同 `dataset_id`；holdout 批次不要登记。
+在 `/root/HandLandmarksFab/configs/finalize_train.yaml` 中为每个训练批次增加一条 source。每条必须使用不同 `dataset_id`；自动 holdout 来源也正常登记，之后由 HLML 整体隔离。
 
 示例：
 
@@ -161,6 +159,7 @@ conda activate hand-landmarker-tf29
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
 export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-3.0
 export HAND_PRETRAIN_ID=v3-pretrain-final-autopseudo-r1
+export HAND_PRETRAIN_HOLDOUT_DATASET_PATTERN='.*-0719-.*'
 
 make compile
 make test-unit
@@ -219,10 +218,23 @@ make pretrain-curate-reviewed
 
 ```bash
 make inspect-geometry
+make audit-geometry-sampling
 make inspect-geometry-smoke
 ```
 
-数据小于约 120,000 个有效正 ROI 时，保持 `configs/train_geometry.yaml` 的 `sampling.epoch_size: null`。若远超 120,000，先把连续近重复数据在 HLMF source 层减量；不要靠盲目增大 epoch 消化所有相邻帧。
+正式 geometry 固定每个 epoch 随机抽样 102,400 个 ROI（1,600 batch），不再令一个 epoch 等于整份 JSONL。默认最多训练 80 epoch，并在 10 小时墙钟上限到达后的 epoch 边界安全停止；若验证指标连续 20 epoch 不改善，也可以更早停止。
+
+`best` 在每轮验证改善时更新，`last` 每轮更新；另外每 5 epoch 保存一次当时的当前权重和 optimizer 恢复状态：
+
+```text
+hand_landmarker_runs/<HAND_PRETRAIN_ID>/geometry/checkpoints/periodic/
+```
+
+来源/原图审计输出：
+
+```text
+train_pretrain_curated/<HAND_PRETRAIN_ID>/qc/geometry_sampling_audit.json
+```
 
 不改模型结构，按原链路运行：
 
@@ -246,20 +258,20 @@ $HAND_TRAIN_ROOT/hand_landmarker_runs/v3-pretrain-final-autopseudo-r1/
 
 ### 5.1 用未入 Train 的 MediaPipe holdout 检查蒸馏
 
-把 `HOLDOUT_ROOT` 指向第 1.3 节保留并已运行 HLMF autolabel 的整批目录。以下检查不需要人工标签，也不写入数据集：
+使用 `pretrain-curate` 自动生成并由 curation manifest 认证的 holdout 标签。以下检查不需要人工标签，也不写入数据集：
 
 ```bash
-export HOLDOUT_ROOT=/root/autodl-tmp/DatesetFab/PretrainSource/HandViolenceFinal0720/<member>/<holdout-batch>
-
 python - <<'PY'
 from pathlib import Path
-import json, os, random, statistics
+import json, random, statistics
 import cv2
 import numpy as np
 from hand_landmarker.runtime import KerasHandPredictor
 
-root = Path(os.environ['HOLDOUT_ROOT'])
-labels = root / '02_roi_crops/hand_landmarks_autolabel_draft.jsonl'
+labels = Path(
+    '/root/autodl-tmp/TrainFab/HLML-3.0/train_pretrain_curated/'
+    'v3-pretrain-final-autopseudo-r1/05_labels/hand_teacher_holdout_labels.jsonl'
+)
 rows = []
 for line in labels.open(encoding='utf-8'):
     row = json.loads(line)
@@ -283,7 +295,7 @@ for start in range(0, len(rows), 64):
     for row in batch:
         path = Path(row['crop_path'])
         if not path.is_absolute():
-            path = root / path
+            raise RuntimeError(f'holdout crop_path is not canonical: {path}')
         image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise RuntimeError(f'unreadable crop: {path}')

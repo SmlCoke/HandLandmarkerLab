@@ -1345,6 +1345,106 @@ class CanonicalSequence(_KerasSequence):
                         for sample_type, value in type_counts.items()
                     }
                 )
+        dataset_key = str(self.sampling_config.get("dataset_key", "dataset_id"))
+        source_group_key = str(
+            self.sampling_config.get("source_group_key", "source_group_id")
+        )
+        inventory_by_dataset = Counter(
+            str(row.get(dataset_key) or "") for row in self.records
+        )
+        if "" in inventory_by_dataset:
+            raise DatasetContractError(
+                "Every sampled row must provide {} for source auditing".format(dataset_key)
+            )
+        source_groups: Dict[str, List[int]] = defaultdict(list)
+        source_group_dataset: Dict[str, str] = {}
+        for index, row in enumerate(self.records):
+            group = str(row.get(source_group_key) or "")
+            if not group:
+                raise DatasetContractError(
+                    "Every sampled row must provide {} for source auditing".format(
+                        source_group_key
+                    )
+                )
+            dataset_id = str(row.get(dataset_key))
+            existing = source_group_dataset.setdefault(group, dataset_id)
+            if existing != dataset_id:
+                raise DatasetContractError(
+                    "{} {!r} crosses dataset IDs {} and {}".format(
+                        source_group_key, group, existing, dataset_id
+                    )
+                )
+            source_groups[group].append(index)
+
+        batch_sizes = [len(self.batch_record_indices(index)) for index in range(len(self))]
+        cell_draws: Counter = Counter()
+        for size in batch_sizes:
+            quota = self.sampler.batch_quota(size)
+            for tier, type_counts in quota.items():
+                for sample_type, value in type_counts.items():
+                    cell_draws[(tier, sample_type)] += int(value)
+        expected_by_dataset: Dict[str, float] = defaultdict(float)
+        expected_by_source_group: Dict[str, float] = defaultdict(float)
+        for tier, types in self.sampler.groups.items():
+            for sample_type, cell_indices in types.items():
+                draws = int(cell_draws[(tier, sample_type)])
+                if draws <= 0:
+                    continue
+                values = np.asarray(cell_indices, dtype=np.int64)
+                weights = self.sampler.weights[values]
+                probabilities = weights / float(np.sum(weights))
+                for record_index, probability in zip(values, probabilities):
+                    row = self.records[int(record_index)]
+                    expectation = float(draws) * float(probability)
+                    expected_by_dataset[str(row[dataset_key])] += expectation
+                    expected_by_source_group[str(row[source_group_key])] += expectation
+        actual_by_dataset = Counter(
+            str(self.records[index][dataset_key]) for index in indices
+        )
+        actual_by_source_group = Counter(
+            str(self.records[index][source_group_key]) for index in indices
+        )
+        group_sizes = np.asarray(
+            [len(values) for values in source_groups.values()], dtype=np.float64
+        )
+        expected_dataset_fraction = {
+            key: float(value) / float(len(indices))
+            for key, value in sorted(expected_by_dataset.items())
+        }
+        actual_dataset_fraction = {
+            key: float(value) / float(len(indices))
+            for key, value in sorted(actual_by_dataset.items())
+        }
+        source_audit = {
+            "dataset_key": dataset_key,
+            "source_group_key": source_group_key,
+            "training_records_by_dataset": dict(sorted(inventory_by_dataset.items())),
+            "unique_source_groups": len(source_groups),
+            "unique_source_groups_by_dataset": dict(
+                sorted(Counter(source_group_dataset.values()).items())
+            ),
+            "records_per_source_group": {
+                "minimum": int(np.min(group_sizes)),
+                "median": float(np.median(group_sizes)),
+                "p90": float(np.percentile(group_sizes, 90)),
+                "maximum": int(np.max(group_sizes)),
+            },
+            "expected_draws_by_dataset": {
+                key: float(value) for key, value in sorted(expected_by_dataset.items())
+            },
+            "expected_draw_fraction_by_dataset": expected_dataset_fraction,
+            "actual_epoch0_draws_by_dataset": dict(sorted(actual_by_dataset.items())),
+            "actual_epoch0_draw_fraction_by_dataset": actual_dataset_fraction,
+            "maximum_expected_dataset_fraction": max(
+                expected_dataset_fraction.values(), default=0.0
+            ),
+            "maximum_expected_source_group_draws": max(
+                expected_by_source_group.values(), default=0.0
+            ),
+            "maximum_actual_source_group_draws": max(
+                actual_by_source_group.values(), default=0
+            ),
+        }
         return {
             "mode": "weighted_stratified",
             "absolute_epoch": self.epoch,
@@ -1360,6 +1460,7 @@ class CanonicalSequence(_KerasSequence):
             "epoch_type_plan": self.sampler.last_epoch_plan,
             "definition": self.sampler.report(),
             "supervision_tier_loss_weights": dict(self.supervision_tier_loss_weights),
+            "source_audit": source_audit,
         }
 
 

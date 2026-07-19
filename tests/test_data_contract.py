@@ -202,13 +202,20 @@ def _dataset_config(labels, data_root=None):
 
 
 class CanonicalDataContractTests(unittest.TestCase):
-    def test_training_inspection_configs_compare_only_locked_test(self):
+    def test_training_inspection_configs_compare_holdout_and_locked_test(self):
         repo_root = Path(__file__).resolve().parents[1]
         for filename in ("train_geometry.yaml", "train_multitask.yaml"):
             with self.subTest(config=filename):
                 config = load_config(repo_root / "configs" / filename)
                 comparisons = config["inspection"]["compare_datasets"]
-                self.assertEqual({"test"}, set(comparisons))
+                self.assertEqual({"teacher_holdout", "test"}, set(comparisons))
+                self.assertEqual(
+                    "train_finalize_v1",
+                    comparisons["teacher_holdout"]["require_schema_version"],
+                )
+                self.assertEqual(
+                    "pretrain", comparisons["teacher_holdout"]["require_training_stage"]
+                )
                 self.assertEqual("evaluation_gold_v1", comparisons["test"]["require_schema_version"])
                 self.assertEqual("test", comparisons["test"]["require_split"])
                 self.assertIn("ignored_labels", comparisons["test"])

@@ -61,7 +61,7 @@ TEST_ARGS ?=
 
 .PHONY: help paths env-create env-update doctor \
 	pretrain-curate pretrain-curate-reviewed \
-	inspect-geometry inspect-geometry-smoke inspect-multitask \
+	inspect-geometry inspect-geometry-smoke audit-geometry-sampling inspect-multitask \
 	pretrain-geometry-smoke check-geometry-smoke pretrain-geometry \
 	check-multitask-data pretrain-multitask \
 	prepare-finetune-sources prepare-finetune-round prepare-finetune-gold-selection check-finetune-sources finetune-curate \
@@ -82,6 +82,7 @@ help:
 	@echo   make pretrain-curate             Persist geometry data and create the visual review folder
 	@echo   make pretrain-curate-reviewed    Confirm retained review images and rebuild multitask data
 	@echo   make inspect-geometry            Audit geometry Train, Val and locked Test
+	@echo   make audit-geometry-sampling     Gate automatic holdout and source/image sampling
 	@echo   make inspect-geometry-smoke      Audit the fixed 128-ROI smoke set
 	@echo   make pretrain-geometry-smoke     Train and verify the geometry smoke gate
 	@echo   make check-geometry-smoke        Recheck an existing geometry smoke run
@@ -151,6 +152,9 @@ pretrain-curate-reviewed:
 inspect-geometry:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(GEOMETRY_CONFIG)"
 
+audit-geometry-sampling:
+	$(PYTHON) -B scripts/check_geometry_data.py --config "$(GEOMETRY_CONFIG)"
+
 inspect-geometry-smoke:
 	$(PYTHON) -B scripts/inspect_dataset.py --config "$(SMOKE_CONFIG)"
 
@@ -161,7 +165,7 @@ pretrain-geometry-smoke: inspect-geometry-smoke
 check-geometry-smoke:
 	$(PYTHON) -B scripts/check_pretrain_smoke.py --config "$(SMOKE_CONFIG)" $(SMOKE_GATE_ARGS)
 
-pretrain-geometry: check-geometry-smoke
+pretrain-geometry: check-geometry-smoke audit-geometry-sampling
 	$(PYTHON) -B scripts/train.py --config "$(GEOMETRY_CONFIG)" $(GEOMETRY_ARGS)
 
 check-multitask-data:

@@ -109,7 +109,21 @@ conda activate hand-landmarker-tf29
 make pretrain-curate
 ```
 
-程序生成 geometry 正样本快照、128 ROI smoke 子集和负样本候选审核树。MediaPipe 没输出手只表示“教师放弃判断”，不是可信背景；这些 `NEG_*_CANDIDATE` 在人工确认前不能进入 multitask。
+程序生成 geometry 正样本快照、128 ROI smoke 子集、自动 teacher holdout 和负样本候选审核树。MediaPipe 没输出手只表示“教师放弃判断”，不是可信背景；这些 `NEG_*_CANDIDATE` 在人工确认前不能进入 multitask。
+
+`teacher holdout` 是只用于衡量学生能否模仿 MediaPipe 的伪标签留出集，不需要人工标点。程序以完整 `dataset_id` 为最小单位，在配置的数量上下限内自动组合来源；被选来源的正样本和负候选都会整体排除在 geometry/multitask 之外，不会从同一录制来源随机拆帧。需要把自动选择限制到某一代数据时，只传来源 ID 正则，不手工挑图片：
+
+```bash
+export HAND_PRETRAIN_HOLDOUT_DATASET_PATTERN='.*-<batch-token>-.*'
+make pretrain-curate
+```
+
+输出位于：
+
+```text
+train_pretrain_curated/<HAND_PRETRAIN_ID>/05_labels/hand_teacher_holdout_labels.jsonl
+train_pretrain_curated/<HAND_PRETRAIN_ID>/qc/teacher_holdout_report.json
+```
 
 ### 5.2 人工删除式复核
 
@@ -136,6 +150,7 @@ geometry 只训练具有完整 21 点的 positive，先让模型学习稳定几�
 
 ```bash
 make inspect-geometry
+make audit-geometry-sampling
 make inspect-geometry-smoke
 make pretrain-geometry-smoke
 make pretrain-geometry
@@ -144,6 +159,14 @@ make infer-geometry
 ```
 
 smoke 的意义是证明模型、loss、梯度、checkpoint 和数据管线能过拟合小集合，不代表泛化效果已经足够。
+
+`audit-geometry-sampling` 不读写原始图片内容，自动验证 Train/teacher holdout 在 `dataset_id`、原图组、ROI 身份上完全隔离，并输出每个来源的训练记录数、独立原图组数、一个 epoch 的期望/实际抽样次数及最大来源占比：
+
+```text
+train_pretrain_curated/<HAND_PRETRAIN_ID>/qc/geometry_sampling_audit.json
+```
+
+正式 geometry 使用固定 `sampling.epoch_size`，所以一个 epoch 表示固定数量的随机抽样，不表示遍历一次全部 JSONL。`best.weights.h5` 每轮验证有改善时立即更新，`last.weights.h5` 每轮更新；启用 `training.periodic_checkpoint` 时另外每隔指定 epoch 保存一次当时的模型和 optimizer 状态。周期快照位于 `geometry/checkpoints/periodic/`，不能代替 best。
 
 结果：
 
