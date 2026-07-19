@@ -8,6 +8,8 @@ data:
 
 training:
   epochs: 80
+  max_wall_time_hours: null
+  periodic_checkpoint: {enabled: false}
   initial_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_PRETRAIN_ID:-v3-pretrain-r1}/geometry/checkpoints/best.weights.h5"
   optimizer:
     learning_rate: 0.00005
@@ -15,10 +17,12 @@ training:
     monitor: val_multitask_score
     mode: min
     patience: 15
+    min_delta: 0.0
   checkpoint: {monitor: val_multitask_score, mode: min}
   learning_rate_schedule:
     monitor: val_multitask_score
     mode: min
+    min_delta: 0.0001
   multitask_monitor:
     enabled: true
     name: val_multitask_score
