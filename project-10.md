@@ -236,6 +236,8 @@ A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子
 
 07-13 目前情况：按照 07-08 的计划，由于时间有限，我们不打算再训练 Palm Detector 以追求更高精度，而是在 1280x720 输入下，录制了大量的 Hand Landmarker 的训练数据集，准备重新训练 Hand Landmarker 模型，确保在 A1 上的精度。现在，标注工作已经完成（训练集为 Google MediaPipe 自动标注，共约两万个样本；验证/测试集均为人工精标，各约一千个样本。）
 
+07-19 目前情况：我们已经录制好了 Hand Landmarker 数据集，包含 Google MediaPipe 自动标注的 pesudo 标签以及人工精标的标签，完成了 pretrain(geometry+multitask)-finetune 多阶段训练流程。Hand Landmarker 模型精度由于时间压力已经无法更新，目前准备 SSTCN 孤立词分类模型的训练，以及整理分赛区决赛材料。
+
 ## 八、团队信息
 * **团队名称：** PeakDragonSoar (巅峰龙翔)
 * **项目名称：** AetherSign (以太印记)
