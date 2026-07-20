@@ -955,6 +955,7 @@ def _begin_retained_negative_review_transaction(
     review: Mapping[str, Any],
     source_labels_sha256: str,
     rows_by_id: Mapping[str, Mapping[str, Any]],
+    review_candidate_ids: Sequence[str],
     quarantine_ids: Sequence[str],
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
     paths = _negative_review_paths(config, review)
@@ -1068,13 +1069,8 @@ def _begin_retained_negative_review_transaction(
         row["source_image_sha256"] = source_sha256
         expected[relative] = row
 
-    source_negative_ids = {
-        crop_id
-        for crop_id, row in rows_by_id.items()
-        if not bool((row.get("hand_presence") or {}).get("present", False))
-        and str(row.get("sample_type")) in NEGATIVE_SAMPLE_TYPES
-    }
-    if seen_crop_ids != source_negative_ids:
+    expected_review_ids = {str(crop_id) for crop_id in review_candidate_ids}
+    if seen_crop_ids != expected_review_ids:
         raise ValueError("Review manifest does not exactly cover source negative candidates")
 
     candidates = _scan_review_images(paths["candidates_dir"], "negative_candidates")
@@ -1698,12 +1694,20 @@ def curate_pretrain_from_config(
     if finalize_review:
         review_lock = _acquire_review_lock(review_paths["lock_file"])
         try:
+            review_candidate_ids = [
+                crop_id
+                for crop_id, row in rows_by_id.items()
+                if not bool((row.get("hand_presence") or {}).get("present", False))
+                and str(row.get("sample_type")) in NEGATIVE_SAMPLE_TYPES
+                and str(row.get("dataset_id") or "") not in holdout_dataset_ids
+            ]
             decisions, review_finalize_report, review_transaction = (
                 _begin_retained_negative_review_transaction(
                     cfg,
                     review_cfg,
                     source_hash,
                     rows_by_id,
+                    review_candidate_ids,
                     [
                         crop_id
                         for crop_id, overlap in overlap_by_id.items()

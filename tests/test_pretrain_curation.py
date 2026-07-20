@@ -224,6 +224,55 @@ class PretrainCurationTests(unittest.TestCase):
             sha256_file(output / relative), manifest["artifacts"][relative]["sha256"]
         )
 
+    def test_review_finalize_excludes_negatives_from_teacher_holdout_sources(self):
+        extra_paths = []
+        for index in range(5, 11):
+            path = self.images / "{}.png".format(index)
+            path.write_bytes(("image-{}".format(index)).encode("ascii"))
+            extra_paths.append(path)
+        rows = [
+            _positive("train-1", extra_paths[0], group="train-frame-1"),
+            _positive("train-2", extra_paths[1], group="train-frame-2"),
+            _positive("holdout-1", extra_paths[2], group="holdout-frame-1"),
+            _positive("holdout-2", extra_paths[3], group="holdout-frame-2"),
+            _negative("train-negative", extra_paths[4], group="train-negative-frame"),
+            _negative("holdout-negative", extra_paths[5], group="holdout-negative-frame"),
+        ]
+        for row in rows[:2] + [rows[4]]:
+            row["dataset_id"] = "train-source"
+        for row in rows[2:4] + [rows[5]]:
+            row["dataset_id"] = "holdout-source"
+        write_jsonl(self.labels, rows)
+
+        output = self.root / "automatic-holdout-with-negative"
+        config = self._config(output)
+        config["curation"]["teacher_holdout"] = {
+            "enabled": True,
+            "eligible_dataset_pattern": "holdout-.*",
+            "minimum_positive_records": 2,
+            "target_positive_records": 2,
+            "maximum_positive_records": 2,
+            "selection_salt": "integration-test",
+        }
+        curate_pretrain_from_config(config)
+        review_manifest = self._review_candidates(output, {"train-negative"})
+        self.assertEqual(
+            {"train-negative"}, {row["crop_id"] for row in review_manifest}
+        )
+
+        report = curate_pretrain_from_config(
+            config, overwrite=True, finalize_review=True
+        )
+        self.assertEqual(1, report["counts"]["negative_review_expected"])
+        self.assertEqual(1, report["counts"]["included_confirmed_negatives"])
+        multitask = read_jsonl(
+            output / "05_labels" / "hand_training_labels_pretrain_multitask.jsonl"
+        )
+        self.assertEqual(
+            {"train-1", "train-2", "train-negative"},
+            {row["crop_id"] for row in multitask},
+        )
+
     def test_positive_snapshot_and_negative_quarantine_are_persisted(self):
         output = self.root / "curated"
         report = curate_pretrain_from_config(self._config(output))
