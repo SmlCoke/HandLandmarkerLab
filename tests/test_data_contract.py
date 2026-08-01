@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from collections import Counter
@@ -202,24 +203,22 @@ def _dataset_config(labels, data_root=None):
 
 
 class CanonicalDataContractTests(unittest.TestCase):
-    def test_training_inspection_configs_compare_holdout_and_locked_test(self):
+    def test_training_configs_use_val_only_and_never_read_locked_test(self):
         repo_root = Path(__file__).resolve().parents[1]
-        for filename in ("train_geometry.yaml", "train_multitask.yaml"):
-            with self.subTest(config=filename):
-                config = load_config(repo_root / "configs" / filename)
-                comparisons = config["inspection"]["compare_datasets"]
-                self.assertEqual({"teacher_holdout", "test"}, set(comparisons))
-                self.assertEqual(
-                    "train_finalize_v1",
-                    comparisons["teacher_holdout"]["require_schema_version"],
-                )
-                self.assertEqual(
-                    "pretrain", comparisons["teacher_holdout"]["require_training_stage"]
-                )
-                self.assertEqual("evaluation_gold_v1", comparisons["test"]["require_schema_version"])
-                self.assertEqual("test", comparisons["test"]["require_split"])
-                self.assertIn("ignored_labels", comparisons["test"])
-                self.assertIn("ignored_labels", config["validation"])
+        previous = os.environ.get("HLML_STAGE")
+        try:
+            for stage in ("geometry", "multitask", "multi_finetune"):
+                with self.subTest(stage=stage):
+                    os.environ["HLML_STAGE"] = stage
+                    config = load_config(repo_root / "configs" / "training.yaml")
+                    self.assertNotIn("inspection", config)
+                    self.assertIn("/val.jsonl", config["validation"]["labels"].replace("\\", "/"))
+                    self.assertNotIn("test", json.dumps(config["data"]).lower())
+        finally:
+            if previous is None:
+                os.environ.pop("HLML_STAGE", None)
+            else:
+                os.environ["HLML_STAGE"] = previous
 
     def test_create_sequences_reports_label_hashes_and_contract(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -868,14 +867,14 @@ class CanonicalDataContractTests(unittest.TestCase):
                 seed=1,
                 sample_type_fractions=invalid,
             )
-        with self.assertRaisesRegex(DatasetContractError, r"within \[0.30, 0.50\]"):
-            WeightedStratifiedSampler(
-                [pseudo, gold],
-                "finetune",
-                seed=1,
-                gold_fraction=0.8,
-                sample_type_fractions=POS_ONLY_FRACTIONS,
-            )
+        sampler = WeightedStratifiedSampler(
+            [pseudo, gold],
+            "finetune",
+            seed=1,
+            gold_fraction=0.8,
+            sample_type_fractions=POS_ONLY_FRACTIONS,
+        )
+        self.assertEqual(0.8, sampler.gold_fraction)
 
     def test_finetune_sequence_honors_gold_fraction_in_every_batch(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -57,8 +57,8 @@ This repository contains the training system for the Hand Landmarker model.
 
 ### 4.1 Docs Modifying Rules
 
-- The "workflow" document strictly records the commands, content, and underlying principles for each operational step of the system; it is independent of the system's historical state, the server-side model training status, and the project's future plans. Please keep this principle in mind when making modifications.
-- The "quick_start" document is a simplified version of the "workflow" document; it contains only the commands for each operational step and omits explanations of underlying principles. Please keep this principle in mind when making modifications.
+- The "workflow" document strictly records the commands, content, and underlying principles for each operational step of the system; it is independent of the system's historical state, the server-side model training status, and the project's future plans.It is necessary to explain the command and input (including directory locations) for each step, the actions performed, the output (including directory locations), and the rationale behind parameter adjustments in the YAML configuration file. Please keep this principle in mind when making modifications.
+- The "quick_start" document is a simplified version of the "workflow" document; it contains only the commands for each operational step and omits explanations of underlying principles. Include the name of the process stage for each step and briefly describe the inputs and outputs. Please keep this principle in mind when making modifications. 
 - The "current_status" document records the current state of the system and the performance of the server-side model training. Please keep this principle in mind when making modifications.
 - The "next_step_plan" document outlines the plan for the next phase. Please keep this principle in mind when making modifications.
 

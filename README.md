@@ -1,36 +1,42 @@
-# HandLandmarkerLab（HLML 3.0）
+# HandLandmarkerLab（HLML 4.0）
 
-HLML 训练适用于 A1 板端部署的轻量 Hand Landmarker。Palm Detector 是冻结的外部资产；本仓库训练并导出 Hand ROI 上的 21 点、hand presence 和 handedness 三个输出。
+HLML 是 Hand Landmarker v2 的训练、固定 ROI 评估和 ONNX/A1 导出系统。4.0 直接读取 HLMF 3.0 在 `HAND_DATASET_ROOT` 发布的 manifest；`HAND_TRAIN_ROOT` 只保存零拷贝索引快照、报告、checkpoint 与导出物。
 
-训练分两阶段：
+本次升级不兼容旧配置、旧数据契约或旧命令。模型结构、ROI 几何、训练损失、checkpoint 以及 ONNX/A1 接口保持 v2 契约，不引入辅助 head 或结构实验。
 
-```text
-pretrain: geometry → multitask
-finetune: human Gold + pretrain replay
-```
+公共配置保持最少且单一职责：`datasets.yaml` 管数据成员，`training.yaml` 管三阶段训练，`evaluation.yaml` 管固定 ROI Val/Test，`inference.yaml` 管原图文件夹推理，`deploy.yaml` 只管 ONNX/A1 模型导出。
 
-HLML 3.0 是新的数据和实验契约，不兼容旧版工作区。可再生 ROI 直接从 `/root/autodl-tmp/DatesetFab` 读取；`/root/autodl-tmp/TrainFab/HLML-3.0` 只保存聚合标签、审计清单、Gold 工作区和训练结果。
+## 边界
 
-## 文档入口
+- 训练成员由 dataset、negative dataset 和 selection ID 控制，不手工拼 JSONL、不复制 ROI。
+- geometry 只用可靠 positive；multitask 加入审核发布的真负样本；multi-finetune 混合困难 positive 与强制 pretrain replay。
+- 困难样本挖掘只读取 Train。
+- Val/Test 只读取 HLMF 已生成并经 CVAT 复核的固定 Hand ROI，不运行 Palm Detector，也不从原图重建 ROI。
+- 当前不报告 Palm 漏检、部分双手召回率或原图级联性能。
 
-- [HLML 完整训练流程](docs/training_system/HLML_training_workflow.md)：权威操作流程、原理、人工/程序分工和排错。
-- [HLML Quick Start](docs/training_system/HLML_quick_start.md)：熟悉系统后直接照着运行。
-- [当前训练状态](docs/training_system/HLML_current_training_status.md)：服务器目录、数据和实验状态；该文档允许随项目推进更新。
-- [下一步计划](docs/training_system/HLML_next_step_plan.md)：当前两天人工 Gold 与候选实验安排。
-- [专项工具文档](docs/training_system/tools/)：环境、数据/训练、评估和部署接口的深入参考。
+## 文档
 
-HLMF 数据制作说明位于 `/root/HandLandmarksFab/docs/annotating_system/`。实际命令以两个仓库的 Makefile 为准。
+- [完整训练工作流](docs/training_system/HLML_training_workflow.md)
+- [Quick Start](docs/training_system/HLML_quick_start.md)
+- [当前状态](docs/training_system/HLML_current_training_status.md)
+- [下一阶段计划](docs/training_system/HLML_next_step_plan.md)
+- [数据与训练契约](docs/training_system/tools/data_and_training.md)
+- [固定 ROI 评估](docs/training_system/tools/evaluation.md)
+- [部署契约](docs/training_system/tools/deployment_contract.md)
 
-## 最短检查
+## 公共入口
 
 ```bash
-cd /root/HandLandmarkerLab
-git pull --ff-only
-conda activate hand-landmarker-tf29
-make paths
-make compile
-make test-unit
-make doctor
+make help
+make config-check
+make data-audit HLML_STAGE=geometry
+make geometry
+make multitask
+make mine-hard
+make multi-finetune
+make val HLML_STAGE=multi_finetune
+make freeze-winner HLML_STAGE=multi_finetune
+make locked-test
+make export HLML_STAGE=multi_finetune
+make compile test
 ```
-
-模型固定接口：`float32 NCHW (B,1,256,256)`；输出顺序为 42 个 landmark 坐标、`hand_flag`、`handedness`。正式导出仍执行 ONNX 数值一致性和厂商算子/体积契约检查。

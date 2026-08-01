@@ -1,606 +1,474 @@
-# HLML 3.0 完整训练流程
+# HLML 4.0 训练工作流
 
-## 1. 系统目标
+## 0. 环境依赖
 
-HLML 训练 A1 板端 Hand Landmarker。输入是 Palm 阶段产生的 `256×256` 灰度 Hand ROI；输出是 21 个二维关键点、手存在概率和左右手概率。Palm Detector 不在本仓库训练。
+本轮 HLML 4.0 更新没有改变训练环境：继续使用 Conda 环境 `hand-landmarker-tf29`，其依赖由仓库根目录的 `environment.yml` 和 `requirements.txt` 共同定义。目标服务器环境仍为 Ubuntu 20.04、Python 3.8、TensorFlow/Keras 2.9.0、CUDA 11.2 和 cuDNN 8；CUDA/cuDNN 使用 AutoDL 系统提供的动态库，不在 Conda 环境中重复安装。
 
-流程：
-
-```text
-HLMF 数据制作与认证
-  → pretrain geometry
-  → 人工删除式负样本复核
-  → pretrain multitask
-  → 自动困难样本选择 + 少量人工 Gold
-  → finetune data_only / structure / optional structure_roi_aug
-  → Val/infer 配对比较
-  → locked Test
-  → ONNX / 厂商工具链 / 上板
-```
-
-本文只描述通用流程。服务器当前完成到哪里见 [当前训练状态](HLML_current_training_status.md)。
-
-## 2. 根目录与零拷贝原则
-
-Makefile 默认：
-
-```text
-HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
-HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-3.0
-HAND_PRETRAIN_ID=<pretrain-id>
-HAND_FINETUNE_ID=<finetune-data-id>
-```
-
-`DatesetFab` 是与训练版本无关的可再生数据仓库：
-
-```text
-DatesetFab/
-├── PretrainSource/   # 原图、00～03 和 pseudo 标签
-├── GoldSource/       # domain/source-id；task 是待标态，published 是发布态
-└── eval_sources/     # 固定 Val/Test 真源
-```
-
-HLMF/HLML 的聚合标签把 `crop_path` 直接指向该仓库；不再建立 `HLML-3.0/train_sources` 或逐版本 Gold 副本。
-
-允许物化图片的情况只有：
-
-- 人工删除式负样本审核树；
-- CVAT Gold task；
-- 可视化/overlay；
-- 模型转换输入包。
-
-同一数据盘内优先硬链接；所有可训练清单仍绑定内容 SHA-256。
-
-## 3. 初始化和代码门控
+首次创建环境：
 
 ```bash
-cd /root/HandLandmarksFab
-git pull --ff-only
-conda activate anfab
+cd /path/to/HandLandmarkerLab
+conda env create -f environment.yml
+conda activate hand-landmarker-tf29
+python -m pip check
+make environment-check
+```
+
+输入：仓库根目录的 `environment.yml` 与 `requirements.txt`。
+
+处理：Conda 创建 Python 3.8 环境，随后由 `environment.yml` 中的 pip 条目安装 TensorFlow 2.9、Keras 2.9、ONNX、ONNX Runtime、OpenCV、Pillow 和 YAML 等固定版本依赖。
+
+输出：名为 `hand-landmarker-tf29` 的 Conda 环境；`pip check` 应无依赖冲突，`make environment-check` 应输出环境、TensorFlow build metadata 和 GPU 可见性检查结果。已经创建该环境时只需执行 `conda activate hand-landmarker-tf29`，不要重复创建。
+
+## 1. 系统边界与工作目录
+
+HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 原位加载 `256×256` Hand ROI。`HAND_TRAIN_ROOT` 只保存零拷贝索引快照、训练报告、checkpoint、评估结果和导出物，不复制数据集图片。
+
+```bash
+export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
+export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
+export HLML_SNAPSHOT_ID=v4-r1
+export HLML_EXPERIMENT_ID=v4-r1
+export HLML_RELEASE_ID=v4-r1
+cd /path/to/HandLandmarkerLab
+```
+
+长期输入目录：
+
+```text
+HAND_DATASET_ROOT/
+  PretrainSource/<dataset_id>/dataset_manifest.json
+  EValSource/<dataset_id>/dataset_manifest.json
+  GoldSource/NegativeSamples/<negative_dataset_id>/published/manifest.json
+  Selections/<selection_id>/published/manifest.json
+  Registry/registry.sqlite3
+```
+
+运行产物目录：
+
+```text
+HAND_TRAIN_ROOT/
+  snapshots/<snapshot_id>/<stage>/
+  runs/<experiment_id>/<stage>/
+  mining/<snapshot_id>/
+  releases/<release_id>/
+  inference/<experiment_id>/<stage>/
+```
+
+评估严格限制在 HLMF 已生成并经 CVAT 复核的固定 Hand ROI：Val/Test 不运行 Palm Detector、不从原图重建 ROI、不统计 Palm 漏检，也不报告原图级联准确率。`make infer` 是独立的文件夹级联推理工具，不属于 Val/Test 协议。
+
+## 2. 阶段零：通过 ID 选择数据
+
+阶段名：Dataset Selection。
+
+操作：编辑 `configs/datasets.yaml`，只填写 HLMF 已发布的 `dataset_id`、`negative_dataset_id`、`selection_id`、`proposal_variant` 和权重。不要手工拼接 JSONL，也不要把 ROI 复制到 `HAND_TRAIN_ROOT`。
+
+输入位置与选择键：
+
+- `stages.*.datasets` → `PretrainSource/<dataset_id>/dataset_manifest.json`。
+- `stages.multitask.negative_datasets` → `GoldSource/NegativeSamples/<id>/published/manifest.json`。
+- `stages.multi_finetune.selections` → `Selections/<id>/published/manifest.json`。
+- `stages.multi_finetune.new_datasets` → 新录制的 Train dataset manifest。
+- `evaluation.val/test` → `EValSource/<dataset_id>/dataset_manifest.json` 中相应 split。
+
+可以直接编辑 YAML，也可以使用其中的环境变量占位：
+
+```bash
+export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
+export HLML_NEGATIVE_DATASET_ID=background-neg-0801
+export HLML_SELECTION_ID=hard-positive-0801
+export HLML_EVAL_DATASET_ID=national-eval-0801
+export HLML_PROPOSAL_VARIANT=palm-v1
+```
+
+输出：本阶段只确定成员关系，不写新数据。
+
+## 3. 阶段一：公共配置解析检查
+
+阶段名：Config Check。
+
+命令：
+
+```bash
+make config-check
+```
+
+输入：`configs/datasets.yaml`、`configs/training.yaml`、`configs/evaluation.yaml`、`configs/inference.yaml`、`configs/deploy.yaml` 及当前环境变量。
+
+处理：解析 datasets contract、三个训练 profile（geometry、multitask、multi_finetune）、两个固定 ROI 评估 profile（val、test）、独立文件夹推理配置和独立 ONNX/A1 导出配置，检查 YAML 结构和变量展开。
+
+输出：终端 JSON，`status=ok` 表示全部 profile 可解析。该命令不读取图片、不生成 snapshot，也不训练。
+
+## 4. 阶段二：零拷贝数据审计
+
+阶段名：Data Audit。
+
+单独审计某个阶段：
+
+```bash
+make data-audit HLML_STAGE=geometry
+make data-audit HLML_STAGE=multitask
+make data-audit HLML_STAGE=multi_finetune
+```
+
+输入：`datasets.yaml` 选择的 HLMF manifest、`Registry/registry.sqlite3` 以及 manifest 引用的 ROI 图片。
+
+处理：
+
+1. 解析新来源名 `<background>-<distance>-<lighting>-<condition>-<split>-<session>-<performer>`。
+2. 检查 capture source 和 raw image 不跨 Train/Val/Test。
+3. 检查一次运行中同一 `capture_source_id` 只选择一个 `proposal_variant`。
+4. 核对 `roi_id`、registry 记录、相对路径和 dataset/source/split 字段。
+5. 限制图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
+6. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
+
+完整性检查使用稳定 ID、SQLite、文件路径、尺寸与解码，不对数据集图片反复计算 SHA-256。
+
+输出：
+
+```text
+HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/train.jsonl
+HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/val.jsonl
+HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/test.jsonl
+HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/snapshot.json
+```
+
+JSONL 中 `crop_path` 指向 `HAND_DATASET_ROOT` 原图，没有图片副本。默认拒绝覆盖已有 snapshot；确实需要重建同一 ID 时使用 `DATA_ARGS=--overwrite`，但正式运行更推荐换新的 `HLML_SNAPSHOT_ID` 保留可追溯性。
+
+## 5. 阶段三：Geometry 训练
+
+阶段名：Geometry。
+
+命令：
+
+```bash
+make geometry
+```
+
+输入：
+
+- `configs/datasets.yaml` 的 `stages.geometry.datasets`。
+- HLMF 发布的可靠 Train positive。
+- `configs/training.yaml` 的 geometry profile。
+- 自动审计得到的 `snapshots/<snapshot_id>/geometry/{train,val}.jsonl`。
+
+处理：命令先运行 geometry data audit，再调用现有 v2 训练器。Geometry 只学习关键点几何，配置任何 `negative_datasets` 都会被硬拒绝；本阶段不使用真负样本或 candidate negative。
+
+输出：
+
+```text
+HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/checkpoints/best.weights.h5
+HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/checkpoints/last.weights.h5
+HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/checkpoints/final.weights.h5
+HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/history.json
+```
+
+训练器还会按配置保存周期 checkpoint。后续 multitask 默认从 geometry 的 `best.weights.h5` 初始化。
+
+## 6. 阶段四：Multitask 训练
+
+阶段名：Multitask。
+
+命令：
+
+```bash
+make multitask
+```
+
+输入：
+
+- geometry winner：`runs/<experiment_id>/geometry/checkpoints/best.weights.h5`。
+- `stages.multitask.datasets` 选择的 Train positive。
+- `stages.multitask.negative_datasets` 选择的 HLMF 已发布真负样本。
+- multitask profile 和审计生成的 snapshot。
+
+处理：从 geometry winner 初始化，保留 v2 的 landmarks、presence 和 handedness 输出与现有损失；真负样本的 `negative_dataset_id` 权重进入 `sampling_weight`，用于 presence 多任务训练。未经过 HLMF 删除式复核的 candidate negative 不可使用。
+
+输出：
+
+```text
+HAND_TRAIN_ROOT/snapshots/<snapshot_id>/multitask/*
+HAND_TRAIN_ROOT/runs/<experiment_id>/multitask/checkpoints/best.weights.h5
+HAND_TRAIN_ROOT/runs/<experiment_id>/multitask/history.json
+```
+
+## 7. 阶段五：Train-only 困难来源挖掘
+
+阶段名：Hard Source Mining。
+
+默认使用 multitask winner 推理：
+
+```bash
+make mine-hard
+```
+
+显式 checkpoint 或已有 student prediction 也可以通过 Make 透传：
+
+```bash
+make mine-hard MINING_ARGS='--checkpoint /abs/path/best.weights.h5 --batch-size 64'
+make mine-hard MINING_ARGS='--predictions /abs/path/student_predictions.jsonl'
+```
+
+输入：`snapshots/<snapshot_id>/multitask/train.jsonl`、MediaPipe 标签，以及 multitask checkpoint 或预计算 student prediction。
+
+处理：只读取 Train 固定 ROI，对比 student 与 MediaPipe label，按 `capture_source_id` 聚合样本数、mean/median/P90 像素误差、PCK、collapse、距离、亮度和姿态跨度，并生成供 HLMF 删除式复核的 ROI 请求。代码会硬拒绝 Val/Test；Test 结果也不能反向进入采样权重、训练配置、checkpoint 或阈值选择。
+
+输出默认不可覆盖：
+
+```text
+HAND_TRAIN_ROOT/mining/<snapshot_id>/student_predictions.jsonl
+HAND_TRAIN_ROOT/mining/<snapshot_id>/source_ranking.json
+HAND_TRAIN_ROOT/mining/<snapshot_id>/hlmf_review_request.jsonl
+```
+
+把 `hlmf_review_request.jsonl` 交给 HLMF 执行 `hard-review` / `hard-publish`。HLMF 发布后，将新的 `selection_id` 写回 `configs/datasets.yaml` 的 `stages.multi_finetune.selections`。
+
+## 8. 阶段六：Multi-finetune 训练
+
+阶段名：Multi-finetune。
+
+命令：
+
+```bash
+make multi-finetune
+```
+
+输入：
+
+- multitask winner：`runs/<experiment_id>/multitask/checkpoints/best.weights.h5`。
+- `selections` 中经 HLMF 删除明显教师错误后发布的困难 positive。
+- 可选 `new_datasets` 新录制 Train positive。
+- `negative_datasets` 中的已发布真负样本。
+- `datasets` 中的 mandatory pretrain replay pool。
+
+处理：困难 selection、新录制数据和真负样本组成 hard/new 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。默认 hard/new 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 dataset/selection/negative dataset 的 `weight` 继续参与侧内采样。
+
+输出：
+
+```text
+HAND_TRAIN_ROOT/snapshots/<snapshot_id>/multi_finetune/*
+HAND_TRAIN_ROOT/runs/<experiment_id>/multi_finetune/checkpoints/best.weights.h5
+HAND_TRAIN_ROOT/runs/<experiment_id>/multi_finetune/history.json
+```
+
+## 9. 阶段七：固定 Hand ROI Val
+
+阶段名：Fixed-ROI Val。
+
+命令：
+
+```bash
+make val HLML_STAGE=multi_finetune
+```
+
+输入：
+
+- `snapshots/<snapshot_id>/<stage>/val.jsonl`。
+- `runs/<experiment_id>/<stage>/checkpoints/best.weights.h5`。
+- `configs/evaluation.yaml` 的 val profile。
+
+处理：直接读取 HLMF 已生成、已复核的 `crop_path`，只运行 Hand Landmarker。Val 可以执行 `threshold_sweep` 来选择 presence threshold。不会读取原图或运行 Palm。
+
+输出：
+
+```text
+HAND_TRAIN_ROOT/runs/<experiment_id>/eval/<stage>/val/predictions.jsonl
+HAND_TRAIN_ROOT/runs/<experiment_id>/eval/<stage>/val/metrics.json
+```
+
+指标包括 mean/median/P90/P95 像素误差、PCK、landmark collapse、presence 和 handedness，并按 dataset、capture source、label origin、annotation style、distance 和 lighting 分组。
+
+## 10. 阶段八：冻结唯一 winner
+
+阶段名：Winner Freeze。
+
+命令：
+
+```bash
+make freeze-winner HLML_STAGE=multi_finetune HLML_RELEASE_ID=v4-r1
+```
+
+输入默认是：
+
+```text
+runs/<experiment_id>/eval/multi_finetune/val/metrics.json
+runs/<experiment_id>/multi_finetune/checkpoints/best.weights.h5
+```
+
+如需指定其他已完成的 Val 结果和 checkpoint，可使用：
+
+```bash
+make freeze-winner HLML_STAGE=multi_finetune FREEZE_ARGS='--metrics /abs/metrics.json --checkpoint /abs/best.weights.h5'
+```
+
+处理：确认 metrics 的 split 为 Val、scope 为 fixed Hand ROI，冻结模型版本、stage、checkpoint、snapshot 和 Val 选定的 presence threshold。一个 release ID 只能创建一次。
+
+输出：
+
+```text
+HAND_TRAIN_ROOT/releases/<release_id>/winner.json
+```
+
+## 11. 阶段九：Locked Test
+
+阶段名：Locked Fixed-ROI Test。
+
+命令：
+
+```bash
+make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID=v4-r1
+```
+
+输入：`releases/<release_id>/winner.json`、其中锁定的 checkpoint、`snapshots/<snapshot_id>/<stage>/test.jsonl` 和 deploy test profile。
+
+处理：只允许 winner descriptor 指定的 checkpoint 和 Val 冻结的 presence threshold；禁止 threshold sweep、checkpoint 切换和覆盖已有结果。Test 不运行 Palm，也不能被 mining 或训练代码读取。
+
+输出一次且不可覆盖：
+
+```text
+HAND_TRAIN_ROOT/releases/<release_id>/test/predictions.jsonl
+HAND_TRAIN_ROOT/releases/<release_id>/test/metrics.json
+```
+
+## 12. 阶段十：文件夹级联推理
+
+阶段名：Folder Inference，和固定 ROI 评估分离。
+
+命令：
+
+```bash
+export HLML_INFER_INPUT=/path/to/images
+make infer HLML_STAGE=multi_finetune
+```
+
+输入：`configs/inference.yaml` 指定的任意支持格式原图文件夹、Palm ONNX 和 Hand checkpoint。
+
+处理：运行 Palm → canonical Hand ROI → v2 Hand Landmarker，并按配置绘制可视化。这是部署前人工检查工具，不能把结果当 Val/Test fixed-ROI 指标。
+
+输出：
+
+```text
+HAND_TRAIN_ROOT/inference/<experiment_id>/<stage>/
+```
+
+其中包含 JSONL、summary 和按配置生成的标注图；默认拒绝覆盖。
+
+## 13. 阶段十一：ONNX/A1 导出
+
+阶段名：Export。
+
+命令：
+
+```bash
+make export HLML_STAGE=multi_finetune
+```
+
+输入：所选 stage 的 v2 checkpoint 和只负责模型导出的 `configs/deploy.yaml`。
+
+处理：导出静态 NCHW `[1,1,256,256]`、opset 11 ONNX，保持输出顺序 `[landmarks, hand_flag, handedness]`，审计 A1 允许算子、模型大小、depthwise group 和 Keras/ONNXRuntime 数值一致性。
+
+输出默认位于：
+
+```text
+HAND_TRAIN_ROOT/runs/<experiment_id>/export/<stage>/hand_landmarker_v2.onnx
+```
+
+同时在导出物旁写入 contract/report；默认拒绝覆盖。
+
+## 14. 阶段十二：环境、测试和双仓验收
+
+检查服务器 TensorFlow/CUDA/GPU 环境：
+
+```bash
+make environment-check
+```
+
+输入为 training environment contract，输出为终端环境报告。
+
+语法、完整单元测试和公共命令检查：
+
+```bash
 make compile
 make test
-
-cd /root/HandLandmarkerLab
-git pull --ff-only
-conda activate hand-landmarker-tf29
-make paths
-make compile
-make test-unit
-make doctor
+make help
 ```
 
-任何门控失败都先修复，不开始人工 CVAT 或正式训练。
-
-## 4. HLMF 聚合 pretrain、Val 和 Test
+双仓库合成验收：
 
 ```bash
-cd /root/HandLandmarksFab
-conda activate anfab
-make finalize_train_pretrain
-make build_pretrain_source_registry
-make finalize_val
-make finalize_test
+make acceptance-smoke
 ```
 
-程序负责：
+该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；不使用真实 Test 选择模型。
 
-- 从 DatesetFab 校验每个来源 manifest/标签/图片；
-- namespace、去重、质量分层和训练权重；
-- 生成 HLML 可用的绝对 `crop_path`；
-- 发布 source registry 和 SHA 报告。
+## 15. `configs/datasets.yaml` 参数说明
 
-人工不拼 JSONL、不改 ID、不写 SHA。
+- `dataset_id`：HLMF 发布的数据集逻辑 ID，不是目录绝对路径。
+- `proposal_variant`：选择同一来源的哪一版 Palm/ROI 结果。一次运行中一个 `capture_source_id` 只能选一个 variant。
+- `weight`：正数，写入该来源记录的 `sampling_weight`。它控制相对抽样权重，不复制样本。
+- `negative_dataset_id`：只能引用 HLMF `GoldSource/NegativeSamples/<id>/published/`。
+- `selection_id`：只能引用 HLMF `Selections/<id>/published/` 的零拷贝困难样本集合。
+- `new_datasets`：multi-finetune 可选新录制 Train positive，格式与 `datasets` 相同。
+- `hard_fraction/replay_fraction`：默认 `0.55/0.45`，必须均大于 0 且总和为 1。
+- `evaluation.val/test`：只选择 EValSource 中已复核 fixed ROI；两者按 manifest 的 split 字段过滤。
+- `policies.performer_cross_split`：默认 `warn`，需要严格人员隔离可设为 `fail`。
 
-输出：
+`image_integrity`、`image_sha256` 和 `test_may_feed_training_or_mining` 是公开策略声明，应分别保持稳定 ID/registry/decode、图片 SHA 禁用和 Test 禁止回流。
 
-```text
-HLML-3.0/train_pretrain_merged/
-HLML-3.0/val_merged/
-HLML-3.0/test_merged/
-```
+## 16. `configs/training.yaml` 参数说明
 
-## 5. Pretrain curation 和负样本人工复核
+### 16.1 模型与环境
 
-### 5.1 第一次 curation
+- `environment`：锁定 Python、TensorFlow、CUDA 和 cuDNN 版本；服务器不匹配时先处理环境，不应为绕过检查而随意改版本。
+- `model.version/num_iterations/output_order`：现有 v2 网络和三输出契约。当前重构不做辅助 head 或结构实验。
+- `data.image_size/channels/input_layout/input_scale`：与 HLMF `256×256` 灰度 ROI 和 A1 NCHW 契约一致。
 
-```bash
-cd /root/HandLandmarkerLab
-conda activate hand-landmarker-tf29
-make pretrain-curate
-```
+### 16.2 通用训练参数
 
-程序生成 geometry 正样本快照、128 ROI smoke 子集、自动 teacher holdout 和负样本候选审核树。MediaPipe 没输出手只表示“教师放弃判断”，不是可信背景；这些 `NEG_*_CANDIDATE` 在人工确认前不能进入 multitask。
+- `training.epochs`、`batch_size`：训练轮数与批大小；显存不足时优先降低 batch size。
+- `optimizer.learning_rate`：geometry 默认较大，multitask/multi-finetune profile 会覆盖为更小学习率。
+- `initial_checkpoint`：阶段初始化权重；multitask 必须指向 geometry winner，multi-finetune 必须指向 multitask winner。
+- `resume_checkpoint`：仅用于同一阶段中断恢复，不能代替跨阶段初始化。
+- `gradient_clip_norm`、`mixed_precision`：数值稳定与性能选项；开启 mixed precision 前应验证目标环境和导出一致性。
+- `checkpoint.monitor/mode`、`early_stopping`、`learning_rate_schedule`：只使用 Val 指标；Test 禁止参与。
+- `max_wall_time_hours`、`periodic_checkpoint`：服务器时间预算和恢复点策略。
 
-`teacher holdout` 是只用于衡量学生能否模仿 MediaPipe 的伪标签留出集，不需要人工标点。程序以完整 `dataset_id` 为最小单位，在配置的数量上下限内自动组合来源；被选来源的正样本和负候选都会整体排除在 geometry/multitask 之外，不会从同一录制来源随机拆帧。需要把自动选择限制到某一代数据时，只传来源 ID 正则，不手工挑图片：
+### 16.3 采样、损失和增强
 
-```bash
-export HAND_PRETRAIN_HOLDOUT_DATASET_PATTERN='.*-<batch-token>-.*'
-make pretrain-curate
-```
+- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。
+- `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
+- `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
+- `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。
+- `augmentation`：只作用于训练 ROI。旋转、缩放和平移过大可能破坏 canonical ROI 几何；调整后先做 smoke 和可视化抽查。
+- `profiles`：仅放相对基础配置的阶段覆盖。不要复制三份完整配置，避免阶段契约漂移。
 
-输出位于：
+## 17. `configs/evaluation.yaml`、`configs/inference.yaml` 与 `configs/deploy.yaml`
 
-```text
-train_pretrain_curated/<HAND_PRETRAIN_ID>/05_labels/hand_teacher_holdout_labels.jsonl
-train_pretrain_curated/<HAND_PRETRAIN_ID>/qc/teacher_holdout_report.json
-```
+三个文件不使用跨语义 profile：`evaluation.yaml` 只做固定 ROI Val/Test，`inference.yaml` 只做原图文件夹级联推理，`deploy.yaml` 只做模型导出和 A1 审计。
 
-### 5.2 人工删除式复核
+### 17.1 `evaluation.yaml`：Val/Test
 
-审核说明以生成目录中的 README/manifest 为准。操作模式：
+- `data.labels`：固定指向相应 snapshot 的 `val.jsonl` 或 `test.jsonl`。
+- `evaluation.mode`：Val/Test 必须是 `roi`。
+- `hand_flag_threshold`：Val 初始 presence 阈值。
+- `threshold_sweep`、`tune_thresholds`：Val 可开启；Test profile 必须关闭并使用 winner threshold。
+- `pck_thresholds`：以 ROI 尺寸归一化的 PCK 阈值列表。
+- `output.overwrite`：正式 Val/Test 建议为 `false`，locked Test 强制为 `false`。
 
-1. 完整复制 `negative_candidates/` 为 `negative_reviewed/`，保持相对路径。
-2. 在 `negative_reviewed/` 中逐图查看。
-3. 删除所有含手、手指、手腕、模糊或无法确认的图片。
-4. 只保留明确背景；不新增、不重命名、不移动、不编辑图片。
+### 17.2 `inference.yaml`：Folder Inference
 
-可以 7z/zip 压缩后上传网盘、下载到本地复核、重新压缩上传。普通压缩/解压不会改变文件内容，所以图片 SHA-256 不变；不要使用会重编码图片的软件。
+- `input.images_dir/extensions/recursive`：任意文件夹推理的输入范围。
+- `palm.*`：只在文件夹推理配置中运行 Palm；调整 score/NMS/ROI 几何不会改变固定 ROI 评估。
+- `hand_roi.*`：应与部署端和 HLMF 使用的 ROI contract 对齐。
+- `output.write_annotated_images/write_jsonl/draw_*`：控制检查产物，不影响模型数值。
 
-复核完成：
+### 17.3 `deploy.yaml`：ONNX/A1 Export
 
-```bash
-make pretrain-curate-reviewed
-```
+- `export.opset`、`input_name/output_names/dynamic_batch`：A1 部署接口，当前为 opset 11、固定 batch 和固定输出顺序。
+- `maximum_model_size_mb`、`maximum_depthwise_group`、`a1_allowed_operators`：硬件审计门槛。
+- `validate.random_samples` 与容差：Keras/融合 ONNX/ONNXRuntime 数值一致性检查。放宽容差前必须定位具体算子误差。
+- `metadata`：部署端预处理和输出解释契约，必须和训练配置一致。
 
-程序自动比较候选全集和保留集合，生成审核决策、removed/quarantine 清单，逐图验证 SHA，并冻结 multitask 数据。人工不写删除清单。
+## 18. 数据泄漏与 Test 锁定原则
 
-## 6. Geometry
-
-geometry 只训练具有完整 21 点的 positive，先让模型学习稳定几何；hand_flag/handedness 不是该阶段重点。
-
-```bash
-make inspect-geometry
-make audit-geometry-sampling
-make inspect-geometry-smoke
-make pretrain-geometry-smoke
-make pretrain-geometry
-make eval-val-geometry
-make infer-geometry
-```
-
-smoke 的意义是证明模型、loss、梯度、checkpoint 和数据管线能过拟合小集合，不代表泛化效果已经足够。
-
-`audit-geometry-sampling` 不读写原始图片内容，自动验证 Train/teacher holdout 在 `dataset_id`、原图组、ROI 身份上完全隔离，并输出每个来源的训练记录数、独立原图组数、一个 epoch 的期望/实际抽样次数及最大来源占比：
-
-```text
-train_pretrain_curated/<HAND_PRETRAIN_ID>/qc/geometry_sampling_audit.json
-```
-
-正式 geometry 使用固定 `sampling.epoch_size`，所以一个 epoch 表示固定数量的随机抽样，不表示遍历一次全部 JSONL。`best.weights.h5` 每轮验证有改善时立即更新，`last.weights.h5` 每轮更新；启用 `training.periodic_checkpoint` 时另外每隔指定 epoch 保存一次当时的模型和 optimizer 状态。周期快照位于 `geometry/checkpoints/periodic/`，不能代替 best。
-
-结果：
-
-```text
-hand_landmarker_runs/<HAND_PRETRAIN_ID>/smoke/
-hand_landmarker_runs/<HAND_PRETRAIN_ID>/geometry/
-hand_landmarker_runs/<HAND_PRETRAIN_ID>/eval/geometry/val/
-hand_landmarker_inference/<HAND_PRETRAIN_ID>/geometry/
-```
-
-## 7. Multitask
-
-multitask 从 geometry best 初始化，加入人工确认 true negative，训练 landmark、hand_flag 和轻量 handedness。
-
-```bash
-make check-multitask-data
-make inspect-multitask
-make pretrain-multitask
-make eval-val-multitask
-make infer-multitask
-make export-multitask
-```
-
-checkpoint 使用 geometry-first 的 `val_multitask_score`。若门控报告确认负例数量/类型不足，返回第 5 节，不绕过。
-
-## 8. Finetune 数据：Gold + replay
-
-### 8.1 数据 ID 和实验 ID
-
-- `HAND_FINETUNE_ID`：冻结的数据快照，决定 Gold、replay、curated labels。
-- `FINETUNE_EXPERIMENT_ID`：训练/评估/推理/导出目录，可在同一数据上运行多个候选。
-- `FINETUNE_PROFILE`：`data_only`、`structure`、`structure_roi_aug`。
-
-因此比较模型候选时保持同一个 `HAND_FINETUNE_ID`，只更换 `FINETUNE_EXPERIMENT_ID`；不复制图片或标签，也不让候选使用不同数据。
-
-### 8.2 两类训练数据分别解决什么问题
-
-Finetune 不是“只用少量人工数据再训练”，而是把两类监督合成一个冻结快照：
-
-- **Gold**：人工确认的 presence、21 点和 handedness。它纠正教师漏检、关键点偏差、错误手势形状和 presence 错误。
-- **replay（回放数据）**：从 pretrain 来源中确定性抽出的高质量伪标签和背景样本。它不是 Gold；作用是保留原有场景覆盖、presence 和 handedness 能力，避免模型只记住少量人工场景。
-
-Gold 可以来自多个不可变 source：每批外部 Dragon Gold、新录制 Gold、student–teacher disagreement Gold，以及确有需要时由历史 hard case 转成的 reviewed Gold。多个同类 source 会一起聚合；不能覆盖或删除旧 source 来“腾位置”。
-
-数据流如下：
-
-```text
-DatesetFab/GoldSource/*/*/published ──HLMF finalize──> hmlf_gold_merged ─┐
-                                                                        ├─ 显式批次选择 ─> finetune-curate
-pretrain registry ──prepare-finetune-sources──> mandatory replay ───────┘
-                              └───────────────> disagreement score pool
-```
-
-### 8.3 在长期 GoldSource 建立 Gold
-
-```bash
-cd /root/HandLandmarksFab
-conda activate anfab
-
-# 每批 Dragon 单独运行一次，批次 ID 不得复用
-make prepare_dragon_gold \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  DRAGON_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/dragon/<dragon-batch-id>/source \
-  DRAGON_BATCH_ID=<unique-dragon-batch-id>
-
-# 所有 Gold source 发布/导入后重新聚合
-make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
-```
-
-`DatesetFab/GoldSource/<domain>/<source-id>/published/finetune_source.json` 是单个批次的认证描述符。GoldSource 与训练版本无关；新 finetune 不再 seed 或复制旧 Gold，而是直接发现所有 published 子批次。HLMF 的 `hmlf_gold_merged` 是本次训练版本可重建的全仓认证聚合。
-
-Gold 的“发布”和“本次训练启用”不是一回事：
-
-- 发布把一批人工真值变成长期、不可变、跨实验复用的 GoldSource；
-- HLMF finalize 认证并聚合仓库中 **全部** published 批次，用于统一做重复、冲突和 SHA 检查；
-- HLML 随后通过 `gold_selection.yaml` 对每个 source ID 明确写 `enabled: true/false`；只有 true 的批次进入本次训练。
-
-因此发布 Dragon 或新录制 Gold 不需要在语义上绑定某个 finetune ID。命令里的 `HAND_FINETUNE_ID` 只是让 selection 类任务找到对应 mining request，以及指定本次聚合快照的输出工作区；published Gold 未来仍可被其他数据 ID 直接复用。disabled 也只是本次不用，不会删除或贬低该批数据。
-
-### 8.4 在 HLML 建立 replay 和 disagreement score pool
-
-```bash
-cd /root/HandLandmarkerLab
-conda activate hand-landmarker-tf29
-make prepare-finetune-sources HAND_FINETUNE_ID=<finetune-data-id>
-```
-
-程序自动完成：
-
-1. 认证 HLMF 的 pretrain source registry、curated multitask 标签和 checkpoint，并读取 GoldSource 中所有历史/pending Gold 身份用于排重；
-2. 从广泛来源中确定性选择 replay，保存其来源、标签和 SHA；
-3. 用当前 student checkpoint 对可选 positive 推理；
-4. 把 student 预测与 MediaPipe teacher 伪标签比较，生成逐 ROI disagreement 分数池。
-
-程序不是按目录名猜 replay，也不要求人工列出 replay source ID。默认规则写在 `configs/prepare_finetune_sources.yaml` 的 `selection.pretrain_replay`：
-
-1. 输入只能来自已经认证的 pretrain source registry 和当前 pretrain ID 的 curated multitask 标签；registry 把每行恢复到 DatesetFab 的真实来源路径并校验图片 SHA；
-2. 所有人工确认的背景负样本都必须保留；若其数量已经超过 `max_records`，程序直接失败，不能偷偷丢负例；
-3. 在剩余容量中确定性抽取 positive。默认总上限为 10000，positive 的 `POS_RUNTIME` / `POS_LOW_PALM` 目标比例为 0.75 / 0.25，并在各原始 dataset 间分配；
-4. 排序和抽样使用固定 salt，相同配置、标签与 SHA 会得到相同 replay；
-5. replay descriptor 保存父 pretrain ID、标签、真实图片路径和内容 SHA，之后由 finetune 门控再次认证。
-
-如确实要改变 replay 上限或正样本比例，应先修改上述配置，再用一个全新的 `HAND_FINETUNE_ID` 运行；不要修改已经生成的 replay JSONL。replay 是强制来源，不能像 Gold 一样通过选择清单关闭。
-
-这里的 **student** 是正在训练的自研 Hand Landmarker，**teacher** 是 MediaPipe 伪标签。分歧大只表示两者对同一 ROI 的关键点差别大，因此适合人工复核；不代表 teacher 必然正确。查看：
-
-```text
-finetune/<id>/sources/replay/
-finetune/<id>/mining/teacher_student/disagreement_scores.jsonl
-finetune/<id>/mining/disagreement_gold/selection_report.json
-finetune/<id>/mining/prepare_finetune_sources_report.json
-```
-
-这些产物绑定 checkpoint 和输入 SHA。输入或 checkpoint 变化时应使用新的 finetune 数据 ID 重新建立，不覆盖已有快照。
-
-### 8.5 本轮没有时间标 disagreement/negative-removed 时
-
-这两类都是可选的增量 Gold，不是 finetune 的硬前置。仍然运行一次 `prepare-finetune-sources` 来建立 mandatory replay 和 disagreement 分数池，但可以：
-
-- 不运行 `prepare-finetune-round`；
-- 不在 HLMF 导出新的 disagreement/negative-removed task；
-- 只导入已经完成的 CVAT task；
-- 在 Gold 选择中复用历史 published 困难样本 Gold，或把这些领域全部设为 disabled。
-
-之后照常让 HLMF finalize 全部 published Gold，再冻结本次选择。只要至少一个启用的 Gold 来源满足 Gold 门控，mandatory replay 完整，finetune 就可以继续。自动生成的 disagreement 分数池保留在当前 finetune 工作区，未来要人工处理时应创建新的 round/source ID，不能把未冻结的分数列表手改成训练标签。
-
-## 9. ROI 多轮 Gold
-
-### 9.1 为什么要分 round/source
-
-一个 `round-id` 表示一次冻结选样，一个 `source-id` 表示一份不可变 CVAT/Gold 来源。以后想从同一原始来源继续取样时，创建新 round/source ID；程序会保留并排除历史 ROI，因此旧人工标注不会浪费，也不需要删除。
-
-### 9.2 先制作新录制任务
-
-1. 在 `GoldSource/new_recorded_gold/<source-id>/source/` 放入无损图片流，并在该目录跑完 HLMF 00～03；
-2. HLMF 使用 `native_existing` 和本轮计划给出的显式限额确定性抽样；
-3. 任务生成后，查看 `task_descriptor.json` 得到实际任务数；
-4. 不要人工从原始目录随意挑图，也不要在任务冻结后改限额。
-
-HLMF 命令：
-
-```bash
-make export_finetune_gold \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_SOURCE_ID=new_recorded_gold_<round-id> \
-  FINETUNE_SOURCE_MODE=native_existing \
-  FINETUNE_RAW_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/new_recorded_gold/new_recorded_gold_<round-id>/source \
-  FINETUNE_MAX_ITEMS=<new-recorded-limit>
-```
-
-### 9.3 冻结本轮 disagreement selection
-
-新录制任务存在后，在 HLML 执行：
-
-```bash
-make prepare-finetune-round \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_ROUND_ID=<round-id> \
-  FINETUNE_GOLD_BUDGET=<round-budget> \
-  NEW_RECORDED_SOURCE_IDS=new_recorded_gold_<round-id>[,new_recorded_gold_<other-id>]
-```
-
-`FINETUNE_GOLD_BUDGET` 是本轮两个 CVAT task 的合计上限，必须由执行计划显式指定。程序读取：
-
-- GoldSource 内所有已发布 Gold 标签和所有 pending task manifest；
-- 所有历史 selection request；
-- 当前/历史 CVAT task manifest；
-- Val/Test labels 与 ignored sidecar。
-
-并按 `parent_global_crop_id`、`global_crop_id`、来源图片身份、ROI SHA256、归一化像素 SHA256 排除重复。disagreement 上限等于“本轮总预算减新录制实际任务数”；候选不足时任务可以少于预算，但不会用低价值重复项硬凑。
-
-输出：
-
-```text
-finetune/<id>/mining/rounds/<round-id>/disagreement_gold_<round-id>/
-├── selection_request.jsonl
-├── selection_report.json
-└── ranked_eligible.jsonl
-```
-
-`selection_report.json` 必须确认冻结预算、新录制计数、排除文件和最终选中数都符合预期。
-
-### 9.4 HLMF 导出、人工标注和导入
-
-回到 HLMF 导出 disagreement：
-
-```bash
-make export_finetune_gold \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_SOURCE_ID=disagreement_gold_<round-id> \
-  FINETUNE_SOURCE_MODE=selection_subset
-```
-
-HLMF 为每个批次生成 `GoldSource/<domain>/<source-id>/task/qc/cvat_job_plan.json`。人工按计划在 CVAT 完成完整 21 点和 handedness，或明确标 `no_hand` / `ignore_for_training`；返回的完整 XML 放入同一批次的 `task/reviewed.xml`。严格 import 成功后，必要审计文件移入 `published/audit/`，task 自动删除；此后该批次只以 published 身份参与聚合和训练。
-
-```bash
-make import_finetune_gold HAND_FINETUNE_ID=<finetune-data-id>
-make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
-```
-
-每次增加一轮 Gold 后都重新 finalize；最终聚合会保留所有历史 published 来源并跨轮去重。`source` 是原始真源、`task` 是暂存人工任务、`published` 是认证训练来源，三者不能因文件名相似而混用。Dragon 原始整图/标注与生成 ROI 不同，长期保留 `source + published`；新录制批次也可保留不可再生的 source，但不会长期保留已完成 task。然后返回 HLML。
-
-### 9.5 negative-removed 的多轮做法
-
-如果计划新增这类 Gold，先在 **新的 finetune 数据 ID** 下修改 `configs/prepare_finetune_sources.yaml`：
-
-```yaml
-selection:
-  negative_removed:
-    enabled: true
-    max_items: <本轮数量>
-```
-
-再运行 `make prepare-finetune-sources`。程序从当前 pretrain 的 `negative_removed_manifest.jsonl` 选择候选，并排除历史 Gold、pending task、Val/Test 及同轮其他 request。随后用新的批次 ID 在 HLMF 执行：
-
-```bash
-make export_finetune_gold \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_SOURCE_ID=negative_removed_gold_<round-id> \
-  FINETUNE_SOURCE_MODE=selection_subset
-```
-
-CVAT/import/published 流程与 disagreement 完全相同。每次新增批次必须换 source ID；旧 `negative_removed_gold_*` 保留并参与未来排重，绝不能为了重新抽样而删除宝贵的历史 Gold。默认配置关闭该候选任务，是为了避免每次 finetune 都无意中产生额外人工工作，而不是禁止复用历史 published 数据。
-
-## 10. Finetune curate 和门控
-
-### 10.1 按 Gold source_id 决定是否参与训练
-
-HLMF 的 `hmlf_gold_merged` 始终认证 GoldSource 中全部 published Gold。每次 finetune 必须先让 HLML 生成一份逐批选择清单：
-
-```bash
-make prepare-finetune-gold-selection \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  GOLD_ENABLE_SOURCE_IDS=<source-id-a>,<source-id-b>
-```
-
-- 输出 `finetune/<id>/gold_selection.yaml`，列出每个领域下的每个 published 子批次；
-- 命令列出的批次为 `enabled: true`，其余批次明确写成 `false`，没有隐式默认；
-- 每项同时锁定 source kind、领域、descriptor 相对路径和 descriptor SHA256；
-- GoldSource 后来新增、遗漏、改名或 descriptor 变化时，门控会失败，不会静默加入训练；
-- disabled source 仍验证 descriptor、标签和聚合 SHA，但其行不进入训练、Gold 权重或 smoke；
-- replay 不出现在选择清单中，代码强制它保持 `enabled: true`、`required: true`，且工作区中必须恰好有一个 replay source。
-
-选择清单存在即拒绝重建。只有在所有计划 Gold 已发布、HLMF 聚合完成后生成；需要改变来源组合时使用新的 `HAND_FINETUNE_ID`。输出报告的 `source_selection_manifest`、`source_selection` 和 `disabled_source_rows` 会说明每个批次的最终决定。
-
-### 10.2 从 GoldSource 到最终训练 JSONL 的完整聚合顺序
-
-按下面的固定顺序操作，不能把“聚合”和“选择”颠倒：
-
-1. HLMF 对每个已完成人工复核的 task 执行 import，得到各自 `published/finetune_source.json`；未标完的 task 不发布，也不参与训练。
-2. HLMF 执行 `make finalize_train_finetune HAND_FINETUNE_ID=<id>`，扫描并认证 GoldSource 中全部 published descriptor，把去重后的全仓 Gold 写到 `finetune/<id>/hmlf_gold_merged/`。
-3. HLML 已通过 `make prepare-finetune-sources` 在同一 `<id>` 下建立唯一 mandatory replay。
-4. HLML 执行 `make prepare-finetune-gold-selection ... GOLD_ENABLE_SOURCE_IDS=...`，为聚合中每个 Gold 批次冻结 true/false 决定。
-5. `make check-finetune-sources` 同时认证全仓 Gold 聚合、逐批选择清单和 replay；来源缺失、新增、descriptor 改动或 SHA 不一致都会失败。
-6. `make finetune-curate` 只抽取 enabled Gold，再和 replay 合并；跨来源相同标签去重，Gold 与 replay 重合时保留 Gold。
-7. `check-finetune-data` 和 `inspect-finetune` 通过后，生成的 `train_finetune_merged/<id>/05_labels/hand_training_labels_finetune.jsonl` 才是训练直接读取的冻结标签。
-
-对应数据流：
-
-```text
-GoldSource 全部 published --HLMF认证--> hmlf_gold_merged --逐source启用/禁用--┐
-pretrain curated + registry --确定性选择--> mandatory replay --------------┤
-                                                                           v
-                                                            finetune-curate 冻结训练集
-```
-
-### 10.3 Curate、检查和可视化
-
-```bash
-make finetune-curate HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_PROFILE=<profile>
-make check-finetune-data HAND_FINETUNE_ID=<finetune-data-id>
-make inspect-finetune HAND_FINETUNE_ID=<finetune-data-id>
-```
-
-`finetune-curate` 自动认证 HLMF 聚合、合并 Gold 与 replay、执行身份去重，并把角色权重和 batch 中 Gold 比例解析进冻结报告。具体数值由当前 profile/config 决定，不属于通用流程。每个 role 内先跨轮去重，再按 source 规模分配；Gold 与 replay 重复时保留 Gold、删除 replay 重复行。
-
-重点查看：
-
-```text
-train_finetune_merged/<id>/qc/curation_report.json
-train_finetune_merged/<id>/05_labels/hand_training_labels_finetune.jsonl
-train_finetune_merged/<id>/05_labels/hand_training_labels_finetune_smoke.jsonl
-```
-
-`check-finetune-data` 验证 Gold/replay 数量、role 覆盖、训练权重、结构 loss mask、图片/SHA 和 Val 隔离；`inspect-finetune` 生成抽样可视化。任何门控失败都应回到数据来源修正，不跳过。
-
-Finetune smoke 对冻结的 256 ROI 使用固定的正/负均衡 overfit 抽样和较快的 smoke-only 学习率；这是为了让小集合同时检验 presence、landmarks、handedness，而不是复制正式训练的类别先验。正式 `sample_type_fractions_by_tier` 和学习率没有被改写，仍由 `check-finetune-data` 单独认证。门控会严格检查这两个 smoke-only 覆盖参数，不能在命令行随意改变。
-
-### 10.4 区分“抽样占比”和“Loss 权重占比”
-
-这两个概念互相独立，不能把其中一个当成另一个：
-
-- `training.gold_fraction` 决定每个训练 batch 抽取多少 Gold ROI；它是**数据抽样占比**。
-- `sampling_weight` 只决定同一个抽样格子内某行被抽到的概率；它也不是 Loss 权重。
-- `FINETUNE_GOLD_LOSS_WEIGHT` 与 `FINETUNE_PSEUDO_LOSS_WEIGHT` 是 Gold/pseudo 的**真实 Loss 倍率**。默认都是 `1.0`，即不额外偏向任一监督层。
-
-对某个训练样本和输出 head，最终 sample weight 为：
-
-```text
-监督层倍率 × supervision_loss_weight × 该 head 的 loss_weight × 该 head 的 quality_weight
-```
-
-`sampling_weight` 不进入这个乘式。训练器再用这些 sample weight 计算该 head 的加权平均 Loss；`landmarks`、`hand_flag`、`handedness` 各自的 `coefficient` 最后决定不同 head 之间的组合比例。因此，仅看 Gold/pseudo 目录中的图片数量，不能推出它们对梯度的实际影响。
-
-查看当前设置和 epoch 0 的有效权重质量分数：
-
-```bash
-make check-finetune-data \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile> \
-  FINETUNE_GOLD_LOSS_WEIGHT=<gold-multiplier> \
-  FINETUNE_PSEUDO_LOSS_WEIGHT=<pseudo-multiplier>
-
-python -m json.tool \
-  /root/autodl-tmp/TrainFab/HLML-3.0/hand_landmarker_runs/<experiment-id>/finetune_data_gate.json
-```
-
-重点看 `sampling.loss_weighting`：
-
-- `configured_supervision_tier_weights`：命令传入的真实 Loss 倍率；
-- `nominal_tier_loss_mass_fraction`：只考虑 `gold_fraction` 和层倍率得到的直观比例；
-- `epoch0_effective_head_weight_mass_fraction`：把实际抽样行的 record/head/quality 权重也算进去后，各 head 的 Gold/pseudo 权重质量分数；
-- `epoch0_mean_per_batch_head_weight_fraction`：考虑训练器逐 batch 归一化后的等误差基准比例。
-
-这些仍是“权重质量”而不是训练结束后的真实梯度占比，因为真实贡献还取决于每行预测误差。若 `gold_fraction=f`、Gold 倍率为 `g`、pseudo 倍率为 `p`，忽略行级权重时 Gold 的名义 Loss 质量分数为 `f*g / (f*g + (1-f)*p)`。
-
-开启一个不同 Loss 比例的候选时，数据快照可以复用，但必须换新的 `FINETUNE_EXPERIMENT_ID`，并在 `check-finetune-data`、`finetune-smoke`、`check-finetune-smoke`、`finetune-train` 的每条命令中传入完全相同的两个倍率。smoke 会把倍率绑定进 resolved config；改变倍率后不能复用旧 smoke。
-
-```bash
-# 示例：Gold 每个有效样本的 Loss 倍率为 pseudo 的 2 倍；这不是 Gold 50% 抽样。
-COMMON="HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_EXPERIMENT_ID=<new-experiment-id> FINETUNE_PROFILE=data_only FINETUNE_GOLD_LOSS_WEIGHT=2.0 FINETUNE_PSEUDO_LOSS_WEIGHT=1.0"
-
-make check-finetune-data $COMMON
-make finetune-smoke $COMMON
-make check-finetune-smoke $COMMON
-make finetune-train $COMMON
-```
-
-两个倍率必须为有限正数；不能把 replay 倍率设为 `0` 来绕过 mandatory replay。倍率变化属于新的训练实验，不要求重新制作 Gold/replay 或重新 `finetune-curate`。
-
-## 11. 三种 profile
-
-### 11.1 data_only
-
-只验证新 Gold 和来源重平衡，不增加结构 loss。
-
-```bash
-make finetune-smoke HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<data-only-experiment-id> FINETUNE_PROFILE=data_only
-make finetune-train HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<data-only-experiment-id> FINETUNE_PROFILE=data_only
-```
-
-### 11.2 structure
-
-在同一冻结数据上增加：
-
-- `bone_vector_loss`：20 条 MediaPipe 真正骨连接的预测/Gold 向量 Huber。
-- `spread_ratio_loss`：以 wrist 为基准的整体 spread，计算预测/Gold log-ratio Huber。
-
-结构 mask 只在人工 Gold、presence=true、landmark loss 有效时非零。pseudo replay、negative、ignored 均为 0；没有固定骨长、固定关节方向或手势模板。
-
-```bash
-make finetune-smoke HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<structure-experiment-id> FINETUNE_PROFILE=structure
-make finetune-train HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<structure-experiment-id> FINETUNE_PROFILE=structure
-```
-
-### 11.3 structure_roi_aug
-
-只在 structure 确有改善、仍对 ROI 偏移敏感且时间允许时运行。它把增强调整为 rotation ±10°、scale 0.90～1.10、translation 0.05。
-
-## 12. 评估、自动分析和选择
-
-每个候选：
-
-```bash
-make eval-val-finetune FINETUNE_EXPERIMENT_ID=<candidate>
-make infer-finetune FINETUNE_EXPERIMENT_ID=<candidate>
-```
-
-配对分析：
-
-```bash
-make analyze-finetune-errors \
-  BASELINE_FINETUNE_ID=<baseline> \
-  CANDIDATE_FINETUNE_ID=<candidate>
-
-make compare-finetune-runs \
-  BASELINE_FINETUNE_ID=<baseline> \
-  CANDIDATE_FINETUNE_ID=<candidate>
-```
-
-输出包含 overall/per-dataset/per-landmark、PCK、presence、handedness、骨向量误差、spread、infer 检出/塌缩数、配对差值和最多 40 张 overlay。overlay 颜色：Gold 绿、baseline 红、candidate 蓝。
-
-结果目录内的 `summary.json` 是总览，`per_roi_metrics.jsonl` 是逐 Val ROI 指标，`inference_paired_metrics.jsonl` 是逐 infer 图片的 Palm/Hand/塌缩和逐点变化，`paired_comparison.json` 保存完整配对明细，`overlays/` 只保留四类代表图且合计不超过 40 张。
-
-先使用 Val 和固定 infer 决策；只对冻结 winner 运行：
-
-```bash
-make eval-test-finetune FINETUNE_EXPERIMENT_ID=<winner>
-```
-
-## 13. 导出与上板
-
-```bash
-make export-finetune FINETUNE_EXPERIMENT_ID=<winner>
-make conversion-data-finetune FINETUNE_EXPERIMENT_ID=<winner>
-```
-
-导出器验证模型输入输出、checkpoint stage、BN folding、ONNX 数值一致性、允许算子、group 上限和体积。之后执行厂商工具链转换和固定手势上板回归。
-
-## 14. 结果目录
-
-```text
-hand_landmarker_runs/<pretrain-id>/geometry/
-hand_landmarker_runs/<pretrain-id>/multitask/
-hand_landmarker_runs/<experiment-id>/finetune_smoke/
-hand_landmarker_runs/<experiment-id>/finetune/
-hand_landmarker_runs/<experiment-id>/eval/finetune/{val,test}/
-hand_landmarker_runs/<experiment-id>/analysis/
-hand_landmarker_inference/<experiment-id>/finetune/
-hand_landmarker_exports/<experiment-id>/finetune/
-```
-
-每个训练 run 保存 resolved config、标签 SHA、Git commit、数据报告、checkpoint 和 history。不要手工覆盖已完成实验；使用新的 `FINETUNE_EXPERIMENT_ID`。
-
-## 15. 常见失败
-
-- `Checkpoint monitor ... was not produced`：配置 monitor 必须是日志实际键；3.0 smoke 使用 `total_loss`。
-- Gold 点超出 ROI：如果无法可靠表达，HLMF 标 `ignore_for_training`；不要削弱门控让异常点进入训练。
-- 重复 selection：检查 `selection_report.json` 的 occupied files/tokens；不要删除历史 Gold 规避。
-- 数据路径缺失：确认 DatesetFab 目录和 README；不要复制到临时 train_sources 掩盖问题。
-- profile 输出已存在：换 `FINETUNE_EXPERIMENT_ID`；不要 overwrite 正式 run。
-- structure loss 无收益：停止，不运行 `structure_roi_aug`；以配对 Val/infer 证据为准。
+Train、Val、Test 的 capture source 和 raw image 必须完全隔离；人员隔离至少保留警告。困难挖掘仅使用 Train。唯一 winner 只能根据固定 Val 冻结；Test 只执行一次该 winner，Test 输出不得被数据审计、采样、训练、mining、threshold 或 checkpoint 选择代码读取。

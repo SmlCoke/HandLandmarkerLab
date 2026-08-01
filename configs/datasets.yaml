@@ -1,0 +1,53 @@
+schema_version: 1
+contract: hlml_warehouse_selection_v1
+
+# Operators control membership only with published IDs and a Palm proposal
+# variant. Paths are discovered from HLMF manifests below HAND_DATASET_ROOT.
+stages:
+  geometry:
+    datasets:
+      - dataset_id: "${HLML_PRETRAIN_DATASET_ID:-replace-me-pretrain}"
+        proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+        weight: 1.0
+
+  multitask:
+    datasets:
+      - dataset_id: "${HLML_PRETRAIN_DATASET_ID:-replace-me-pretrain}"
+        proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+        weight: 1.0
+    negative_datasets:
+      - negative_dataset_id: "${HLML_NEGATIVE_DATASET_ID:-replace-me-negatives}"
+        weight: 1.0
+
+  multi_finetune:
+    # Mandatory pretrain replay pool.
+    datasets:
+      - dataset_id: "${HLML_PRETRAIN_DATASET_ID:-replace-me-pretrain}"
+        proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+        weight: 1.0
+    # Optional newly recorded Train datasets join the hard/new 55% side.
+    new_datasets: []
+    selections:
+      - selection_id: "${HLML_SELECTION_ID:-replace-me-selection}"
+        weight: 1.0
+    negative_datasets:
+      - negative_dataset_id: "${HLML_NEGATIVE_DATASET_ID:-replace-me-negatives}"
+        weight: 1.0
+    hard_fraction: 0.55
+    replay_fraction: 0.45
+
+evaluation:
+  val:
+    - dataset_id: "${HLML_EVAL_DATASET_ID:-replace-me-eval}"
+      proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+      weight: 1.0
+  test:
+    - dataset_id: "${HLML_EVAL_DATASET_ID:-replace-me-eval}"
+      proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+      weight: 1.0
+
+policies:
+  performer_cross_split: warn
+  image_integrity: stable_id_registry_size_dimensions_decode
+  image_sha256: disabled
+  test_may_feed_training_or_mining: false

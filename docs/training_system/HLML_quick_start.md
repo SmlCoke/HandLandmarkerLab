@@ -1,192 +1,141 @@
-# HLML Quick Start
+# HLML 4.0 Quick Start
 
-本文只列通用操作。当前使用的 ID、预算和实验安排见 [当前下一步计划](HLML_next_step_plan.md)，原理与排错见 [完整训练流程](HLML_training_workflow.md)。
+本页给出三阶段训练、固定 ROI 评估和导出的最短完整路径。详细输入契约与 YAML 参数见 `HLML_training_workflow.md`。
 
-## 1. 初始化
+## 环境依赖（首次部署）
+
+输入：仓库根目录的 `environment.yml` 和 `requirements.txt`。处理：创建原有 Python 3.8、TensorFlow 2.9 环境。输出：Conda 环境 `hand-landmarker-tf29` 及环境检查结果。
 
 ```bash
-cd /root/HandLandmarksFab
-git pull --ff-only
-conda activate anfab
+cd /path/to/HandLandmarkerLab
+conda env create -f environment.yml
+conda activate hand-landmarker-tf29
+python -m pip check
+make environment-check
+```
+
+已有环境时只执行 `conda activate hand-landmarker-tf29`。
+
+## 0. 设置运行身份
+
+`HAND_DATASET_ROOT` 保存 HLMF 发布的数据和 registry；`HAND_TRAIN_ROOT` 只保存 HLML 索引、训练与发布产物。
+
+```bash
+export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
+export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
+export HLML_SNAPSHOT_ID=v4-r1
+export HLML_EXPERIMENT_ID=v4-r1
+export HLML_RELEASE_ID=v4-r1
+cd /path/to/HandLandmarkerLab
+```
+
+五个公共 YAML 各自只有一种职责：`datasets.yaml` 管成员选择，`training.yaml` 管三阶段训练，`evaluation.yaml` 管固定 ROI Val/Test，`inference.yaml` 管原图文件夹级联推理，`deploy.yaml` 只管 ONNX/A1 导出。
+
+## 1. 数据成员选择（Dataset Selection）
+
+输入：HLMF 已发布的 dataset、negative dataset、selection ID。操作：编辑 `configs/datasets.yaml` 或设置其中对应的 `HLML_*` 环境变量。输出：只确定成员关系，不复制图片。
+
+```bash
+export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
+export HLML_NEGATIVE_DATASET_ID=background-neg-0801
+export HLML_SELECTION_ID=hard-positive-0801
+export HLML_EVAL_DATASET_ID=national-eval-0801
+export HLML_PROPOSAL_VARIANT=palm-v1
+```
+
+## 2. 配置解析（Config Check）
+
+输入：五份单一职责公共 YAML 和环境变量。输出：终端 `status=ok` 及已解析的训练、评估、推理和导出配置。
+
+```bash
+make config-check
+```
+
+## 3. Geometry 阶段
+
+输入：PretrainSource 的可靠 positive 和 geometry profile。处理：先生成零拷贝 snapshot，再训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
+
+```bash
+make geometry
+```
+
+## 4. Multitask 阶段
+
+输入：geometry winner、Train positive 和按 ID/权重选择的已发布真负样本。处理：训练 landmarks、presence、handedness 多任务。输出：`snapshots/<id>/multitask/` 和 `runs/<experiment>/multitask/checkpoints/best.weights.h5`。
+
+```bash
+make multitask
+```
+
+## 5. Train-only 困难来源挖掘
+
+输入：multitask Train snapshot 和 multitask winner。输出：`mining/<snapshot_id>/source_ranking.json`、`student_predictions.jsonl` 和交给 HLMF 的 `hlmf_review_request.jsonl`。命令拒绝 Val/Test。
+
+```bash
+make mine-hard
+```
+
+在 HLMF 完成 `hard-review` / `hard-publish` 后，把发布的 `selection_id` 写回 `configs/datasets.yaml`。
+
+## 6. Multi-finetune 阶段
+
+输入：multitask winner、困难 selection、可选新录制 Train 数据、真负样本和 mandatory pretrain replay。默认 hard/new 55%、replay 45%，replay 不可为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
+
+```bash
+make multi-finetune
+```
+
+## 7. 固定 Hand ROI Val
+
+输入：HLMF 已复核的 Val ROI snapshot 和候选 checkpoint。处理：只运行 Hand Landmarker，可在 Val 选择 presence threshold。输出：`runs/<experiment>/eval/multi_finetune/val/{predictions.jsonl,metrics.json}`。
+
+```bash
+make val HLML_STAGE=multi_finetune
+```
+
+## 8. 冻结唯一 Winner
+
+输入：固定 ROI Val 的 `metrics.json` 和 `best.weights.h5`。输出：不可变的 `releases/<release_id>/winner.json`。
+
+```bash
+make freeze-winner HLML_STAGE=multi_finetune HLML_RELEASE_ID="$HLML_RELEASE_ID"
+```
+
+## 9. Locked Fixed-ROI Test
+
+输入：winner descriptor 和 HLMF 已复核 Test ROI。处理：只测锁定 checkpoint/threshold，不运行 Palm，不允许覆盖或调参。输出：`releases/<release_id>/test/{predictions.jsonl,metrics.json}`。
+
+```bash
+make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID="$HLML_RELEASE_ID"
+```
+
+## 10. ONNX/A1 导出
+
+输入：multi-finetune v2 checkpoint 和 export profile。处理：导出 opset 11 ONNX并审计 A1 算子与数值一致性。输出：`runs/<experiment>/export/multi_finetune/hand_landmarker_v2.onnx` 及 contract/report。
+
+```bash
+make export HLML_STAGE=multi_finetune
+```
+
+## 11. 可选文件夹推理（Folder Inference）
+
+输入：任意原图文件夹。处理：Palm → Hand ROI → Hand；这不是 Val/Test 协议。输出：`inference/<experiment>/multi_finetune/` 的 JSONL、summary 和可视化。
+
+```bash
+export HLML_INFER_INPUT=/path/to/images
+make infer HLML_STAGE=multi_finetune
+```
+
+## 12. 环境、语法、测试与验收
+
+输入：训练环境、代码、配置和合成 warehouse。输出：终端检查结果。
+
+```bash
+make environment-check
 make compile
 make test
-
-cd /root/HandLandmarkerLab
-git pull --ff-only
-conda activate hand-landmarker-tf29
-make paths
-make compile
-make test-unit
-make doctor
+make acceptance-smoke
+make help
 ```
 
-## 2. HLMF 聚合基础数据
-
-```bash
-cd /root/HandLandmarksFab
-conda activate anfab
-make finalize_train_pretrain
-make build_pretrain_source_registry
-make finalize_val
-make finalize_test
-```
-
-## 3. Pretrain
-
-```bash
-cd /root/HandLandmarkerLab
-conda activate hand-landmarker-tf29
-
-# 可选：只允许某一代 dataset_id 参与完整来源自动留出；不挑单张图片
-export HAND_PRETRAIN_HOLDOUT_DATASET_PATTERN='.*-<batch-token>-.*'
-make pretrain-curate
-# 人工复制 negative_candidates 为 negative_reviewed，删除含手/模糊图片
-make pretrain-curate-reviewed
-
-make inspect-geometry
-make audit-geometry-sampling
-make inspect-geometry-smoke
-make pretrain-geometry-smoke
-make check-geometry-smoke
-make pretrain-geometry
-make eval-val-geometry
-make infer-geometry
-
-make check-multitask-data
-make inspect-multitask
-make pretrain-multitask
-make eval-val-multitask
-make infer-multitask
-make export-multitask
-```
-
-`pretrain-curate` 自动生成 5,000～10,000 个完整来源隔离的 teacher holdout；`audit-geometry-sampling` 必须通过后才能正式训练。正式 geometry 的每个 epoch 是固定数量随机抽样。训练始终逐轮维护 `best` 和 `last`，并按配置每 5 epoch 在 `geometry/checkpoints/periodic/` 保存一次当前权重与恢复状态。
-
-## 4. 建立 Finetune Gold 和 replay
-
-```bash
-cd /root/HandLandmarksFab
-conda activate anfab
-
-# 每一批 Dragon 使用不同批次 ID
-make prepare_dragon_gold \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  DRAGON_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/dragon/<dragon-batch-id>/source \
-  DRAGON_BATCH_ID=<dragon-batch-id>
-
-make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
-
-cd /root/HandLandmarkerLab
-conda activate hand-landmarker-tf29
-make prepare-finetune-sources HAND_FINETUNE_ID=<finetune-data-id>
-```
-
-## 5. 一轮新录制 + disagreement Gold
-
-新录制来源先在 HLMF 跑完 00～03，再导出：
-
-```bash
-cd /root/HandLandmarksFab
-make export_finetune_gold \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_SOURCE_ID=new_recorded_gold_<round-id> \
-  FINETUNE_SOURCE_MODE=native_existing \
-  FINETUNE_RAW_SOURCE_ROOT=$HAND_DATASET_ROOT/GoldSource/new_recorded_gold/new_recorded_gold_<round-id>/source \
-  FINETUNE_MAX_ITEMS=<new-recorded-limit>
-```
-
-HLML 冻结剩余 disagreement：
-
-```bash
-cd /root/HandLandmarkerLab
-make prepare-finetune-round \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_ROUND_ID=<round-id> \
-  FINETUNE_GOLD_BUDGET=<round-budget> \
-  NEW_RECORDED_SOURCE_IDS=new_recorded_gold_<round-id>[,new_recorded_gold_<other-id>]
-```
-
-HLMF 导出、人工 CVAT、导入并聚合：
-
-```bash
-cd /root/HandLandmarksFab
-make export_finetune_gold \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_SOURCE_ID=disagreement_gold_<round-id> \
-  FINETUNE_SOURCE_MODE=selection_subset
-
-# reviewed.xml 放入 GoldSource/<domain>/<source-id>/task/ 后
-make import_finetune_gold HAND_FINETUNE_ID=<finetune-data-id>
-make finalize_train_finetune HAND_FINETUNE_ID=<finetune-data-id>
-```
-
-import 成功后 task 自动退休，最终批次应看到 `published/finetune_source.json`，不应继续保留同批 task。Dragon 保留 `source + published`；其他目录按 source/task/published 的真实语义判断，不手工合并或复制。
-
-## 6. Finetune 候选
-
-先为 GoldSource 中每个 published 子批次冻结显式决定。列出的 ID 启用，其余逐项写为禁用；replay 没有开关且必须存在：
-
-```bash
-cd /root/HandLandmarkerLab
-conda activate hand-landmarker-tf29
-
-make prepare-finetune-gold-selection \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  GOLD_ENABLE_SOURCE_IDS=<id-a>,<id-b>,<id-c>
-
-make finetune-curate HAND_FINETUNE_ID=<finetune-data-id> FINETUNE_PROFILE=<profile>
-make check-finetune-data \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile> \
-  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
-  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
-make inspect-finetune HAND_FINETUNE_ID=<finetune-data-id>
-
-make finetune-smoke \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile> \
-  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
-  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
-make check-finetune-smoke \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile> \
-  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
-  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
-make finetune-train \
-  HAND_FINETUNE_ID=<finetune-data-id> \
-  FINETUNE_EXPERIMENT_ID=<experiment-id> \
-  FINETUNE_PROFILE=<profile> \
-  FINETUNE_GOLD_LOSS_WEIGHT=1.0 \
-  FINETUNE_PSEUDO_LOSS_WEIGHT=1.0
-make eval-val-finetune FINETUNE_EXPERIMENT_ID=<experiment-id>
-make infer-finetune FINETUNE_EXPERIMENT_ID=<experiment-id>
-```
-
-同一数据快照比较多个 profile 时，保持 `HAND_FINETUNE_ID` 不变，每个候选使用新的 `FINETUNE_EXPERIMENT_ID`。
-
-`training.gold_fraction` 是每批 Gold 的**抽样占比**；上面两个 `*_LOSS_WEIGHT` 才是进入 Loss 的 Gold/pseudo 倍率，二者不要混淆。默认 `1.0:1.0`。改变倍率时换新 `FINETUNE_EXPERIMENT_ID`，并在 data gate、smoke、smoke gate、正式训练四条命令中始终传同一组值。查看：
-
-```bash
-python -m json.tool \
-  /root/autodl-tmp/TrainFab/HLML-3.0/hand_landmarker_runs/<experiment-id>/finetune_data_gate.json
-```
-
-重点读取 `sampling.loss_weighting.configured_supervision_tier_weights` 和 `epoch0_effective_head_weight_mass_fraction`。倍率必须大于 0；不能把 mandatory replay 设为 0。若要让 Gold 的逐样本 Loss 倍率为 pseudo 的两倍，把四条命令中的值统一改成 `FINETUNE_GOLD_LOSS_WEIGHT=2.0 FINETUNE_PSEUDO_LOSS_WEIGHT=1.0`；无需重做数据快照。
-
-补充：finetune smoke 内部固定使用正/负均衡 overfit 抽样和 smoke-only 较快学习率，以便 256 ROI 同时检验三个输出 head；正式训练的抽样与学习率仍以 `train_finetune.yaml` 和 data gate 为准，不要手工覆盖 smoke 的内部探针配置。
-
-## 7. 比较、Test 和导出
-
-```bash
-make compare-finetune-runs \
-  BASELINE_FINETUNE_ID=<baseline-experiment-id> \
-  CANDIDATE_FINETUNE_ID=<candidate-experiment-id>
-
-# winner 冻结后才运行 locked Test
-make eval-test-finetune FINETUNE_EXPERIMENT_ID=<winner>
-make export-finetune FINETUNE_EXPERIMENT_ID=<winner>
-make conversion-data-finetune FINETUNE_EXPERIMENT_ID=<winner>
-```
+Val/Test 只衡量已经提供的固定 Hand ROI；不重新运行 Palm，也不报告 Palm 漏检或原图级联性能。

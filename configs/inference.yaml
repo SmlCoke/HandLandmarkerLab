@@ -2,30 +2,11 @@ schema_version: 1
 task: infer_folder
 
 input:
-  images_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_inference/input"
+  images_dir: "${HLML_INFER_INPUT:-/root/autodl-tmp/TrainFab/HLML-4.0/inference/input}"
   recursive: true
   extensions: [.png, .jpg, .jpeg, .tif, .tiff, .bmp]
   rotate_clockwise: false
   source_orientation: as_stored_no_auto_rotate
-
-model:
-  version: v2
-  checkpoint_stage: "${HAND_MODEL_STAGE:-pretrain}"
-  input_shape: [1, 256, 256]
-  input_layout: NCHW
-  input_dtype: float32
-  input_scale: 0.00392156862745098
-  input_offset: 0.0
-  num_iterations: [2, 2, 3, 4, 4, 6, 6]
-  output_order: [landmarks, hand_flag, handedness]
-  output_sizes:
-    landmarks: 42
-    hand_flag: 1
-    handedness: 1
-
-hand:
-  backend: keras
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_runs/${HAND_EXPERIMENT_ID:-v3-pretrain-r1}/${HAND_RUN_PHASE:-geometry}/checkpoints/best.weights.h5"
 
 palm:
   model_path: preminilary/palm/model_opt.onnx
@@ -47,13 +28,29 @@ hand_roi:
   output_size: 256
   rotation_convention: board_wrist_to_middle_mcp
 
+model:
+  version: v2
+  checkpoint_stage: "${HLML_CHECKPOINT_STAGE:-pretrain}"
+  input_shape: [1, 256, 256]
+  input_layout: NCHW
+  input_dtype: float32
+  input_scale: 0.00392156862745098
+  input_offset: 0.0
+  num_iterations: [2, 2, 3, 4, 4, 6, 6]
+  output_order: [landmarks, hand_flag, handedness]
+  output_sizes: {landmarks: 42, hand_flag: 1, handedness: 1}
+
+hand:
+  backend: keras
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
+
 inference:
   batch_size: 64
   hand_flag_threshold: 0.50
   fail_fast: false
 
 output:
-  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-3.0}/hand_landmarker_inference/${HAND_EXPERIMENT_ID:-v3-pretrain-r1}/${HAND_RUN_PHASE:-geometry}"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/inference/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}"
   write_annotated_images: true
   write_jsonl: true
   draw_palm_box: true

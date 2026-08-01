@@ -1,0 +1,54 @@
+schema_version: 1
+task: export_onnx
+
+# This file is intentionally export-only. Fixed-ROI evaluation and folder
+# inference live in evaluation.yaml and inference.yaml.
+model:
+  version: v2
+  checkpoint_stage: "${HLML_CHECKPOINT_STAGE:-pretrain}"
+  input_shape: [1, 256, 256]
+  input_layout: NCHW
+  input_dtype: float32
+  input_scale: 0.00392156862745098
+  input_offset: 0.0
+  num_iterations: [2, 2, 3, 4, 4, 6, 6]
+  output_order: [landmarks, hand_flag, handedness]
+  output_sizes: {landmarks: 42, hand_flag: 1, handedness: 1}
+
+hand:
+  backend: keras
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
+
+export:
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/export/${HLML_STAGE:-geometry}/hand_landmarker_v2.onnx"
+  opset: 11
+  input_name: inputs
+  output_names: [landmarks, hand_flag, handedness]
+  dynamic_batch: false
+  maximum_model_size_mb: 15.0
+  maximum_depthwise_group: 128
+  minimum_quantization_output_range: 1.0e-6
+  overwrite: false
+  strict_a1_operators: true
+  a1_allowed_operators: [Conv, Add, Relu, MaxPool, Sigmoid, Identity, Reshape]
+  metadata:
+    input_layout: NCHW
+    input_color: grayscale
+    input_scale: 0.00392156862745098
+    landmark_space: normalized_crop_xy
+    landmark_order: id_0_to_20_interleaved_xy
+    handedness_left: 0
+    handedness_right: 1
+  validate:
+    enabled: true
+    backend: onnxruntime_cpu
+    random_samples: 4
+    fusion_absolute_tolerance: 5.0e-5
+    fusion_relative_tolerance: 5.0e-4
+    absolute_tolerance: 1.0e-5
+    relative_tolerance: 1.0e-4
+    require_output_order_match: true
+  conversion_datasets: {enabled: false}
+
+runtime:
+  device: cpu

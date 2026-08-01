@@ -57,7 +57,7 @@ class MonitorDirectionTests(unittest.TestCase):
             _monitor_mode("custom_score")
 
     def test_pretrain_config_is_explicit_and_lr_can_run_before_early_stop(self):
-        config = load_config(ROOT / "configs" / "train_geometry.yaml")
+        config = load_config(ROOT / "configs" / "training.yaml")
         training = config["training"]
         self.assertEqual(
             {"monitor": "val_landmark_mae", "mode": "min"},

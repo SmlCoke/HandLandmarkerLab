@@ -8,6 +8,7 @@ and is intentionally unavailable from this evaluation entry point.
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -192,6 +193,22 @@ def evaluate_hand_rois(
     raw_max_abs_values: List[float] = []
     out_of_range_hand_count = 0
     out_of_range_coordinate_count = 0
+    collapse_positive_count = 0
+    collapse_count = 0
+    group_fields = (
+        "dataset_id",
+        "capture_source_id",
+        "label_origin",
+        "annotation_style",
+        "distance",
+        "lighting",
+    )
+    grouped_metrics: Dict[str, Dict[str, EvaluationMetrics]] = {
+        field: {} for field in group_fields
+    }
+    grouped_collapse: Dict[str, Dict[str, List[int]]] = {
+        field: defaultdict(lambda: [0, 0]) for field in group_fields
+    }
 
     for start in range(0, len(rows), batch_size):
         batch_rows = rows[start : start + batch_size]
@@ -255,6 +272,30 @@ def evaluate_hand_rois(
             detail = _row_metrics(row, hand, threshold, predicted_points)
             detail["evaluation_scope"] = "provided_hand_roi"
             detail["model_checkpoint_stage"] = model_checkpoint_stage
+            expected_positive = bool((row.get("hand_presence") or {}).get("present", False))
+            if predicted_points:
+                xs = [float(point[0]) for point in predicted_points]
+                ys = [float(point[1]) for point in predicted_points]
+                collapse = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) < (
+                    0.05 * math.hypot(255.0, 255.0)
+                )
+            else:
+                collapse = False
+            detail["landmark_collapse"] = bool(collapse)
+            for field in group_fields:
+                value = str(row.get(field) if row.get(field) not in (None, "") else "unknown")
+                detail[field] = row.get(field)
+                metric = grouped_metrics[field].setdefault(
+                    value,
+                    EvaluationMetrics(config.get("evaluation", {}).get("pck_thresholds", [0.05, 0.10, 0.15])),
+                )
+                _update_aggregate(metric, row, hand, threshold, predicted_points)
+                if expected_positive:
+                    grouped_collapse[field][value][1] += 1
+                    grouped_collapse[field][value][0] += int(collapse)
+            if expected_positive:
+                collapse_positive_count += 1
+                collapse_count += int(collapse)
             details.append(detail)
             scores.append((bool((row.get("hand_presence") or {}).get("present", False)), hand.hand_flag_score))
 
@@ -272,6 +313,35 @@ def evaluate_hand_rois(
             "normalized_out_of_range_coordinate_count": out_of_range_coordinate_count,
         },
         "presence_threshold": threshold,
+        "collapse": {
+            "count": collapse_count,
+            "eligible_positive_count": collapse_positive_count,
+            "rate": (
+                float(collapse_count) / float(collapse_positive_count)
+                if collapse_positive_count
+                else 0.0
+            ),
+            "definition": "predicted 21-point bounding diagonal below 0.05 of 256px ROI diagonal",
+        },
+        "grouped_metrics": {
+            field: {
+                value: {
+                    **metric.report(),
+                    "collapse": {
+                        "count": grouped_collapse[field][value][0],
+                        "eligible_positive_count": grouped_collapse[field][value][1],
+                        "rate": (
+                            float(grouped_collapse[field][value][0])
+                            / float(grouped_collapse[field][value][1])
+                            if grouped_collapse[field][value][1]
+                            else 0.0
+                        ),
+                    },
+                }
+                for value, metric in sorted(values.items())
+            }
+            for field, values in grouped_metrics.items()
+        },
         "details": details,
     }
     if bool(evaluation_config.get("tune_thresholds", False)):

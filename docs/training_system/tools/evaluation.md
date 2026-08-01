@@ -1,112 +1,14 @@
-# 评估与人工可视化复核
+# 固定 Hand ROI 评估契约
 
-## 1. Hand ROI Gold 评估
+Val/Test 的输入是 HLMF 已生成并经 CVAT 决策的 `256×256` Hand ROI。评估入口不加载 Palm Detector、不读取原图、不重建 ROI，也不把 Palm 未生成 ROI 的原图计入分母。
 
-```bash
-make eval-val-geometry
-make eval-test-geometry
-```
+输出包括 mean/median/P90/P95 像素误差、PCK、collapse、presence、handedness，并按 dataset、capture source、label origin、annotation style、距离和光照分组。
 
-multitask 完成后使用 `make eval-val-multitask` 和 `make eval-test-multitask`。目标名直接决定 checkpoint 子阶段。
+Val 可调 presence threshold 并选择唯一 winner。冻结后 Test：
 
-Val/Test 的 07B Gold 中，每行 `crop_path` 已经指向一张 `256×256` Hand ROI。评估器直接把这些 ROI 批量送入 Hand Landmarker，执行路径固定为：
+- 只接受 `winner.json` 中的 checkpoint；
+- 使用 Val 冻结 threshold；
+- 禁止 threshold sweep 和覆盖结果；
+- 不能反馈给 mining、训练成员、采样权重或 checkpoint 选择。
 
-```text
-canonical Hand ROI → Hand Landmarker → 三个 head 的指标
-```
-
-评估过程不会读取原图、运行 Palm、重新裁 ROI 或做 ROI matching。报告只表示 Hand ROI 级性能，不包含 Palm detection、原图级 recall 或端到端级联性能。
-
-### Presence
-
-在所有未忽略 ROI 上输出 TP/FP/TN/FN、accuracy、precision、recall、F1、FPR 和 FNR。Val 可以扫 threshold；Test 配置关闭调阈值，必须使用同一 pretrain phase 在 Val 上冻结的值。geometry 与 multitask 的 threshold 必须独立选择、记录和冻结。
-
-具体冻结流程：运行对应阶段的 `make eval-val-geometry` 或 `make eval-val-multitask`，根据 Val 报告选择 threshold，把值写入 `configs/eval_test.yaml` 的 `evaluation.hand_flag_threshold`，并在实验记录中注明阶段，再运行同阶段的 Test。外部推理还应同步更新 `configs/infer.yaml` 的 `inference.hand_flag_threshold`。
-
-### Landmarks
-
-主指标覆盖所有 GT positive。即使模型 presence 判为 false，只要 landmark head 有输出，仍计算 21 点误差，避免幸存者偏差。
-
-- 每 ROI 的 21 点平均像素误差及 mean/median/P90/P95；
-- 每个 landmark ID 的平均误差；
-- NME：除以 GT 21 点外接框对角线；
-- PCK@0.05/0.10/0.15；
-- landmark prediction coverage。
-
-若某个 GT positive 没有可用 landmark prediction，landmark coverage 记为缺失，PCK 对应点按 failure 计数；不会伪造一个有限像素误差。
-
-### Handedness
-
-只在 GT positive 且 Left/Right 明确的样本上报告 overall accuracy、Left recall、Right recall 和 confusion matrix。
-
-默认输出目录分别是 `${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/eval/<phase>/val` 与 `${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/eval/<phase>/test`，目录内包含 `metrics.json` 和逐 ROI `predictions.jsonl`。
-
-评估默认不覆盖已有的这两个文件；重复运行前应换一个 `output.dir`，或在确认后显式设置 `output.overwrite: true`。
-
-`predictions.jsonl` 每行保存：
-
-- ROI 身份、canonical `crop_path` 与审计后解析路径；
-- Gold/predicted presence、handedness 及两个 score；
-- `landmarks_roi_norm`：固定 21 个 `[x,y]` 归一化预测点，不因 presence threshold 未通过而丢弃；
-- 对 GT positive 的 `landmark_errors_px_by_id`（ID 0..20）、平均像素误差和 NME；negative 的误差字段为 `null`；
-- `landmark_raw_max_abs` 与 `normalized_out_of_range_coordinate_count`，用于识别线性 landmark head 的输出范围异常；v2 不再对异常坐标做 `/256` 静默兼容缩放；
-- 本次 Gold JSONL 的 `labels_sha256`、实际 Hand 模型的 `hand_model_sha256`，以及从配置 `model.checkpoint_stage` 复制的 `model_checkpoint_stage`。
-
-`metrics.json` 汇总上述指标和 `landmark_output_health`，并记录 Gold JSONL 路径/SHA-256、实际评估 backend、模型路径/SHA-256、`model_checkpoint_stage`、配置路径/SHA-256 及 canonical 数据审计结果。逐 ROI 与汇总 provenance 让不同训练路线可以按同一 Gold 和模型字节复核；这些哈希不表示 Palm 或端到端整图评估。
-
-需要临时评估另一份同阶段 checkpoint 或输出到新目录时，不必修改 YAML：
-
-```bash
-python scripts/evaluate.py --config configs/eval_val.yaml \
-  --model-path /path/to/checkpoint.weights.h5 \
-  --output-dir /path/to/eval-output
-```
-
-确认可替换既有结果时再追加 `--overwrite`。CLI 覆盖不会改写配置；自定义模型路径与输出目录必须由操作者放在正确的 geometry/multitask 命名空间中。
-
-## 2. 任意文件夹人工复核
-
-编辑 `configs/infer.yaml` 的输入路径，然后运行：
-
-```bash
-make infer-geometry
-```
-
-multitask 使用 `make infer-multitask`。输出按阶段隔离在 `${HAND_TRAIN_ROOT}/hand_landmarker_inference/<PRETRAIN_ID>/<phase>`。
-
-这是本系统中处理任意外部图片的独立入口，始终执行：
-
-```text
-任意外部图片 → Palm → rotated ROI → Hand
-```
-
-它会输出：
-
-```text
-<output>/rendered/**/<原文件名（含扩展名）>.annotated.png
-<output>/predictions.jsonl
-<output>/summary.json
-```
-
-叠加图包含 Palm bbox、旋转 ROI、Hand skeleton、Palm/presence/handedness 分数。板端本身不会按 `hand_flag` 门控 landmark 输出；PC 图中 threshold 仅控制是否绘制骨架，JSONL 始终保存三个 head 的原始结果。
-
-`make infer-geometry`/`make infer-multitask` 的级联输出用于人工复核，不得写入或替代对应阶段的 Val/Test Hand ROI 指标。
-
-输入应是标注系统约定的 `1280×720 upright` 灰度/可转灰度图。若输入是板端传感器的 `720×1280` 竖屏原始方向，显式设置：
-
-```yaml
-input:
-  source_orientation: sensor_portrait_rotate_clockwise
-```
-
-输出目录默认不覆盖已有结果；确认后设置 `output.overwrite: true`。
-
-也可对单次运行覆盖模型和输出目录：
-
-```bash
-python scripts/infer_folder.py --config configs/infer.yaml \
-  --model-path /path/to/checkpoint.weights.h5 \
-  --output-dir /path/to/infer-output
-```
-
-确认可覆盖时追加 `--overwrite`。推理摘要会连同模型路径/SHA-256 记录 `model.checkpoint_stage`；该字段来自配置而不是路径猜测，因此自定义模型必须与所选阶段 wrapper 一致。
+当前评估范围不是 Palm 检测或原图级联，因此不报告 Palm 漏检率、部分双手召回率或级联准确率。

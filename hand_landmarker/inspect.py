@@ -57,6 +57,10 @@ def verify_dataset_curation_manifest(
 
     stage = str(dataset.get("require_training_stage") or config.get("stage") or "")
     schema = str(dataset.get("require_curation_schema") or "")
+    if schema == "hlml_warehouse_snapshot_v1":
+        from .warehouse import verify_snapshot_manifest
+
+        return verify_snapshot_manifest(config, dataset, error_type=error_type)
     if stage == "finetune" or schema == "finetune_curation_v1":
         from .finetune_curation import verify_finetune_curation_manifest
 
@@ -408,7 +412,14 @@ def validate_canonical_record(
         if tier not in {"pseudo", "gold"}:
             errors.append("supervision_tier must be pseudo or gold")
         provenance = str(row.get("annotation_provenance", ""))
-        expected_provenance = {"pseudo": "mediapipe_pseudo", "gold": "human_gold"}.get(tier)
+        if str(row.get("schema_version")) == "hlml_warehouse_train_v1":
+            expected_provenance = (
+                "human_gold"
+                if str(row.get("label_origin")) in {"human", "mediapipe_human_corrected"}
+                else "mediapipe_pseudo"
+            )
+        else:
+            expected_provenance = {"pseudo": "mediapipe_pseudo", "gold": "human_gold"}.get(tier)
         if expected_provenance and provenance != expected_provenance:
             errors.append(
                 "annotation_provenance {} conflicts with supervision_tier {}".format(provenance, tier)

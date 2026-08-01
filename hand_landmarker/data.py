@@ -326,8 +326,8 @@ class WeightedStratifiedSampler:
         if self.stage == "finetune":
             if self.gold_fraction is None:
                 raise DatasetContractError("training.gold_fraction is required for finetune")
-            if not 0.30 <= self.gold_fraction <= 0.50:
-                raise DatasetContractError("training.gold_fraction must be within [0.30, 0.50]")
+            if not 0.0 < self.gold_fraction < 1.0:
+                raise DatasetContractError("training.gold_fraction must be strictly between 0 and 1")
             if "gold" not in self.groups or "pseudo" not in self.groups:
                 raise DatasetContractError("Finetune requires both gold and pseudo supervision tiers")
         self._validate_groups()
@@ -1503,7 +1503,11 @@ def _validation_dataset_config(config: Mapping[str, Any], dataset: Mapping[str, 
         value["ignored_labels"] = validation["ignored_labels"]
     else:
         value.pop("ignored_labels", None)
-    value["require_schema_version"] = EVALUATION_SCHEMA
+    value["require_schema_version"] = (
+        "hlml_fixed_roi_evaluation_v1"
+        if str(dataset.get("require_curation_schema", "")) == "hlml_warehouse_snapshot_v1"
+        else EVALUATION_SCHEMA
+    )
     value["require_split"] = "val"
     value.pop("require_training_stage", None)
     return value
@@ -1535,12 +1539,13 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
     curation_manifest = verify_dataset_curation_manifest(
         cfg, dataset_cfg, error_type=DatasetContractError
     )
+    warehouse_snapshot = str(dataset_cfg.get("require_curation_schema", "")) == "hlml_warehouse_snapshot_v1"
     train_records, train_report = audit_canonical_dataset(
         cfg,
         dataset=dataset_cfg,
         expected_stage=stage,
         check_images=True,
-        hash_images=True,
+        hash_images=not warehouse_snapshot,
         raise_on_error=True,
     )
 
@@ -1557,7 +1562,7 @@ def create_sequences(config: Union[Mapping[str, Any], str, Path]):
             dataset=val_dataset,
             expected_split="val",
             check_images=True,
-            hash_images=True,
+            hash_images=not warehouse_snapshot,
             raise_on_error=True,
         )
         validation_records = val_records

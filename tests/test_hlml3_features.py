@@ -16,21 +16,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Hlml3FeatureTests(unittest.TestCase):
-    def test_finetune_profiles_resolve_one_yaml(self) -> None:
+    def test_v4_stage_profiles_resolve_one_yaml(self) -> None:
         with mock.patch.dict(
             os.environ,
             {
-                "FINETUNE_PROFILE": "structure_roi_aug",
-                "FINETUNE_EXPERIMENT_ID": "experiment-test",
+                "HLML_STAGE": "multi_finetune",
+                "HLML_EXPERIMENT_ID": "experiment-test",
             },
             clear=False,
         ):
-            config = load_config(ROOT / "configs" / "train_finetune.yaml")
-        self.assertEqual("structure_roi_aug", config["resolved_profile"])
-        self.assertEqual(5.0, config["losses"]["bone_vector"]["coefficient"])
-        self.assertEqual(1.0, config["losses"]["spread_ratio"]["coefficient"])
-        self.assertEqual(10.0, config["augmentation"]["rotation_degrees"])
-        self.assertIn("/experiment-test/finetune", config["outputs"]["run_dir"])
+            config = load_config(ROOT / "configs" / "training.yaml")
+        self.assertEqual("multi_finetune", config["resolved_profile"])
+        self.assertEqual("finetune", config["stage"])
+        self.assertEqual(0.55, config["training"]["gold_fraction"])
+        self.assertEqual(0.0, config["losses"]["bone_vector"]["coefficient"])
+        self.assertIn("/experiment-test/multi_finetune", config["outputs"]["run_dir"])
 
     def test_identity_union_covers_all_required_namespaces(self) -> None:
         tokens = identity_tokens(
