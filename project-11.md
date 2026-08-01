@@ -1,7 +1,7 @@
 
 # 🚀 【集创赛·思特威杯】项目背景与系统架构全景指南 V6
 
-> Last Updated: 2026-07-01
+> Last Updated: 2026-07-31
 
 ## 一、 赛事背景与赛题约束
 
@@ -41,7 +41,7 @@ A1 NPU 支持的 ONNX 算子及其限制如下：
 | Concat | 支持 C通道拼接 |
 | Split | 支持 C通道拆分 |
 | Relu | 无特殊限制 |
-| LeakyRelu | 历史白名单曾声明仅支持 alpha = 0.1 或 0.01；当前官方转换工具链实测已不接受，本项目 v2 禁用 |
+| LeakyRelu | 历史白名单曾声明仅支持 alpha = 0.1 或 0.01；当前官方转换工具链实测已不接受，本项目m目前禁用 |
 | Transpose | 支持4维tensor维度重排， perm = [0,2,3,1] |
 | resize	  | 支持nearest |
 | convtranspose2d	| 无特殊限制 |
@@ -184,16 +184,16 @@ A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子
 
 ## 七、目前进展、未来规划与成员分工
 
-### 7.1 目前进展
+### 7.1 项目进展
 
-#### 初赛
+#### 7.1.1 初赛
 
 所有模型均已完成算子适配以及工具链转化，已完成部署测试。
 
 现有可正常在板上工作的模型情况以及精度
 
 | 模型 | 量化后大小 |状态 | 端侧精度 | PC 精度 |
-|---|---|---|
+|---|---|---|---|---|
 | Palm Detector | 2.02MB | ✅ 已部署 | 90%+ | 未测量 |
 | Hand Landmarker | 3.3MB |✅ 已部署 | 60%+ | 未测量 |
 | Pose Landmarker | 4.2MB | 🔲 未部署 | 未部署 | 未测量 |
@@ -206,9 +206,72 @@ A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子
 
 **最终结果**：初赛通过，成功晋级分赛区决赛，将前往线下参赛
 
+#### 7.1.2 华东分赛区决赛
+
+现有可正常在板上工作的模型情况以及精度
+
+<table>
+  <tr>
+    <th>模型</th>
+    <th>量化后大小</th>
+    <th>状态</th>
+    <th>PC 精度</th>
+    <th>端侧表现</th>
+  </tr>
+  <tr>
+    <td>Palm Detector</td>
+    <td>2.0MB</td>
+    <td>✅ 已部署</td>
+    <td colspan="2">存在漏检情况，但优于 Google MediaPipe 官方</td>
+  </tr>
+  <tr>
+    <td>Hand Landmarker</td>
+    <td>2.2MB</td>
+    <td>✅ 已部署</td>
+    <td>像素误差约 20 px</td>
+    <td>未测量</td>
+  </tr>
+  <tr>
+    <td>Gloss Translator</td>
+    <td>49KB</td>
+    <td>✅ 已部署</td>
+    <td>较好</td>
+    <td>差</td>
+  </tr>
+</table>
+
+板端部署后能够支持三种功能：
+
+1. **palm mode**: 只运行 Palm Detector，OSD 绘制手掌检测框
+2. **palm_hand mode**: 运行 Palm Detector + Hand Landmarker 级联，OSD 额外绘制手指关键点
+3. **fullcascade mode**: 运行 Palm Detector + Hand Landmarker + Gloss Translator，额外输出孤立词预测结果
+
+
+实际板端工作时的端到端延迟（**按 P95 记**）：
+
+- **palm mode**: 约 17.7 ms
+- **palm_hand mode**: 约 60 ms 
+- **fullcascade mode**: 约 62 ms
+
+#### 7.1.3 全国总决赛（Current）
+
+目前正在进行全国总决赛的工作，主要包括：
+
+- 重训 Palm Detector
+- 重训 Hand Landmarker
+- 重训 Gloss Translator，以及增加分类头数量
+
+成员分工
+
+| 成员 | 分工 |
+| --- | --- |
+| draong | 重训 Palm Detector |
+| peak | 重训 Hand Landmarker |
+| soar | 重训 Gloss Translator |
+
 ### 7.2 困难及解决办法
 
-#### 初赛阶段
+#### 7.2.1 初赛阶段
 
 初赛阶段，遇到的困难大致如下：
 
@@ -216,6 +279,27 @@ A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子
 2. **MediaPipe 模型适配 A1 NPU 的过程中遇到算子不支持的问题。**（✅解决：通过删减模型结构、调整模型参数等方式，成功适配了全部模型）
 3. **板上部署耗费较多时间**：见 PALM_DEBUGGING_NOTES.md（✅解决：反复询问 Codex）
 4. **实时性较差** 摄像头 90fps，要做到实时处理需要每帧模型处理以及预处理、OSD渲染时间小于 11.1ms，但是现在数据预处理时间耗费 9ms，Palm Detector 模型推理时间耗费 7 ms 左右，Hand Landmarker 模型单次 P95 约 36~45 ms。单次完整流程延迟约 65 ms，远高于 11.1ms 的要求。（🔲暂未解决）
+
+#### 7.2.2 华东分赛区决赛
+
+华东分赛区决赛阶段，遇到的困难大致如下：
+
+1. **模型精度**：
+    1. 板端运行时，Hand Landmarker 模型相比初赛已经有很大提升，但是部分手势仍然**偏差较大/塌缩严重**；
+    2. Palm Detector 模型依旧是初赛的版本，没有重训，**存在一定漏检情况（但优于 Google MediaPipe）**，且**高度依赖于特定的摄像头距离**，否则检测成功率大幅下降。
+    3. 根据以上亮点，Gloss Translator 模型的分类准确率也不理想，板端运行时状态糟糕。
+2. 目前**最严重的瓶颈是 Hand Landmarker 的精度提升**，目前已经尝试了多重手段：
+    1. pretrain (geometry+multitask) -> multi-finetune 多阶段训练策略
+    2. Google MediaPipe 自动标注 pesudo 标签，扩充 pretrain 数据集
+    3. 增加骨骼结构约束
+    4. 各种训练调参策略等
+   
+
+对于 Hand Landamrker 的精度提升，全国总决赛阶段，打算尝试的解决策略有：
+
+1. 延续 pretrain (geometry+multitask) -> multi-finetune 多阶段训练策略
+2. 继续扩充 pretrain 数据集，并且依旧是 Google MediaPipe 自动标注标签（经过实测，**Google MediaPipe 只要能够成功检出手掌，则关键点检测一定准确**）。这一次重点在于**数据集的多样性**。
+
 
 ### 7.3 未来规划
 
@@ -237,6 +321,20 @@ A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子
 07-13 目前情况：按照 07-08 的计划，由于时间有限，我们不打算再训练 Palm Detector 以追求更高精度，而是在 1280x720 输入下，录制了大量的 Hand Landmarker 的训练数据集，准备重新训练 Hand Landmarker 模型，确保在 A1 上的精度。现在，标注工作已经完成（训练集为 Google MediaPipe 自动标注，共约两万个样本；验证/测试集均为人工精标，各约一千个样本。）
 
 07-19 目前情况：我们已经录制好了 Hand Landmarker 数据集，包含 Google MediaPipe 自动标注的 pesudo 标签以及人工精标的标签，完成了 pretrain(geometry+multitask)-finetune 多阶段训练流程。Hand Landmarker 模型精度由于时间压力已经无法更新，目前准备 SSTCN 孤立词分类模型的训练，以及整理分赛区决赛材料。
+
+07-31 目前情况：我们已经完成了 Hand Landmarker 模型的的训练，并且成功将 Palm Detector + Hand Landmarker + Gloss Translator(改版后的 SSTCN) 三个模型部署在 A1 上，端侧手语识别的完整链路打通。目前团队已于 0724 成功获得华东赛区分赛区一等奖并晋级全国总决赛，接下来将继续优化模型精度以及端侧延迟。全国总决赛要求 08-21 提交作品，因此目前还剩下约 20 天的时间。
+
+**当前需要完成的工作**：
+
+1. 寻找学术界/工业界**孤立词分类模型/应用的实际准确率，用作 baseline**；
+2. 挖掘赛题的要求（例如帧率、抖动等），**以赛题要求指标为目标**，继续优化系统。关注 **“什么是加分项”** 并且按照优先级划分进行实现，例如可展示性：**OSD 绘制、增加分类头数量、降低延迟或者重定义延迟说法**
+3. 除了优化系统外，还需要兼顾文档撰写、PPT 制作、分享论文撰写等工作。**尤其是 PPT 制作**，需要较好地展示我们的工作，呈现: **“我们解决了什么实际问题”“亮点是什么”“与 Baseline 的量化对比”**
+
+**工作优先级**：
+
+1. 重新录制大规模数据集
+2. 重训三个模型，并且尽量并行开始，期间开始准备文档和 PPT 制作。
+3. 关注项目可展示性：支架、OSD 绘制、OLED 显示、孤立词数量
 
 ## 八、团队信息
 * **团队名称：** PeakDragonSoar (巅峰龙翔)
