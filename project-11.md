@@ -269,6 +269,8 @@ A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子
 | peak | 重训 Hand Landmarker |
 | soar | 重训 Gloss Translator |
 
+> 我们还为这三种模型分别取了适合发布的产品系列名字：Palm Detector -> AetherSign Eos 系列模型，或者简称 Eos; Hand Landmarker -> AetherSign Iris 系列模型，或者简称 Iris; Gloss Translator -> AetherSign Muse 系列模型，或者简称 Muse。
+
 ### 7.2 困难及解决办法
 
 #### 7.2.1 初赛阶段
@@ -293,7 +295,18 @@ A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子
     2. Google MediaPipe 自动标注 pesudo 标签，扩充 pretrain 数据集
     3. 增加骨骼结构约束
     4. 各种训练调参策略等
-   
+
+目前总结出的**结论经验**有：
+
+1. 分赛区决赛阶段，Hand Landmarker 模型在板端阶段展现出来的、远比初赛阶段良好的泛化特性，表明了 pretrain(geometry+multitask) -> multi-finetune **多阶段训练策略是可行的**，尤其是 geometry 阶段进行的大规模预训练，学习21 手指关键点骨骼几何结构。
+2. 分赛区决赛阶段最后做与训练时，比较仓促，因此当时的数据集仅包含了几种困难姿态，以及一些手语词，缺乏多样性、明暗、距离远近等丰富的场景姿态变化。因此，**现阶段第一个任务是重新录制包含各种姿态的数据集**。
+3. Palm Detector 模型存在比较严重的漏检情况，并且只要在任务距离摄像头合适距离时才能有很好的检测能力（距离一旦变近或者变远，检测成功率骤降）。因此，**Palm Detector 模型也不得不重新训练**。
+4. Google MediaPipe 作为 Hand Landmarker 的教师模型时，其检测准确度是相当高的，大部分图片，只要能够检测出手，那么该手的 21 个关键点预测几乎一定是正确的。因此，**我们之前认为的 pesudo-label ，其实基本就是 gold-label**。
+    1. 但是 Google MediaPipe 模型的漏检情况很严重，显著高于我们自己训练的 Palm Detector 模型。
+    2. 所幸，我们在之前制造 Hand Landmarker 的数据集时，策略是：我们自训练的 AetherSign Palm Detector 处理原始图片，给出 anchor 和 Hand ROI；然后 Google MediaPipe 直接处理 Hand ROI，给出 21 个关键点的预测结果。这种情况下，**许多 Google MediaPipe 模型可能本身会忽略的图片，经过我们的策略后仍然能够给出准确的 21 个关键点预测结果（已经通过实验验证过）**。
+    3. 当然，不排除部分困难姿态依旧没有充分进入训练集，可能也是我们的 Hand Landmarker 模型误差始终维持在 20 px 左右（验证集）无法下降的原因之一。比如说 Palm Detector 漏检的图片，Google MediaPipe 也无法给出 label，这些图片就无法进入训练集，我们的 Hand Landmarker 模型就无法学习到这些困难姿态的骨骼关键点预测。
+5. 分赛区阶段，验证(Val)集和测试(Test)集中有大量人工标注的 Hand ROI，而预训练的训练集全部来自于 Google MediaPipe，这**两者的标注风格不一致**，**很有可能就是我们当时在训练时，“训练 Loss 一直下降、而验证 Loss 变化无常甚至上升”的原因之一**。
+    1. 但是经过实验，Google MediaPipe 在 Val 集上的平均像素误差约为 6px，而我们训练的 Hand Landmarker 在 Val 集上的平均像素误差约为 21px，说明 Google MediaPipe 的标注风格和我们人工标注的风格**不是主要原因**。
 
 对于 Hand Landamrker 的精度提升，全国总决赛阶段，打算尝试的解决策略有：
 
