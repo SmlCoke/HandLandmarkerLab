@@ -69,3 +69,4 @@ These four documents serve as the primary interface documentation for the reposi
 
 1. Whether during manual operations or automated execution of the repository's programs, performing a hash check (SHA256) at every step is prohibited, as this results in significant waste of time and excessive disk space usage. Datasets from different sources can be effectively isolated based on details such as their source names.
 2. During each operation, the agent should perform only the tasks explicitly required by the prompt; maintaining simplicity avoids unnecessary, redundant auditing and verification, which would otherwise waste time.
+3. Whenever this repository is updated, there is no need to maintain compatibility with legacy modes, commands, or data assets unless explicitly requested by the user.
