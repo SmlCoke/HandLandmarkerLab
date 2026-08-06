@@ -52,6 +52,8 @@ This repository contains the training system for the Hand Landmarker model.
 - `docs\training_system\HLML_quick_start.md`: Referred to as the "quick_start" document; a simplified version of the "workflow" document containing instructions for executing the full process—ideal for getting started quickly.
 - `docs\training_system\HLML_current_training_status.md`: Referred to as the "current_status" document; it records the model's current training status. The content currently reflects the state as of July 19, 2026—specifically, the version preceding the final regional competition—offering some reference value.
 - `docs\training_system\HLML_next_step_plan.md`: Referred to as the "next_step_plan" document; it outlines the training plans and objectives for the next phase. The current content details the training plan and goals for the present stage (the National Finals).
+- `docs\annotating_system\HLML_qa.md`: Referred to as the "qa" document; it is used to record questions related to this repository raised by users during conversations, along with their answers.
+
 
 ## IV. General Working Rules
 
@@ -61,9 +63,10 @@ This repository contains the training system for the Hand Landmarker model.
 - The "quick_start" document is a simplified version of the "workflow" document; it contains only the commands for each operational step and omits explanations of underlying principles. Include the name of the process stage for each step and briefly describe the inputs and outputs. Please keep this principle in mind when making modifications. 
 - The "current_status" document records the current state of the system and the performance of the server-side model training. Please keep this principle in mind when making modifications.
 - The "next_step_plan" document outlines the plan for the next phase. Please keep this principle in mind when making modifications.
+- The "qa" document is used to record questions regarding this repository raised by users during conversations, along with their corresponding answers. Unless the user explicitly requests that a specific Q&A exchange be recorded in the prompt, there is no need to modify this document during routine work.
 
-These four documents have distinct roles and independent content; each should avoid extensively detailing the information covered in the others.
-These four documents serve as the primary interface documentation for the repository and are critical; they must be kept synchronized whenever there are subsequent updates to code, configurations, or other documentation.
+These five documents have distinct roles and independent content; each should avoid extensively detailing the information covered in the others.
+These five documents serve as the primary interface documentation for the repository and are critical; apart from the "qa" document, the remaining four documents must be kept synchronized whenever there are subsequent updates to code, configurations, or other documentation.
 
 ### 4.2 Principle of simplification
 
