@@ -4,7 +4,7 @@ HLML 是 Hand Landmarker v2 的训练、固定 ROI 评估和 ONNX/A1 导出系�
 
 本次升级不兼容旧配置、旧数据契约或旧命令。模型结构、ROI 几何、训练损失、checkpoint 以及 ONNX/A1 接口保持 v2 契约，不引入辅助 head 或结构实验。
 
-公共配置保持最少且单一职责：`datasets.yaml` 管数据成员，`training.yaml` 管三阶段训练，`evaluation.yaml` 管固定 ROI Val/Test，`inference.yaml` 管原图文件夹推理，`deploy.yaml` 只管 ONNX/A1 模型导出。
+公共配置保持最少且单一职责：`datasets.yaml` 管数据成员，`training.yaml` 管三阶段训练，`evaluation.yaml` 管固定 ROI Val/Test，`inference.yaml` 管原图文件夹推理，`deploy.yaml` 管 ONNX/A1 模型与配套转换数据导出。
 
 ## 边界
 
@@ -20,6 +20,7 @@ HLML 是 Hand Landmarker v2 的训练、固定 ROI 评估和 ONNX/A1 导出系�
 - [Quick Start](docs/training_system/HLML_quick_start.md)
 - [当前状态](docs/training_system/HLML_current_training_status.md)
 - [下一阶段计划](docs/training_system/HLML_next_step_plan.md)
+- [常见问题与解答](docs/annotating_system/HLML_qa.md)
 - [数据与训练契约](docs/training_system/tools/data_and_training.md)
 - [固定 ROI 评估](docs/training_system/tools/evaluation.md)
 - [部署契约](docs/training_system/tools/deployment_contract.md)

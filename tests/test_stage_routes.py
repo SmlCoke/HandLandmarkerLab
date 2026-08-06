@@ -35,6 +35,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
                 self.assertEqual("v2", config["model"]["version"])
                 self.assertEqual(checkpoint_stage, config["model"]["checkpoint_stage"])
                 self.assertEqual([2, 2, 3, 4, 4, 6, 6], config["model"]["num_iterations"])
+                self.assertEqual("tqdm", config["training"]["progress_bar"])
 
     def test_multitask_and_finetune_initialization_chain(self) -> None:
         with mock.patch.dict(os.environ, {"HLML_STAGE": "multitask"}, clear=False):
@@ -75,6 +76,11 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertTrue(config["export"]["strict_a1_operators"])
         self.assertFalse(config["export"]["dynamic_batch"])
         self.assertEqual(["landmarks", "hand_flag", "handedness"], config["export"]["output_names"])
+        conversion = config["export"]["conversion_datasets"]
+        self.assertTrue(conversion["enabled"])
+        self.assertEqual(100, conversion["sets"]["calibrate_datasets"]["sources"]["train"]["count"])
+        self.assertEqual(25, conversion["sets"]["evaluate_datasets"]["sources"]["val"]["count"])
+        self.assertEqual(25, conversion["sets"]["evaluate_datasets"]["sources"]["test"]["count"])
         self.assertNotIn("evaluation", config)
         self.assertNotIn("palm", config)
 
@@ -82,6 +88,9 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         config = load_config(CONFIGS / "inference.yaml")
         self.assertEqual("infer_folder", config["task"])
         self.assertIn("palm", config)
+        self.assertEqual("eos-1.0", config["palm"]["model_id"])
+        self.assertEqual("palm_detector", config["palm"]["models_root"])
+        self.assertNotIn("model_path", config["palm"])
         self.assertIn("hand_roi", config)
         self.assertNotIn("evaluation", config)
         self.assertNotIn("export", config)

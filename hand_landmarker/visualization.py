@@ -261,6 +261,10 @@ def infer_folder_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
             "path": str(model_path),
             "sha256": sha256_file(model_path),
         }
+        if name == "palm":
+            summary["models"][name]["model_id"] = runtime_config.get("palm", {}).get(
+                "model_id"
+            )
         if name == "hand":
             summary["models"][name]["checkpoint_stage"] = model_checkpoint_stage
     config_path_value = config.get("_meta", {}).get("config_path")

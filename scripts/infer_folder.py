@@ -16,6 +16,9 @@ from hand_landmarker.visualization import infer_folder_from_config
 def _apply_cli_overrides(config, args):
     if args.model_path:
         config.setdefault("hand", {})["model_path"] = args.model_path
+    if args.palm_model_id:
+        config.setdefault("palm", {})["model_id"] = args.palm_model_id
+        config.setdefault("palm", {}).pop("model_path", None)
     if args.output_dir:
         config.setdefault("output", {})["dir"] = args.output_dir
     if args.overwrite:
@@ -27,6 +30,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="Folder-inference YAML file")
     parser.add_argument("--model-path", help="Override hand.model_path")
+    parser.add_argument(
+        "--palm-model-id",
+        help="Temporarily override palm.model_id for this inference run",
+    )
     parser.add_argument("--output-dir", help="Override output.dir")
     parser.add_argument(
         "--overwrite",

@@ -1071,6 +1071,35 @@ class CanonicalDataContractTests(unittest.TestCase):
             }
             self.assertIn("image_sha256", kinds)
 
+    def test_fixed_roi_positive_allows_reviewed_unknown_handedness(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            image = root / "val.bmp"
+            _write_image(image, 91)
+            labels = root / "val.jsonl"
+            row = _evaluation_row("val", image)
+            row["handedness"] = {"label": "unknown", "score": None}
+            _write_jsonl(labels, [row])
+            dataset = _dataset_config(labels, root)
+            dataset.pop("require_training_stage")
+            dataset.update(
+                {
+                    "require_schema_version": "evaluation_gold_v1",
+                    "require_split": "val",
+                }
+            )
+
+            rows, report = audit_canonical_dataset(
+                {"data": dataset},
+                dataset=dataset,
+                expected_split="val",
+                check_images=True,
+                hash_images=False,
+                raise_on_error=True,
+            )
+            self.assertEqual(1, len(rows))
+            self.assertEqual("ok", report["status"])
+
     def test_ignored_manifest_overlap_is_fatal_and_reported(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

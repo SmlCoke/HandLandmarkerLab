@@ -29,7 +29,7 @@ export HLML_RELEASE_ID=v4-r1
 cd /path/to/HandLandmarkerLab
 ```
 
-五个公共 YAML 各自只有一种职责：`datasets.yaml` 管成员选择，`training.yaml` 管三阶段训练，`evaluation.yaml` 管固定 ROI Val/Test，`inference.yaml` 管原图文件夹级联推理，`deploy.yaml` 只管 ONNX/A1 导出。
+五个公共 YAML 各自只有一种职责：`datasets.yaml` 管成员选择，`training.yaml` 管三阶段训练，`evaluation.yaml` 管固定 ROI Val/Test，`inference.yaml` 管原图文件夹级联推理，`deploy.yaml` 管 ONNX/A1 模型与配套转换数据导出。
 
 ## 1. 数据成员选择（Dataset Selection）
 
@@ -57,7 +57,12 @@ make config-check
 
 ```bash
 make geometry
+make val HLML_STAGE=geometry
+export HLML_INFER_INPUT=/path/to/representative/images
+make infer HLML_STAGE=geometry
 ```
+
+训练结束后必须执行固定 ROI Val 与代表性原图 infer。
 
 ## 4. Multitask 阶段
 
@@ -65,7 +70,13 @@ make geometry
 
 ```bash
 make multitask
+make val HLML_STAGE=multitask
+export HLML_INFER_INPUT=/path/to/representative/images
+make infer HLML_STAGE=multitask
+make export HLML_STAGE=multitask
 ```
+
+Export 同时生成 ONNX/A1 报告和配套 conversion `datasets.zip`。
 
 ## 5. Train-only 困难来源挖掘
 
@@ -83,7 +94,13 @@ make mine-hard
 
 ```bash
 make multi-finetune
+make val HLML_STAGE=multi_finetune
+export HLML_INFER_INPUT=/path/to/representative/images
+make infer HLML_STAGE=multi_finetune
+make export HLML_STAGE=multi_finetune
 ```
+
+三条阶段后命令使用同一 snapshot/experiment/stage。
 
 ## 7. 固定 Hand ROI Val
 
@@ -111,7 +128,7 @@ make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID="$HLML_RELEASE_ID"
 
 ## 10. ONNX/A1 导出
 
-输入：multi-finetune v2 checkpoint 和 export profile。处理：导出 opset 11 ONNX并审计 A1 算子与数值一致性。输出：`runs/<experiment>/export/multi_finetune/hand_landmarker_v2.onnx` 及 contract/report。
+输入：multitask 或 multi-finetune v2 checkpoint、当前 stage snapshot 和 export profile。处理：导出 opset 11 ONNX、审计 A1 算子/数值，并生成 Train 100、Val 25、Test 25 个 NCHW `.npy`。输出：`runs/<experiment>/export/<stage>/` 下的 ONNX、contract/report 和 `model_conversion/datasets.zip`。
 
 ```bash
 make export HLML_STAGE=multi_finetune
@@ -124,6 +141,8 @@ make export HLML_STAGE=multi_finetune
 ```bash
 export HLML_INFER_INPUT=/path/to/images
 make infer HLML_STAGE=multi_finetune
+# 单次覆盖全局 Eos 选择：
+make infer HLML_STAGE=multi_finetune INFER_ARGS='--palm-model-id eos-2.0'
 ```
 
 ## 12. 环境、语法、测试与验收

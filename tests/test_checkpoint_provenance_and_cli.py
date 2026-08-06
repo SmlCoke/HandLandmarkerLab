@@ -506,6 +506,7 @@ class CliOverrideTests(unittest.TestCase):
     def test_infer_cli_output_override_rehomes_jsonl(self):
         config = {
             "hand": {"model_path": "old.weights.h5"},
+            "palm": {"model_id": "eos-1.0"},
             "output": {
                 "dir": "old-output",
                 "overwrite": False,
@@ -515,11 +516,13 @@ class CliOverrideTests(unittest.TestCase):
             config,
             SimpleNamespace(
                 model_path="new.weights.h5",
+                palm_model_id="eos-2.0",
                 output_dir="new-output",
                 overwrite=True,
             ),
         )
         self.assertEqual("new.weights.h5", config["hand"]["model_path"])
+        self.assertEqual("eos-2.0", config["palm"]["model_id"])
         self.assertEqual("new-output", config["output"]["dir"])
         self.assertTrue(config["output"]["overwrite"])
 

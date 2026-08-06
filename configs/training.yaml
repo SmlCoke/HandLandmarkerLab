@@ -58,6 +58,7 @@ training:
   resume_checkpoint: null
   gradient_clip_norm: 5.0
   mixed_precision: false
+  progress_bar: tqdm
   optimizer:
     name: adam
     learning_rate: 0.0003

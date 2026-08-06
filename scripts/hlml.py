@@ -68,8 +68,12 @@ def _parser() -> argparse.ArgumentParser:
 
     test = sub.add_parser("eval-test", help="Run the frozen winner once on locked Test")
     test.add_argument("--release-id", default=os.environ.get("HLML_RELEASE_ID", "v4-r1"))
-    sub.add_parser("infer", help="Run folder inference (Palm plus Hand)")
-    sub.add_parser("export", help="Export and audit ONNX for A1")
+    infer = sub.add_parser("infer", help="Run folder inference (Palm plus Hand)")
+    infer.add_argument(
+        "--palm-model-id",
+        help="Temporarily override palm.model_id for this inference run",
+    )
+    sub.add_parser("export", help="Export and audit ONNX plus conversion datasets for A1")
     sub.add_parser("environment-check", help="Check the training environment")
     sub.add_parser("config-check", help="Parse every public configuration profile")
     return parser
@@ -178,7 +182,11 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         config = _evaluation_config(args.evaluation_config, "test")
         return evaluate_from_config(locked_test_config(config, Path(args.train_root), args.release_id))
     if args.command == "infer":
-        return infer_folder_from_config(_runtime_config(args.inference_config))
+        config = _runtime_config(args.inference_config)
+        if args.palm_model_id:
+            config.setdefault("palm", {})["model_id"] = args.palm_model_id
+            config.setdefault("palm", {}).pop("model_path", None)
+        return infer_folder_from_config(config)
     if args.command == "export":
         return export_from_config(_runtime_config(args.deploy_config))
     if args.command == "environment-check":

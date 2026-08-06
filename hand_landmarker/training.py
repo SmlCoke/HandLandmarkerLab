@@ -1265,6 +1265,22 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         epoch_variable,
         resume_enabled=starting_state["mode"] == "resume",
     )
+    progress_bar = str(training.get("progress_bar", "tqdm")).strip().lower()
+    if progress_bar == "tqdm":
+        try:
+            from tqdm.keras import TqdmCallback
+        except ImportError as exc:
+            raise RuntimeError(
+                "training.progress_bar=tqdm requires the pinned tqdm dependency"
+            ) from exc
+        callbacks.append(TqdmCallback(verbose=1))
+        fit_verbose = 0
+    elif progress_bar == "keras":
+        fit_verbose = int(training.get("verbose", 1))
+    elif progress_bar in {"none", "off"}:
+        fit_verbose = 0
+    else:
+        raise ValueError("training.progress_bar must be tqdm, keras, or none")
 
     config_path_value = config.get("_meta", {}).get("config_path")
     config_path = Path(str(config_path_value)).resolve() if config_path_value else None
@@ -1323,7 +1339,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "epochs": epochs,
         "initial_epoch": initial_epoch,
         "callbacks": callbacks,
-        "verbose": int(training.get("verbose", 1)),
+        "verbose": fit_verbose,
         # CanonicalSequence already performs deterministic, epoch-indexed
         # stratified sampling.  Keras' independent Sequence batch shuffle
         # would make an epoch-boundary resume depend on process RNG history.

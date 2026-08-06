@@ -22,6 +22,7 @@ PACKAGES = {
     "Pillow": "PIL",
     "opencv-python-headless": "cv2",
     "PyYAML": "yaml",
+    "tqdm": "tqdm",
     "tensorflow": "tensorflow",
     "tf2onnx": "tf2onnx",
     "onnx": "onnx",

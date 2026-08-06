@@ -1,8 +1,8 @@
 schema_version: 1
 task: export_onnx
 
-# This file is intentionally export-only. Fixed-ROI evaluation and folder
-# inference live in evaluation.yaml and inference.yaml.
+# This file is intentionally deployment-export-only: ONNX/A1 artifacts and
+# their conversion datasets. Evaluation and inference use separate configs.
 model:
   version: v2
   checkpoint_stage: "${HLML_CHECKPOINT_STAGE:-pretrain}"
@@ -48,7 +48,37 @@ export:
     absolute_tolerance: 1.0e-5
     relative_tolerance: 1.0e-4
     require_output_order_match: true
-  conversion_datasets: {enabled: false}
+  conversion_datasets:
+    enabled: true
+    data_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
+    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/export/${HLML_STAGE:-geometry}/model_conversion"
+    selection_salt: hand-landmarker-conversion-v2
+    input:
+      shape: [1, 1, 256, 256]
+      layout: NCHW
+      dtype: float32
+      normalization: uint8_div_255
+    sets:
+      calibrate_datasets:
+        minimum_count: 20
+        sources:
+          train:
+            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/train.jsonl"
+            count: 100
+            stratify_by: [dataset_id, capture_source_id, sample_type]
+      evaluate_datasets:
+        minimum_count: 10
+        sources:
+          val:
+            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/val.jsonl"
+            split: val
+            count: 25
+            stratify_by: [dataset_id, capture_source_id, handedness.label]
+          test:
+            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/test.jsonl"
+            split: test
+            count: 25
+            stratify_by: [dataset_id, capture_source_id, handedness.label]
 
 runtime:
   device: cpu

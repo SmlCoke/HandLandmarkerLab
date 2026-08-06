@@ -1,8 +1,11 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from hand_landmarker.palm import PalmDetection, decode_outputs, select_detections
+from hand_landmarker.runtime import normalize_runtime_config
 
 
 class PalmContractTests(unittest.TestCase):
@@ -51,6 +54,34 @@ class PalmContractTests(unittest.TestCase):
             max_detections=2,
         )
         self.assertEqual(selected, [head7_first, head14_first])
+
+    def test_runtime_resolves_selected_eos_below_palm_detector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {
+                "_meta": {"repo_root": str(root)},
+                "palm": {
+                    "models_root": "palm_detector",
+                    "model_id": "eos-2.0",
+                    "model_filename": "model_opt.onnx",
+                },
+            }
+            resolved = normalize_runtime_config(config)
+            self.assertEqual(
+                str(root / "palm_detector" / "eos-2.0" / "model_opt.onnx"),
+                resolved["palm"]["model_path"],
+            )
+
+    def test_runtime_rejects_palm_model_directory_traversal(self):
+        config = {
+            "palm": {
+                "models_root": "palm_detector",
+                "model_id": "../outside",
+                "model_filename": "model_opt.onnx",
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "safe single directory"):
+            normalize_runtime_config(config)
 
     def test_pixel_mapping_uses_dimension_minus_one_and_cpp_rounding(self):
         detection = PalmDetection(1.0, (0.5, 0.5, 1.0, 1.0), (0.5, 0.5), (1.0, 1.0), 14, 0)

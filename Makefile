@@ -40,7 +40,7 @@ help:
 	@echo   make freeze-winner         Freeze the only Val-selected winner descriptor
 	@echo   make locked-test           Evaluate that winner once on fixed reviewed Test ROIs
 	@echo   make infer                 Folder inference; Palm is used only to generate Hand ROIs
-	@echo   make export                Export v2 ONNX and enforce A1 operator/numeric contracts
+	@echo   make export                Export v2 ONNX, A1 checks, and conversion NPY datasets
 	@echo   make environment-check     Check the server environment
 	@echo   make config-check          Parse all five single-purpose public configs
 	@echo   make acceptance-smoke      Run HLMF contracts plus synthetic three-stage/fixed-ROI acceptance

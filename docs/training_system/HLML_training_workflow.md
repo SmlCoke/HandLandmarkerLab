@@ -2,7 +2,7 @@
 
 ## 0. 环境依赖
 
-本轮 HLML 4.0 更新没有改变训练环境：继续使用 Conda 环境 `hand-landmarker-tf29`，其依赖由仓库根目录的 `environment.yml` 和 `requirements.txt` 共同定义。目标服务器环境仍为 Ubuntu 20.04、Python 3.8、TensorFlow/Keras 2.9.0、CUDA 11.2 和 cuDNN 8；CUDA/cuDNN 使用 AutoDL 系统提供的动态库，不在 Conda 环境中重复安装。
+HLML 4.0 继续使用 Conda 环境 `hand-landmarker-tf29`，其依赖由仓库根目录的 `environment.yml` 和 `requirements.txt` 共同定义。目标服务器环境为 Ubuntu 20.04、Python 3.8、TensorFlow/Keras 2.9.0、CUDA 11.2 和 cuDNN 8；CUDA/cuDNN 使用 AutoDL 系统提供的动态库，不在 Conda 环境中重复安装。训练器默认启用 `tqdm` 的 epoch/batch 进度条，因此更新本仓库后需确保环境已安装 requirements 中固定版本的 `tqdm`。
 
 首次创建环境：
 
@@ -165,6 +165,16 @@ HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/history.json
 
 训练器还会按配置保存周期 checkpoint。后续 multitask 默认从 geometry 的 `best.weights.h5` 初始化。
 
+Geometry 训练结束后必须立即运行固定 ROI Val 与文件夹级联 infer：
+
+```bash
+make val HLML_STAGE=geometry
+export HLML_INFER_INPUT=/path/to/representative/images
+make infer HLML_STAGE=geometry
+```
+
+`make val` 输入 geometry snapshot 的 `val.jsonl` 与 geometry winner，输出 `runs/<experiment>/eval/geometry/val/`；`make infer` 输入代表性原图、所选 Eos 和同一 winner，输出 `inference/<experiment>/geometry/`。前者用于可比较的固定 ROI 指标，后者用于发现 Palm→ROI→Hand 级联的可视化异常；两种结果不能混为同一指标。
+
 ## 6. 阶段四：Multitask 训练
 
 阶段名：Multitask。
@@ -191,6 +201,17 @@ HAND_TRAIN_ROOT/snapshots/<snapshot_id>/multitask/*
 HAND_TRAIN_ROOT/runs/<experiment_id>/multitask/checkpoints/best.weights.h5
 HAND_TRAIN_ROOT/runs/<experiment_id>/multitask/history.json
 ```
+
+Multitask 训练结束后必须执行 Val、infer 和 export：
+
+```bash
+make val HLML_STAGE=multitask
+export HLML_INFER_INPUT=/path/to/representative/images
+make infer HLML_STAGE=multitask
+make export HLML_STAGE=multitask
+```
+
+Val/infer 分别输出 `eval/multitask/val/` 与 `inference/<experiment>/multitask/`。Export 同时输出 ONNX/A1 审计文件和 `model_conversion/datasets.zip`；转换数据包只读抽样当前 multitask snapshot 的 Train/Val/Test ROI。
 
 ## 7. 阶段五：Train-only 困难来源挖掘
 
@@ -250,6 +271,17 @@ HAND_TRAIN_ROOT/snapshots/<snapshot_id>/multi_finetune/*
 HAND_TRAIN_ROOT/runs/<experiment_id>/multi_finetune/checkpoints/best.weights.h5
 HAND_TRAIN_ROOT/runs/<experiment_id>/multi_finetune/history.json
 ```
+
+Multi-finetune 训练结束后同样必须执行 Val、infer 和 export：
+
+```bash
+make val HLML_STAGE=multi_finetune
+export HLML_INFER_INPUT=/path/to/representative/images
+make infer HLML_STAGE=multi_finetune
+make export HLML_STAGE=multi_finetune
+```
+
+三条命令必须使用同一 snapshot、experiment 和 stage；输出分别位于 `eval/multi_finetune/val/`、`inference/<experiment>/multi_finetune/` 与 `export/multi_finetune/`。完成 Val 后再冻结 winner，locked Test 仍只运行一次冻结结果。
 
 ## 9. 阶段七：固定 Hand ROI Val
 
@@ -343,7 +375,7 @@ make infer HLML_STAGE=multi_finetune
 
 输入：`configs/inference.yaml` 指定的任意支持格式原图文件夹、Palm ONNX 和 Hand checkpoint。
 
-处理：运行 Palm → canonical Hand ROI → v2 Hand Landmarker，并按配置绘制可视化。这是部署前人工检查工具，不能把结果当 Val/Test fixed-ROI 指标。
+处理：运行 Palm → canonical Hand ROI → v2 Hand Landmarker，并按配置绘制可视化。这是部署前人工检查工具，不能把结果当 Val/Test fixed-ROI 指标。Palm 模型从 `palm_detector/<model_id>/model_opt.onnx` 选择；`configs/inference.yaml` 的 `palm.model_id` 是全局默认，单次命令可用 `INFER_ARGS='--palm-model-id eos-x.y'` 临时覆盖，命令行优先。
 
 输出：
 
@@ -363,17 +395,25 @@ HAND_TRAIN_ROOT/inference/<experiment_id>/<stage>/
 make export HLML_STAGE=multi_finetune
 ```
 
-输入：所选 stage 的 v2 checkpoint 和只负责模型导出的 `configs/deploy.yaml`。
+输入：所选 stage 的 v2 checkpoint、同一 stage 的 Train/Val/Test snapshot，以及负责部署交付导出的 `configs/deploy.yaml`。
 
-处理：导出静态 NCHW `[1,1,256,256]`、opset 11 ONNX，保持输出顺序 `[landmarks, hand_flag, handedness]`，审计 A1 允许算子、模型大小、depthwise group 和 Keras/ONNXRuntime 数值一致性。
+处理：导出静态 NCHW `[1,1,256,256]`、opset 11 ONNX，保持输出顺序 `[landmarks, hand_flag, handedness]`，审计 A1 允许算子、模型大小、depthwise group 和 Keras/ONNXRuntime 数值一致性。ONNX 验证通过后，只读当前 stage snapshot：从 Train 分层稳定抽取 100 个 calibration ROI，从 Val/Test 各抽取 25 个 evaluation ROI，保存为 `np.save` 生成的 `float32 (1,1,256,256)` NCHW 数组，像素为灰度 `uint8/255`。
 
 输出默认位于：
 
 ```text
-HAND_TRAIN_ROOT/runs/<experiment_id>/export/<stage>/hand_landmarker_v2.onnx
+HAND_TRAIN_ROOT/runs/<experiment_id>/export/<stage>/
+  hand_landmarker_v2.onnx
+  hand_landmarker_v2.contract.json
+  model_conversion/
+    datasets/calibrate_datasets/*.npy
+    datasets/evaluate_datasets/*.npy
+    datasets.zip
+    datasets_manifest.json
+    datasets_report.json
 ```
 
-同时在导出物旁写入 contract/report；默认拒绝覆盖。
+`datasets.zip` 内只含 `datasets/` 及两类 `.npy`；calibration 不读取 Val/Test，评测集必须同时包含 Val 与 Test。模型、contract 和数据包均默认拒绝覆盖。
 
 ## 14. 阶段十二：环境、测试和双仓验收
 
@@ -430,6 +470,7 @@ make acceptance-smoke
 - `initial_checkpoint`：阶段初始化权重；multitask 必须指向 geometry winner，multi-finetune 必须指向 multitask winner。
 - `resume_checkpoint`：仅用于同一阶段中断恢复，不能代替跨阶段初始化。
 - `gradient_clip_norm`、`mixed_precision`：数值稳定与性能选项；开启 mixed precision 前应验证目标环境和导出一致性。
+- `progress_bar`：默认 `tqdm`，显示 epoch 与 batch 进度；也可设为 `keras` 或 `none`。正式训练保持 `tqdm`。
 - `checkpoint.monitor/mode`、`early_stopping`、`learning_rate_schedule`：只使用 Val 指标；Test 禁止参与。
 - `max_wall_time_hours`、`periodic_checkpoint`：服务器时间预算和恢复点策略。
 
@@ -458,7 +499,7 @@ make acceptance-smoke
 ### 17.2 `inference.yaml`：Folder Inference
 
 - `input.images_dir/extensions/recursive`：任意文件夹推理的输入范围。
-- `palm.*`：只在文件夹推理配置中运行 Palm；调整 score/NMS/ROI 几何不会改变固定 ROI 评估。
+- `palm.models_root/model_id/model_filename`：默认解析为 `palm_detector/<model_id>/model_opt.onnx`；`--palm-model-id` 仅覆盖本次 infer。调整 Palm 选择或 score/NMS/ROI 几何不会改变固定 ROI 评估。
 - `hand_roi.*`：应与部署端和 HLMF 使用的 ROI contract 对齐。
 - `output.write_annotated_images/write_jsonl/draw_*`：控制检查产物，不影响模型数值。
 
@@ -468,6 +509,7 @@ make acceptance-smoke
 - `maximum_model_size_mb`、`maximum_depthwise_group`、`a1_allowed_operators`：硬件审计门槛。
 - `validate.random_samples` 与容差：Keras/融合 ONNX/ONNXRuntime 数值一致性检查。放宽容差前必须定位具体算子误差。
 - `metadata`：部署端预处理和输出解释契约，必须和训练配置一致。
+- `conversion_datasets`：保持启用；定义当前 snapshot 的 Train/Val/Test 路径、100/25/25 抽样数、分层字段和独立 `model_conversion` 输出目录。
 
 ## 18. 数据泄漏与 Test 锁定原则
 

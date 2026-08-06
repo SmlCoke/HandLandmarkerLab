@@ -1,9 +1,17 @@
-# HLML 当前状态（2026-08-01）
+# HLML 当前状态（2026-08-07）
 
-代码已切换到 HLML 4.0 破坏性公共接口：公共配置按单一职责保留 `datasets.yaml`、`training.yaml`、`evaluation.yaml`、`inference.yaml` 与只负责 ONNX/A1 导出的 `deploy.yaml`；统一入口为 `scripts/hlml.py`，Makefile 只暴露数据审计、三阶段训练、Train-only 挖掘、固定 ROI Val、winner 冻结、locked Test、推理、导出、环境检查和测试。
+## 代码与流程
 
-已实现 HLMF manifest 零拷贝读取、SQLite/路径/解码门控、split 与 proposal variant 泄漏检查、geometry 负样本禁用、按 negative dataset 权重采样、默认 55/45 且 replay 非零的 multi-finetune、困难来源聚合、固定 ROI 分组指标以及不可覆盖的 winner/Test 锁定。
+HLML 4.0 已保持 HLMF manifest 零拷贝接口和三阶段 v2 训练契约。训练默认使用 `tqdm` epoch/batch 进度条；multitask 与 multi-finetune 的 `make export` 同时生成 ONNX/A1 审计物和符合官方转换工具要求的 `datasets.zip`。
 
-Hand Landmarker v2 网络、ROI 几何、损失、checkpoint、ONNX/A1 算子与数值契约保持不变。当前未加入辅助 head 或模型结构实验。
+文件夹推理的 Palm 模型已迁移到 `palm_detector/<model_id>/model_opt.onnx`。全局模型由 `configs/inference.yaml` 的 `palm.model_id` 选择，`make infer ... INFER_ARGS='--palm-model-id <id>'` 可单次覆盖。
 
-截至本状态文档更新时，本地完整单元测试为 176 项通过、7 项因可选 TensorFlow/ONNX 环境跳过。尚未在本文档中声明新的服务器训练 winner；实际训练结果应在完成新的 4.0 数据 snapshot 后更新。
+三个训练阶段结束后均要求执行固定 ROI Val 与代表性原图 infer；multitask、multi-finetune 还要求执行 export。
+
+## 服务器环境与数据
+
+服务器 `hand-landmarker-tf29` 的 TensorFlow/Keras 2.9.0、CUDA 11.2、cuDNN 8、ONNX 栈和 RTX 3090 GPU 可用；依赖更新后安装固定版本 `tqdm`。
+
+2026-08-07 对 `FullEnhance0801`、`FullEnhanceVal0801`、`eos-1.0` 运行 geometry 全量数据审计：Train 72,226、Val 5,091、Test 2,816，manifest、Registry、路径和 `256×256` 灰度 ROI 解码均无错误。按现有 `performer_cross_split: warn` 策略报告 peak/soar 跨 split 警告。
+
+当前服务器没有已发布 negative dataset 或 hard-positive selection，因此 geometry 已具备正式训练条件；multitask 与 multi-finetune 仍需先完成对应 HLMF 发布物。

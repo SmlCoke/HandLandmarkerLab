@@ -9,7 +9,9 @@ input:
   source_orientation: as_stored_no_auto_rotate
 
 palm:
-  model_path: preminilary/palm/model_opt.onnx
+  models_root: palm_detector
+  model_id: "${HLML_PALM_MODEL_ID:-eos-1.0}"
+  model_filename: model_opt.onnx
   input_size: 224
   input_layout: NCHW
   color_mode: grayscale

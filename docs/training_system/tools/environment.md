@@ -1,6 +1,6 @@
 # 训练环境与检查
 
-生产训练环境保持 AutoDL Ubuntu 20.04、Python 3.8、TensorFlow 2.9.0、CUDA 11.2 与 cuDNN 8。使用仓库 `environment.yml` 创建专用环境，不额外安装第二套 TensorFlow/CUDA 动态库。
+生产训练环境保持 AutoDL Ubuntu 20.04、Python 3.8、TensorFlow 2.9.0、CUDA 11.2 与 cuDNN 8。使用仓库 `environment.yml` 创建专用环境，不额外安装第二套 TensorFlow/CUDA 动态库。训练默认使用 requirements 中固定版本的 `tqdm` 进度条。
 
 ```bash
 cd /path/to/HandLandmarkerLab

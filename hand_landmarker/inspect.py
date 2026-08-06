@@ -466,17 +466,17 @@ def validate_canonical_record(
             field_errors, ordered = _validate_points(row.get(field), field)
             errors.extend(field_errors)
             ordered_fields[field] = ordered
-        if expected_split and handedness_label not in {"Left", "Right"}:
-            errors.append("Gold positive handedness must be Left or Right")
+        # Fixed-ROI Val/Test may contain a reviewed positive whose handedness
+        # remains unknown. Landmark/presence evaluation stays valid and the
+        # handedness metric explicitly excludes those rows.
         norm = ordered_fields.get("landmarks_crop_norm") or []
         crop_px = ordered_fields.get("landmarks_crop_px") or []
         outside = sum(not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0) for x, y in norm)
         if outside:
-            message = "{} normalized landmark(s) are outside [0,1]".format(outside)
-            if expected_split:
-                errors.append(message)
-            else:
-                warnings.append(message)
+            # HLMF may preserve reviewed landmarks just outside a truncated
+            # fixed ROI. Keep the original target and report it without making
+            # an otherwise usable Train/Val/Test snapshot unreadable.
+            warnings.append("{} normalized landmark(s) are outside [0,1]".format(outside))
         if len(norm) == len(crop_px) == 21 and width > 0 and height > 0:
             for point_id, ((norm_x, norm_y), (px_x, px_y)) in enumerate(zip(norm, crop_px)):
                 if abs(norm_x * (width - 1) - px_x) > 0.08 or abs(norm_y * (height - 1) - px_y) > 0.08:

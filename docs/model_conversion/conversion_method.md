@@ -129,55 +129,51 @@ datasets/
 
 注意：数量不足会导致校准或评测流程失败，在打包前请务必检查。
 
-## 3. 当前训练系统的自动生成方式
+## 3. 当前 HLML 4.0 的自动生成方式
 
-在当前 `HAND_PRETRAIN_ID` 已完成 `make pretrain-curate`，且 Val/Test 已准备好之后、正式训练之前执行：
-
-```bash
-make test
-```
-
-除了单元测试，这会生成使用确定性非零量化探针权重的 `export/preflight/hand_landmarker_v2_untrained.onnx`，并从当前 canonical Train/Val/Test 生成 `export/preflight/model_conversion/datasets.zip`。这些 disposable 权重只负责让每个卷积和输出 head 都能真正走过 INT8 校准，不会改变正式训练初始化。先把这两个文件提交官方工具链，可以提前发现不支持的算子、shape、量化器或转换器回归，避免训练完成后才发现结构无法转换。该 ONNX 没有精度意义；正式模型仍必须在 geometry/multitask 训练通过后重新导出。
-
-preflight contract 中必须同时满足：`quantization_readiness.graph.violations` 为空、`observed_maximum_group <= 128`，三个 `aggregate_output_ranges[].dynamic_range` 均大于等于 `1e-6`。若不满足，导出器会在生成交付物前失败，不能用 `--force` 绕过。
-
-本仓库已把上述输入数据制作集成到 Hand Landmarker 的 ONNX `export` 步骤。默认执行：
+Multitask 或 multi-finetune 完成后，在同一 snapshot、experiment、stage 下执行：
 
 ```bash
-make export-geometry
+make export HLML_STAGE=multitask
+# 或
+make export HLML_STAGE=multi_finetune
 ```
 
-会在 ONNX 通过接口、算子和数值一致性校验后，从当前阶段的 canonical 数据中只读抽样并同时生成：
+`configs/deploy.yaml` 默认启用 `export.conversion_datasets`。流程先导出并验证 ONNX，再从当前 stage 的零拷贝 snapshot 只读抽样：
 
-- `calibrate_datasets`：从当前阶段 Train 抽取 100 个样本；
+- `calibrate_datasets`：从 Train 分层稳定抽取 100 个样本；
 - `evaluate_datasets`：从 Val、Test 各抽取 25 个样本，共 50 个；
-- 每个文件均为可直接送入 Hand Landmarker 的 `float32 (1,1,256,256)` NCHW tensor，像素值为灰度 `uint8/255`；
+- 每个文件由 `np.save(..., allow_pickle=False)` 保存，为 `float32 (1,1,256,256)` NCHW；
+- 像素值来自已经发布的单通道 `256×256` ROI，按 `uint8/255` 归一化；
 - 不运行 Palm Detector、不读取原图、不重新裁切 ROI，也不保存模型输出。
 
-抽样不是运行时随机抽样，而是先按配置字段分层，再按 canonical record ID 的稳定 SHA-256 排序，因而源数据与配置不变时结果可复现。校准只使用 Train；Val/Test 仅进入转换工具的评测输入集。源 JSONL 和源 ROI 始终只读，生成文件与 Train/Val/Test 目录完全隔离。
+抽样先按配置中的 dataset/source/sample type 或 handedness 字段分层，再按稳定 record ID 排序；源 snapshot 与配置不变时结果可复现。Calibration 只使用 Train；Val/Test 只进入转换工具的评测输入。日常流水线不对整个数据仓库反复执行 SHA-256，生成器只记录被选中交付文件的来源和产物校验值。
 
-默认产物位于：
+默认产物：
 
 ```text
-${HAND_TRAIN_ROOT}/hand_landmarker_runs/<PRETRAIN_ID>/export/<phase>/model_conversion/
-├── datasets/
-│   ├── calibrate_datasets/
-│   │   └── img_*.npy
-│   └── evaluate_datasets/
-│       └── img_*.npy
-├── datasets.zip
-├── datasets_manifest.json
-└── datasets_report.json
+${HAND_TRAIN_ROOT}/runs/<experiment_id>/export/<stage>/
+├── hand_landmarker_v2.onnx
+├── hand_landmarker_v2.contract.json
+└── model_conversion/
+    ├── datasets/
+    │   ├── calibrate_datasets/
+    │   │   └── img_*.npy
+    │   └── evaluate_datasets/
+    │       └── img_*.npy
+    ├── datasets.zip
+    ├── datasets_manifest.json
+    └── datasets_report.json
 ```
 
-`datasets/` 内严格只有两级规定目录和 `.npy` 文件；来源追踪清单与报告放在它的外部。`datasets.zip` 内也只包含以 `datasets/` 为根的规定树，可直接交给转换流程。`manifest` 记录源配置、record ID、源 ROI 与 NPY 的 SHA-256，不包含模型输出。
-
-若只想重建数据包而不运行 TensorFlow/ONNX 导出，可执行：
+`datasets/` 及 `datasets.zip` 内严格只有规定目录和 `.npy`；追踪清单与报告位于其外部。目标已存在时 export 会拒绝覆盖；确认要替换时显式使用：
 
 ```bash
-make conversion-data-geometry
-# multitask checkpoint：
-make conversion-data-multitask
+make export HLML_STAGE=multi_finetune EXPORT_ARGS='--overwrite'
 ```
 
-命令只读取当前 pretrain geometry Train 与公共 Val/Test。目标目录已存在时会失败；确认可替换后显式传入 `CONVERSION_ARGS=--overwrite`，或在 export 时使用 `EXPORT_ARGS=--overwrite`。
+如果只需重建数据包而不导出 ONNX，可直接调用独立入口：
+
+```bash
+python -B scripts/build_conversion_datasets.py --config configs/deploy.yaml
+```

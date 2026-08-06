@@ -197,6 +197,57 @@ def _validate_input_contract(config: Mapping[str, Any]) -> None:
         )
 
 
+def _direct_source_config(
+    config: Mapping[str, Any],
+    conversion_config: Mapping[str, Any],
+    source_value: Mapping[str, Any],
+    dataset_name: str,
+    source_name: str,
+    export_stage: str,
+) -> Dict[str, Any]:
+    labels = source_value.get("labels")
+    if not labels:
+        raise ConversionDatasetError(
+            "Conversion source {} requires labels or config_path".format(source_name)
+        )
+    dataset_root = conversion_config.get("data_root")
+    if not dataset_root:
+        raise ConversionDatasetError(
+            "export.conversion_datasets.data_root is required for direct label sources"
+        )
+    is_calibration = dataset_name == "calibrate_datasets"
+    split = None if is_calibration else str(source_value.get("split", ""))
+    if not is_calibration and split not in {"val", "test"}:
+        raise ConversionDatasetError(
+            "Direct evaluation source {} must declare split val or test".format(source_name)
+        )
+    source_config: Dict[str, Any] = {
+        "schema_version": 1,
+        "task": "train" if is_calibration else "evaluate",
+        "model": {"checkpoint_stage": export_stage},
+        "data": {
+            "data_root": str(dataset_root),
+            "labels": str(labels),
+            "crop_path_key": "crop_path",
+            "path_policy": "canonical_crop_path_only",
+            "allowed_crop_roots": [str(dataset_root)],
+            "require_schema_version": (
+                "hlml_warehouse_train_v1"
+                if is_calibration
+                else "hlml_fixed_roi_evaluation_v1"
+            ),
+            "image_size": [256, 256],
+            "channels": 1,
+        },
+        "_meta": dict(config.get("_meta", {})),
+    }
+    if is_calibration:
+        source_config["stage"] = export_stage
+    else:
+        source_config["split"] = split
+    return source_config
+
+
 def _load_and_audit_sources(
     config: Mapping[str, Any],
     conversion_config: Mapping[str, Any],
@@ -239,12 +290,28 @@ def _load_and_audit_sources(
                     "Conversion source {} must be a mapping".format(source_name)
                 )
             source_path_value = source_value.get("config_path")
-            if not source_path_value:
+            labels_value = source_value.get("labels")
+            if source_path_value and labels_value:
                 raise ConversionDatasetError(
-                    "Conversion source {} requires config_path".format(source_name)
+                    "Conversion source {} cannot set both labels and config_path".format(
+                        source_name
+                    )
                 )
-            source_path = resolve_path(str(source_path_value), config)
-            source_config = load_config(source_path)
+            if source_path_value:
+                source_path = resolve_path(str(source_path_value), config)
+                source_config = load_config(source_path)
+                source_descriptor = str(source_path)
+            else:
+                source_path = None
+                source_config = _direct_source_config(
+                    config,
+                    conversion_config,
+                    source_value,
+                    dataset_name,
+                    str(source_name),
+                    export_stage,
+                )
+                source_descriptor = "inline:{}".format(source_value.get("labels"))
             source_task = str(source_config.get("task", "")).lower()
             expected_stage: Optional[str] = None
             expected_split: Optional[str] = None
@@ -338,7 +405,7 @@ def _load_and_audit_sources(
             selected = deterministic_stratified_sample(rows, source_count, stratify_by, salt)
             for row in selected:
                 row["_conversion_source"] = str(source_name)
-                row["_conversion_source_config"] = str(source_path)
+                row["_conversion_source_config"] = source_descriptor
                 row["_conversion_stratify_by"] = [str(value) for value in stratify_by]
             set_rows.extend(selected)
             source_reports.append(
@@ -348,7 +415,7 @@ def _load_and_audit_sources(
                     "task": source_task,
                     "stage": expected_stage or source_config.get("model", {}).get("checkpoint_stage"),
                     "split": expected_split,
-                    "config_path": str(source_path),
+                    "config_path": str(source_path) if source_path is not None else None,
                     "labels_path": audit.get("labels"),
                     "labels_sha256": audit.get("labels_sha256"),
                     "canonical_records": len(rows),

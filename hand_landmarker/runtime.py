@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import copy
 from pathlib import Path
+import re
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from .contracts import BOARD_CONTRACT
@@ -76,6 +77,22 @@ def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
     palm = value.setdefault("palm", {})
     if palm.get("model_path"):
         palm["model_path"] = str(resolve_path(str(palm["model_path"]), config))
+    elif any(key in palm for key in ("models_root", "model_id", "model_filename")):
+        model_id = str(palm.get("model_id", "")).strip()
+        models_root_value = palm.get("models_root")
+        model_filename = str(palm.get("model_filename", "model_opt.onnx")).strip()
+        safe_component = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        if not model_id or not safe_component.fullmatch(model_id):
+            raise ValueError("palm.model_id must be a safe single directory name")
+        if not models_root_value:
+            raise KeyError("palm.models_root is required when palm.model_path is not set")
+        if not model_filename or not safe_component.fullmatch(model_filename):
+            raise ValueError("palm.model_filename must be a safe single file name")
+        models_root = resolve_path(str(models_root_value), config).resolve()
+        selected_model = (models_root / model_id / model_filename).resolve()
+        if models_root not in selected_model.parents:
+            raise ValueError("selected Palm model must remain below palm.models_root")
+        palm["model_path"] = str(selected_model)
     if palm.get("input_layout", "NCHW") != "NCHW":
         raise ValueError("palm.input_layout must remain NCHW")
     if palm.get("color_mode", "grayscale") != "grayscale":
