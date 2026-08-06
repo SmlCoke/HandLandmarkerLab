@@ -17,7 +17,7 @@
 
 ## 验收条件
 
-- geometry 正式训练使用审计通过的 72,226/5,091 Train/Val ROI，Test 不参与选择。
+- geometry 正式训练使用审计通过的 72,226/5,091 Train/Val ROI；Train 按实际单元组成使用 100% `pseudo/POS_RUNTIME` 严格抽样，Test 不参与选择。
 - 每阶段均保存 winner 并完成 Val/infer；multitask、multi-finetune 的 export 同时交付模型与配套数据包。
 - multitask 负样本仅来自 HLMF published negative dataset；multi-finetune selection 仅来自 Train mining 与人工删除式复核。
 - Test 不回流到采样、阈值、checkpoint 或困难挖掘。

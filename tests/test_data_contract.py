@@ -214,6 +214,19 @@ class CanonicalDataContractTests(unittest.TestCase):
                     self.assertNotIn("inspection", config)
                     self.assertIn("/val.jsonl", config["validation"]["labels"].replace("\\", "/"))
                     self.assertNotIn("test", json.dumps(config["data"]).lower())
+                    if stage == "geometry":
+                        self.assertEqual(
+                            {
+                                "POS_RUNTIME": 1.0,
+                                "POS_LOW_PALM": 0.0,
+                                "NEG_RUNTIME_CANDIDATE": 0.0,
+                                "NEG_LOW_PALM_CANDIDATE": 0.0,
+                            },
+                            config["sampling"]["sample_type_fractions"],
+                        )
+                        self.assertEqual(
+                            {"pseudo": "fail"}, config["sampling"]["missing_cell_policy"]
+                        )
         finally:
             if previous is None:
                 os.environ.pop("HLML_STAGE", None)

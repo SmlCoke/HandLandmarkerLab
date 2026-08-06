@@ -95,8 +95,8 @@ sampling:
   source_group_key: source_group_id
   weight_key: sampling_weight
   sample_type_fractions:
-    POS_RUNTIME: 0.80
-    POS_LOW_PALM: 0.20
+    POS_RUNTIME: 1.00
+    POS_LOW_PALM: 0.00
     NEG_RUNTIME_CANDIDATE: 0.0
     NEG_LOW_PALM_CANDIDATE: 0.0
   missing_cell_policy: {pseudo: fail}

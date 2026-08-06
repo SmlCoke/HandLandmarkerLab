@@ -476,7 +476,7 @@ make acceptance-smoke
 
 ### 16.3 采样、损失和增强
 
-- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。
+- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 `FullEnhance0801` geometry Train 的 72,226 条记录全部是 `pseudo/POS_RUNTIME`，所以基础 geometry 配置使用 `POS_RUNTIME=1.0`、其他类型为 0，并保持 `missing_cell_policy.pseudo=fail`；这不会伪造或静默重分配不存在的 `POS_LOW_PALM`。后续 HLMF 发布新的 sample type 后，须先审计实际单元计数，再显式修改比例。
 - `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
 - `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
 - `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。

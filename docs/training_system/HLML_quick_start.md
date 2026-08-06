@@ -53,7 +53,7 @@ make config-check
 
 ## 3. Geometry 阶段
 
-输入：PretrainSource 的可靠 positive 和 geometry profile。处理：先生成零拷贝 snapshot，再训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
+输入：PretrainSource 的可靠 positive 和 geometry profile；当前 `FullEnhance0801` 的 72,226 条 Train 记录均为 `POS_RUNTIME`，配置按 100% `POS_RUNTIME` 抽样。处理：先生成零拷贝 snapshot，再训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
 
 ```bash
 make geometry
