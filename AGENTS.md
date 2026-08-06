@@ -70,3 +70,11 @@ These four documents serve as the primary interface documentation for the reposi
 1. Whether during manual operations or automated execution of the repository's programs, performing a hash check (SHA256) at every step is prohibited, as this results in significant waste of time and excessive disk space usage. Datasets from different sources can be effectively isolated based on details such as their source names.
 2. During each operation, the agent should perform only the tasks explicitly required by the prompt; maintaining simplicity avoids unnecessary, redundant auditing and verification, which would otherwise waste time.
 3. Whenever this repository is updated, there is no need to maintain compatibility with legacy modes, commands, or data assets unless explicitly requested by the user.
+
+### 4.3 Principle of Environment Dependency
+
+- Whenever you modify the code or add a new model, remember to check if the repository's environment dependencies have changed. If they have, update `requirements.txt` and remind me to update the `hand-landmarker-tf29` environment.
+
+### 4.4 Principle of `HAND_DATASET_ROOT`
+
+1. `HAND_DATASET_ROOT` serves as the directory for the persistent storage of training datasets, and all annotation activities within the system are conducted here. An annotated dataset must not be tied to a specific training run ID; instead, it should be reusable and compatible with multiple repositories. Therefore, when modifying this repository, you are prohibited from embedding markers such as "training batch" or "training run ID" into the annotation workflow.
