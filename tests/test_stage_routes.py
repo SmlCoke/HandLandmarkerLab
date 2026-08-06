@@ -56,6 +56,24 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertIn("selection_id", stage["selections"][0])
         self.assertIn("negative_dataset_id", config["stages"]["multitask"]["negative_datasets"][0])
 
+    def test_dataset_config_separates_train_and_evaluation_proposal_variants(self) -> None:
+        environment = {
+            "HLML_PROPOSAL_VARIANT": "train-gated",
+            "HLML_EVAL_PROPOSAL_VARIANT": "eval-stable",
+        }
+        with mock.patch.dict(os.environ, environment, clear=False):
+            config = load_config(CONFIGS / "datasets.yaml")
+        for stage in ("geometry", "multitask", "multi_finetune"):
+            self.assertEqual(
+                "train-gated",
+                config["stages"][stage]["datasets"][0]["proposal_variant"],
+            )
+        for split in ("val", "test"):
+            self.assertEqual(
+                "eval-stable",
+                config["evaluation"][split][0]["proposal_variant"],
+            )
+
     def test_val_and_test_profiles_are_fixed_roi_only(self) -> None:
         for action in ("val", "test"):
             with self.subTest(action=action), mock.patch.dict(

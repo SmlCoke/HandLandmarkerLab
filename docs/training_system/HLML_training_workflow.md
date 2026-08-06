@@ -78,7 +78,8 @@ export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
 export HLML_NEGATIVE_DATASET_ID=background-neg-0801
 export HLML_SELECTION_ID=hard-positive-0801
 export HLML_EVAL_DATASET_ID=national-eval-0801
-export HLML_PROPOSAL_VARIANT=palm-v1
+export HLML_PROPOSAL_VARIANT=eos_1.0-gate
+export HLML_EVAL_PROPOSAL_VARIANT=eos-1.0
 ```
 
 输出：本阶段只确定成员关系，不写新数据。
@@ -444,7 +445,7 @@ make acceptance-smoke
 ## 15. `configs/datasets.yaml` 参数说明
 
 - `dataset_id`：HLMF 发布的数据集逻辑 ID，不是目录绝对路径。
-- `proposal_variant`：选择同一来源的哪一版 Palm/ROI 结果。一次运行中一个 `capture_source_id` 只能选一个 variant。
+- `proposal_variant`：选择同一来源的哪一版 Palm/ROI 结果。`stages.*.datasets` 由 `HLML_PROPOSAL_VARIANT` 选择 Train variant，`evaluation.val/test` 由 `HLML_EVAL_PROPOSAL_VARIANT` 独立选择 Val/Test variant；一次运行中同一 `capture_source_id` 仍只能选择一个 variant。
 - `weight`：正数，写入该来源记录的 `sampling_weight`。它控制相对抽样权重，不复制样本。
 - `negative_dataset_id`：只能引用 HLMF `GoldSource/NegativeSamples/<id>/published/`。
 - `selection_id`：只能引用 HLMF `Selections/<id>/published/` 的零拷贝困难样本集合。
@@ -476,7 +477,7 @@ make acceptance-smoke
 
 ### 16.3 采样、损失和增强
 
-- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 `FullEnhance0801` geometry Train 的 72,226 条记录全部是 `pseudo/POS_RUNTIME`，所以基础 geometry 配置使用 `POS_RUNTIME=1.0`、其他类型为 0，并保持 `missing_cell_policy.pseudo=fail`；这不会伪造或静默重分配不存在的 `POS_LOW_PALM`。后续 HLMF 发布新的 sample type 后，须先审计实际单元计数，再显式修改比例。
+- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 `FullEnhance0801/eos_1.0-gate` geometry Train 的 65,089 条记录全部是 `pseudo/POS_RUNTIME`，所以基础 geometry 配置使用 `POS_RUNTIME=1.0`、其他类型为 0，并保持 `missing_cell_policy.pseudo=fail`；这不会伪造或静默重分配不存在的 `POS_LOW_PALM`。后续 HLMF 发布新的 sample type 后，须先审计实际单元计数，再显式修改比例。
 - `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
 - `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
 - `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。

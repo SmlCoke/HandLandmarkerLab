@@ -40,7 +40,8 @@ export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
 export HLML_NEGATIVE_DATASET_ID=background-neg-0801
 export HLML_SELECTION_ID=hard-positive-0801
 export HLML_EVAL_DATASET_ID=national-eval-0801
-export HLML_PROPOSAL_VARIANT=palm-v1
+export HLML_PROPOSAL_VARIANT=eos_1.0-gate
+export HLML_EVAL_PROPOSAL_VARIANT=eos-1.0
 ```
 
 ## 2. 配置解析（Config Check）
@@ -53,7 +54,7 @@ make config-check
 
 ## 3. Geometry 阶段
 
-输入：PretrainSource 的可靠 positive 和 geometry profile；当前 `FullEnhance0801` 的 72,226 条 Train 记录均为 `POS_RUNTIME`，配置按 100% `POS_RUNTIME` 抽样。处理：先生成零拷贝 snapshot，再训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
+输入：PretrainSource 的可靠 positive 和 geometry profile；当前 `FullEnhance0801/eos_1.0-gate` 的 65,089 条 Train 记录均为 `POS_RUNTIME`，配置按 100% `POS_RUNTIME` 抽样。处理：先生成零拷贝 snapshot，再训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
 
 ```bash
 make geometry

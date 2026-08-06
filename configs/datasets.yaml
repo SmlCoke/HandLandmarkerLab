@@ -39,11 +39,11 @@ stages:
 evaluation:
   val:
     - dataset_id: "${HLML_EVAL_DATASET_ID:-replace-me-eval}"
-      proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+      proposal_variant: "${HLML_EVAL_PROPOSAL_VARIANT:-palm-v1}"
       weight: 1.0
   test:
     - dataset_id: "${HLML_EVAL_DATASET_ID:-replace-me-eval}"
-      proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+      proposal_variant: "${HLML_EVAL_PROPOSAL_VARIANT:-palm-v1}"
       weight: 1.0
 
 policies:
