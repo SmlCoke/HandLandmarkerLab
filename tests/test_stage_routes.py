@@ -34,6 +34,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
                 self.assertEqual(stage, config["resolved_profile"])
                 self.assertEqual("v2", config["model"]["version"])
                 self.assertEqual(checkpoint_stage, config["model"]["checkpoint_stage"])
+                self.assertEqual(checkpoint_stage, config["stage"])
                 self.assertEqual([2, 2, 3, 4, 4, 6, 6], config["model"]["num_iterations"])
                 self.assertEqual("tqdm", config["training"]["progress_bar"])
 

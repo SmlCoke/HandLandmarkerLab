@@ -1,5 +1,6 @@
 schema_version: 1
 task: train
+stage: pretrain
 profile: "${HLML_STAGE:-geometry}"
 
 experiment:
