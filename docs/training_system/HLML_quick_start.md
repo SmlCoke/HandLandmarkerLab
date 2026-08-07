@@ -33,7 +33,7 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：HLMF 已发布的 dataset、negative dataset、selection ID。操作：编辑 `configs/datasets.yaml` 或设置其中对应的 `HLML_*` 环境变量。输出：只确定成员关系，不复制图片。
+输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：单成员可设置 `HLML_*` 环境变量；多成员在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant 和 `weight`。输出：只确定成员关系，不复制图片。
 
 ```bash
 export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
@@ -63,7 +63,7 @@ export HLML_INFER_INPUT=/path/to/representative/images
 make infer HLML_STAGE=geometry
 ```
 
-训练结束后必须执行固定 ROI Val 与代表性原图 infer。
+训练结束后必须执行固定 ROI Val 与代表性原图 infer。Val 中 unknown handedness positive 仍评估 presence/landmarks，只跳过 handedness 指标。
 
 ## 4. Multitask 阶段
 

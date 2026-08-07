@@ -135,7 +135,9 @@ class EvaluationMetrics:
         self.presence = BinaryConfusion()
         self.handedness = BinaryConfusion()  # Right is the positive class.
         self.landmarks = LandmarkMetrics(pck_thresholds)
-        self.handedness_count = 0
+        self.handedness_label_eligible_count = 0
+        self.handedness_prediction_count = 0
+        self.handedness_excluded_unknown_count = 0
 
     def update(
         self,
@@ -149,13 +151,31 @@ class EvaluationMetrics:
         self.presence.update(expected_presence, predicted_presence)
         if expected_presence and expected_landmarks is not None:
             self.landmarks.update(expected_landmarks, predicted_landmarks)
-        if expected_presence and expected_handedness in {"Left", "Right"} and predicted_handedness in {"Left", "Right"}:
-            self.handedness.update(expected_handedness == "Right", predicted_handedness == "Right")
-            self.handedness_count += 1
+        if expected_presence:
+            normalized_expected = (
+                None if expected_handedness is None else str(expected_handedness).title()
+            )
+            normalized_predicted = (
+                None if predicted_handedness is None else str(predicted_handedness).title()
+            )
+            if normalized_expected in {"Left", "Right"}:
+                self.handedness_label_eligible_count += 1
+                if normalized_predicted in {"Left", "Right"}:
+                    self.handedness.update(
+                        normalized_expected == "Right", normalized_predicted == "Right"
+                    )
+                    self.handedness_prediction_count += 1
+            elif normalized_expected in {None, "Unknown"}:
+                self.handedness_excluded_unknown_count += 1
 
     def report(self) -> Dict[str, Any]:
         handedness = self.handedness.report()
-        handedness["eligible_count"] = self.handedness_count
+        handedness["eligible_count"] = self.handedness_label_eligible_count
+        handedness["prediction_count"] = self.handedness_prediction_count
+        handedness["prediction_coverage"] = safe_div(
+            self.handedness_prediction_count, self.handedness_label_eligible_count
+        )
+        handedness["excluded_unknown_label_count"] = self.handedness_excluded_unknown_count
         handedness["left_recall"] = safe_div(self.handedness.tn, self.handedness.tn + self.handedness.fp)
         handedness["right_recall"] = safe_div(self.handedness.tp, self.handedness.tp + self.handedness.fn)
         return {

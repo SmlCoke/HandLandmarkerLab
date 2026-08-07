@@ -87,6 +87,7 @@ def _row_metrics(
         "predicted_presence": predicted_presence,
         "hand_flag_score": None if hand is None else hand.hand_flag_score,
         "expected_handedness": expected_handedness,
+        "handedness_metric_eligible": expected_handedness in {"Left", "Right"},
         "predicted_handedness": None if hand is None else hand.handedness,
         "handedness_score": None if hand is None else hand.handedness_score,
         "landmark_prediction_available": predicted_crop_points is not None,

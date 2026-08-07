@@ -179,17 +179,16 @@ def validate_label_record(row: Mapping[str, Any], split: str = "train") -> List[
             normalized = ordered_landmarks(row)
             if not all(math.isfinite(value) for point in normalized for value in point):
                 errors.append("landmarks_crop_norm contains NaN/Inf")
-            if split in {"val", "test"} and any(
-                value < 0.0 or value > 1.0 for point in normalized for value in point
-            ):
-                errors.append("Gold landmarks_crop_norm must be within [0,1]")
+            # Reviewed fixed-ROI Gold may retain landmarks just outside a
+            # truncated crop. Preserve those finite coordinates for geometry
+            # metrics instead of rejecting or clamping the complete record.
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(str(exc))
         handedness = str((row.get("handedness") or {}).get("label", "unknown")).lower()
         if handedness not in {"left", "right", "unknown"}:
             errors.append("invalid handedness label: {}".format(handedness))
-        if split in {"val", "test"} and handedness not in {"left", "right"}:
-            errors.append("Gold positive must have Left/Right handedness")
+        # Unknown handedness is valid for a positive with usable landmarks.
+        # Evaluation masks this row out of handedness metrics only.
         for point_key in ("landmarks_crop_px", "landmarks_image_px"):
             points = list(row.get(point_key) or [])
             if len(points) != 21:

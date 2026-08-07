@@ -2,22 +2,24 @@
 
 ## 当前目标
 
-以 HLMF 3.0 已发布的 `FullEnhance0801` Train 和 `FullEnhanceVal0801` Val/Test 完成首个 HLML 4.0 geometry 正式训练。2026-08-07 全量数据审计和训练烟雾测试完成后，由操作者启动正式训练。
+`national-final-geometry-eos_1.0-gate-r1` 的 geometry 正式训练、固定 ROI Val 和 0718 原图 infer 已完成。下一目标是在 HLMF 发布一个或多个人工确认的 true-negative dataset，完成 multitask 训练与评估。
 
 ## 执行顺序
 
-1. 为正式运行设置新的 `HLML_SNAPSHOT_ID`、`HLML_EXPERIMENT_ID`，并固定 `HLML_PRETRAIN_DATASET_ID=FullEnhance0801`、`HLML_EVAL_DATASET_ID=FullEnhanceVal0801`、`HLML_PROPOSAL_VARIANT=eos_1.0-gate`、`HLML_EVAL_PROPOSAL_VARIANT=eos-1.0`。
-2. 执行 `make geometry`，观察 tqdm、Val loss、checkpoint 和 wall-time 门控。
-3. geometry 结束后执行 `make val HLML_STAGE=geometry` 与代表性原图 `make infer HLML_STAGE=geometry`。
-4. 在 HLMF 将人工复核的真负样本发布为 negative dataset，写入 `configs/datasets.yaml` 后开始 multitask。
+1. 保留 geometry 第 68 epoch winner、Val 指标和 0718 inference 产物，不使用 Test 重新选 checkpoint。
+2. 在 HLMF 将人工复核的真负样本发布为一个或多个 negative dataset。
+3. 在 `configs/datasets.yaml` 的 `stages.multitask.datasets` 与 `negative_datasets` 列表逐项配置 ID、proposal variant 和权重。
+4. 设置新的 multitask `HLML_SNAPSHOT_ID`、`HLML_EXPERIMENT_ID`，执行 `make multitask`。
 5. multitask 结束后执行 Val、infer、export；确认 ONNX/A1 报告和 conversion `datasets.zip`。
-6. 运行 Train-only mining，在 HLMF 删除教师错误并发布 selection。
+6. 运行 Train-only mining，在 HLMF 删除教师错误并发布一个或多个 selection；可同时加入多个 `new_datasets` 和 negative dataset。
 7. 以困难 55%、replay 45% 完成 multi-finetune，再执行 Val、infer、export。
 8. 根据固定 Val 冻结唯一 winner，最后执行一次 locked Test。
 
 ## 验收条件
 
-- geometry 正式训练使用审计通过的 65,089/5,091 Train/Val ROI；Train 按实际单元组成使用 100% `pseudo/POS_RUNTIME` 严格抽样，Test 不参与选择。
+- geometry 基线固定为第 68 epoch winner；Val landmarks mean pixel error 为 10.1930 px、PCK@0.10 为 0.8377。
+- unknown handedness positive 保留 presence/landmarks 指标，只从 handedness 指标排除。
 - 每阶段均保存 winner 并完成 Val/infer；multitask、multi-finetune 的 export 同时交付模型与配套数据包。
 - multitask 负样本仅来自 HLMF published negative dataset；multi-finetune selection 仅来自 Train mining 与人工删除式复核。
+- 多成员合并必须保持 ROI 唯一、split 隔离和同一 capture source 单 variant。
 - Test 不回流到采样、阈值、checkpoint 或困难挖掘。

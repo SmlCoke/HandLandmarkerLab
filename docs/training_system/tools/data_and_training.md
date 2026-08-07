@@ -2,7 +2,7 @@
 
 ## 数据选择
 
-HLML 只读取 HLMF 3.0 发布 manifest。positive 由 `dataset_id + proposal_variant` 选择，Train 的 variant 使用 `HLML_PROPOSAL_VARIANT`，Val/Test 的 variant 使用 `HLML_EVAL_PROPOSAL_VARIANT`；两者可以不同。true negative 由 `negative_dataset_id` 选择，困难 positive 由 `selection_id` 选择。成员关系禁止依赖手工拼接 JSONL 或复制 ROI。
+HLML 只读取 HLMF 3.0 发布 manifest。positive 由 `dataset_id + proposal_variant` 选择，Train 的 variant 使用 `HLML_PROPOSAL_VARIANT`，Val/Test 的 variant 使用 `HLML_EVAL_PROPOSAL_VARIANT`；两者可以不同。`datasets`、`negative_datasets`、`new_datasets`、`selections` 与 `evaluation.val/test` 都是列表，可分别合并多个已发布 ID 并设置独立权重。true negative 由 `negative_dataset_id` 选择，困难 positive 由 `selection_id` 选择。成员关系禁止依赖手工拼接 JSONL 或复制 ROI。
 
 `HAND_DATASET_ROOT` 是图片与标签的长期仓库；`HAND_TRAIN_ROOT` 只能保存：
 

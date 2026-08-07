@@ -63,6 +63,8 @@ HAND_TRAIN_ROOT/
 
 操作：编辑 `configs/datasets.yaml`，只填写 HLMF 已发布的 `dataset_id`、`negative_dataset_id`、`selection_id`、`proposal_variant` 和权重。不要手工拼接 JSONL，也不要把 ROI 复制到 `HAND_TRAIN_ROOT`。
 
+`datasets`、`negative_datasets`、`new_datasets`、`selections` 和 `evaluation.val/test` 都是成员列表，可各自配置一个或多个已发布 ID；每个成员独立填写 variant（dataset 类）和 `weight`。环境变量占位只适合单成员快捷配置，多成员直接编辑 YAML。
+
 输入位置与选择键：
 
 - `stages.*.datasets` → `PretrainSource/<dataset_id>/dataset_manifest.json`。
@@ -80,6 +82,23 @@ export HLML_SELECTION_ID=hard-positive-0801
 export HLML_EVAL_DATASET_ID=national-eval-0801
 export HLML_PROPOSAL_VARIANT=eos_1.0-gate
 export HLML_EVAL_PROPOSAL_VARIANT=eos-1.0
+```
+
+多成员示例：
+
+```yaml
+stages:
+  geometry:
+    datasets:
+      - {dataset_id: FullEnhance0801, proposal_variant: eos_1.0-gate, weight: 1.0}
+      - {dataset_id: FullEnhance0803, proposal_variant: eos_1.0-gate-v2, weight: 1.0}
+  multitask:
+    datasets:
+      - {dataset_id: FullEnhance0801, proposal_variant: eos_1.0-gate, weight: 1.0}
+      - {dataset_id: FullEnhance0803, proposal_variant: eos_1.0-gate-v2, weight: 1.0}
+    negative_datasets:
+      - {negative_dataset_id: background-neg-0801, weight: 1.0}
+      - {negative_dataset_id: background-neg-0802, weight: 1.0}
 ```
 
 输出：本阶段只确定成员关系，不写新数据。
@@ -444,6 +463,7 @@ make acceptance-smoke
 
 ## 15. `configs/datasets.yaml` 参数说明
 
+- 成员列表：`stages.*.datasets`、`negative_datasets`、`new_datasets`、`selections`、`evaluation.val/test` 均支持多个条目；构建 snapshot 时合并所有成员，并保留每个成员的 ID、variant 和权重。重复 ROI、跨 split 或同一 capture source 混用多个 variant 仍会失败。
 - `dataset_id`：HLMF 发布的数据集逻辑 ID，不是目录绝对路径。
 - `proposal_variant`：选择同一来源的哪一版 Palm/ROI 结果。`stages.*.datasets` 由 `HLML_PROPOSAL_VARIANT` 选择 Train variant，`evaluation.val/test` 由 `HLML_EVAL_PROPOSAL_VARIANT` 独立选择 Val/Test variant；一次运行中同一 `capture_source_id` 仍只能选择一个 variant。
 - `weight`：正数，写入该来源记录的 `sampling_weight`。它控制相对抽样权重，不复制样本。
@@ -495,6 +515,7 @@ make acceptance-smoke
 - `hand_flag_threshold`：Val 初始 presence 阈值。
 - `threshold_sweep`、`tune_thresholds`：Val 可开启；Test profile 必须关闭并使用 winner threshold。
 - `pck_thresholds`：以 ROI 尺寸归一化的 PCK 阈值列表。
+- unknown handedness：合法 positive 仍参与 presence 与 landmarks（pixel error、NME、PCK）统计，只从 handedness 指标中排除；报告的 `excluded_unknown_label_count` 给出排除数量。经人工保留且略超固定 ROI 边界的有限关键点不裁剪，按原坐标计算误差并在 data contract 中报告 warning。
 - `output.overwrite`：正式 Val/Test 建议为 `false`，locked Test 强制为 `false`。
 
 ### 17.2 `inference.yaml`：Folder Inference

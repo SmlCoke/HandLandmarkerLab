@@ -60,6 +60,18 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(report["landmarks"]["mean_pixel_error"], 0.0)
 
 
+    def test_unknown_handedness_is_excluded_without_dropping_landmarks(self):
+        metric = EvaluationMetrics((0.05,))
+        points = [(float(index), 0.0) for index in range(21)]
+        metric.update(True, True, points, points, "unknown", "Right")
+        report = metric.report()
+        self.assertEqual(report["landmarks"]["gt_positive_count"], 1)
+        self.assertEqual(report["landmarks"]["mean_pixel_error"], 0.0)
+        self.assertEqual(report["handedness"]["eligible_count"], 0)
+        self.assertEqual(report["handedness"]["prediction_count"], 0)
+        self.assertEqual(report["handedness"]["excluded_unknown_label_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 

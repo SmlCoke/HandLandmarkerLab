@@ -67,10 +67,22 @@ class SyntheticWarehouse:
         self._publish_negative()
         self._publish_selection()
 
-    def _source_row(self, roi_id, raw_id, capture, dataset_parent, value):
+    def _source_row(
+        self,
+        roi_id,
+        raw_id,
+        capture,
+        dataset_parent,
+        value,
+        dataset_id=None,
+        proposal_variant=None,
+    ):
         split = capture.split("-")[4]
-        dataset_id = "train-set" if split == "train" else "eval-set"
-        relative = "{}/{}/02_roi_crops/{}/{}.png".format(dataset_parent, capture, self.variant, roi_id)
+        dataset_id = dataset_id or ("train-set" if split == "train" else "eval-set")
+        proposal_variant = proposal_variant or self.variant
+        relative = "{}/{}/02_roi_crops/{}/{}.png".format(
+            dataset_parent, capture, proposal_variant, roi_id
+        )
         image = self.root / relative
         write_image(image, np.full((256, 256), value, dtype=np.uint8))
         row = {
@@ -81,7 +93,7 @@ class SyntheticWarehouse:
             "raw_image_id": raw_id,
             "roi_id": roi_id,
             "crop_id": roi_id,
-            "proposal_variant": self.variant,
+            "proposal_variant": proposal_variant,
             "proposal_slot": 0,
             "proposal_kind": "runtime",
             "crop_relpath": relative,
@@ -98,17 +110,18 @@ class SyntheticWarehouse:
         with closing(sqlite3.connect(str(self.registry))) as db:
             db.execute(
                 "INSERT INTO rois VALUES(?,?,?,?,?,?)",
-                (roi_id, raw_id, capture, self.variant, 0, relative),
+                (roi_id, raw_id, capture, proposal_variant, 0, relative),
             )
             db.commit()
         return row
 
-    def _publish_dataset(self, scope, dataset_id, sources):
+    def _publish_dataset(self, scope, dataset_id, sources, proposal_variant=None):
         bucket = "PretrainSource" if scope == "pretrain" else "EValSource"
         root = self.root / bucket / dataset_id
+        proposal_variant = proposal_variant or self.variant
         descriptors = []
         for capture, rows in sources:
-            labels = root / capture / "05_labels" / self.variant / (
+            labels = root / capture / "05_labels" / proposal_variant / (
                 "hand_training_labels.jsonl" if scope == "pretrain" else "hand_evaluation_labels.jsonl"
             )
             write_jsonl(labels, rows)
@@ -118,7 +131,7 @@ class SyntheticWarehouse:
                     "split": capture.split("-")[4],
                     "published_variants": [
                         {
-                            "proposal_variant": self.variant,
+                            "proposal_variant": proposal_variant,
                             "published_labels": len(rows),
                             "labels_relpath": str(labels.relative_to(self.root)).replace("\\", "/"),
                         }
@@ -233,6 +246,47 @@ class WarehouseV4Tests(unittest.TestCase):
             self.assertFalse(any(path.suffix.lower() in {".png", ".tif", ".tiff"} for path in train.rglob("*")))
             negative = next(row for row in rows if row.get("negative_dataset_id") == "neg-set")
             self.assertEqual(2.0, negative["sampling_weight"])
+
+    def test_geometry_combines_multiple_dataset_ids_variants_and_weights(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            warehouse = SyntheticWarehouse(root / "dataset")
+            second_capture = "room-far-daylight-normal-train-s02-dave"
+            second_row = warehouse._source_row(
+                "train-roi-3",
+                "train-raw-3",
+                second_capture,
+                "PretrainSource/train-set-2",
+                150,
+                dataset_id="train-set-2",
+                proposal_variant="palm-v2",
+            )
+            warehouse._publish_dataset(
+                "pretrain",
+                "train-set-2",
+                [(second_capture, [second_row])],
+                proposal_variant="palm-v2",
+            )
+            config = warehouse.config()
+            config["stages"]["geometry"]["datasets"].append(
+                {
+                    "dataset_id": "train-set-2",
+                    "proposal_variant": "palm-v2",
+                    "weight": 3.0,
+                }
+            )
+            train_root = root / "train"
+            report = build_snapshot(
+                config, warehouse.root, train_root, "multi-source", "geometry"
+            )
+            self.assertEqual({"train": 3, "val": 1, "test": 1}, report["records"])
+            rows = read_jsonl(
+                train_root / "snapshots" / "multi-source" / "geometry" / "train.jsonl"
+            )
+            self.assertEqual({"train-set", "train-set-2"}, {row["dataset_id"] for row in rows})
+            second = next(row for row in rows if row["dataset_id"] == "train-set-2")
+            self.assertEqual("palm-v2", second["proposal_variant"])
+            self.assertEqual(3.0, second["sampling_weight"])
 
     def test_geometry_rejects_negative_dataset(self):
         with tempfile.TemporaryDirectory() as temp:
