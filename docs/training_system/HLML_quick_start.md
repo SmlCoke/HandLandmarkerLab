@@ -137,13 +137,14 @@ make export HLML_STAGE=multi_finetune
 
 ## 11. 可选文件夹推理（Folder Inference）
 
-输入：任意原图文件夹。处理：Palm → Hand ROI → Hand；这不是 Val/Test 协议。输出：`inference/<experiment>/multi_finetune/` 的 JSONL、summary 和可视化。
+输入：任意原图文件夹、HLMF EOS 2.0 ONNX 和 Hand checkpoint。先将 HLMF 模型部署为 HLML 约定文件名；处理使用 `[1,1,224,384]`、840 个矩形 Anchor 和全局 NMS，再沿用原 Hand ROI 几何运行 Hand。这不是 Val/Test 协议。输出：`inference/<experiment>/multi_finetune/` 的 JSONL、summary 和可视化。
 
 ```bash
+mkdir -p palm_detector/eos-2.0
+cp /path/to/HandLandmarksFab/models/palm_detector/eos-2.0/model_384x224_opt.onnx \
+  palm_detector/eos-2.0/model_opt.onnx
 export HLML_INFER_INPUT=/path/to/images
 make infer HLML_STAGE=multi_finetune
-# 单次覆盖全局 Eos 选择：
-make infer HLML_STAGE=multi_finetune INFER_ARGS='--palm-model-id eos-2.0'
 ```
 
 ## 12. 环境、语法、测试与验收

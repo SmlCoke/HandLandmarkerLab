@@ -24,6 +24,8 @@ make environment-check
 
 HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 使用来源 ROI；GoldSource 负样本和 Selections 困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
 
+HLMF 内部的 Palm/HCF 版本不属于这条训练数据边界。当前 HLMF 默认 EOS 2.0（Palm 输入 `[1,1,224,384]`，矩形特征层与 Anchor）和 HCF `handedness-handpresence-0809`，但发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 EOS 原始输入或 Anchor 张量；只有独立的 `make infer` 需要实现同一套 EOS 2.0 前处理与解码。
+
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
 export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
@@ -143,7 +145,7 @@ make data-audit HLML_STAGE=multi_finetune
 6. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
 7. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
 
-HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`。因此 RTMPose 双头 HCF 输出和 MediaPipe TFLite 几何补救不会在 HLML 入库时丢失。
+HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`。当前两个 HCF 字段可记录 `hand-classifier-handedness-handpresence-0809`；读取器不硬编码某个 HCF 版本，因此后续合法模型 ID 也不会在 HLML 入库时丢失。
 
 完整性检查使用稳定 ID、SQLite、文件路径、尺寸与解码，不对数据集图片反复计算 SHA-256。
 
@@ -396,9 +398,9 @@ export HLML_INFER_INPUT=/path/to/images
 make infer HLML_STAGE=multi_finetune
 ```
 
-输入：`configs/inference.yaml` 指定的任意支持格式原图文件夹、Palm ONNX 和 Hand checkpoint。
+输入：`configs/inference.yaml` 指定的任意支持格式原图文件夹、`palm_detector/eos-2.0/model_opt.onnx` 和 Hand checkpoint。EOS 2.0 文件来自 HLMF 的 `models/palm_detector/eos-2.0/model_384x224_opt.onnx`，部署到 HLML 时按本仓目录约定改名为 `model_opt.onnx`；ONNX 文件由执行环境单独部署，不提交 Git。
 
-处理：运行 Palm → canonical Hand ROI → v2 Hand Landmarker，并按配置绘制可视化。这是部署前人工检查工具，不能把结果当 Val/Test fixed-ROI 指标。Palm 模型从 `palm_detector/<model_id>/model_opt.onnx` 选择；`configs/inference.yaml` 的 `palm.model_id` 是全局默认，单次命令可用 `INFER_ARGS='--palm-model-id eos-x.y'` 临时覆盖，命令行优先。
+处理：EOS 2.0 将灰度原图以 `INTER_AREA` 缩放为 `384×224`，形成 float32 NCHW `[1,1,224,384]`；按 `14×24`、`7×12` 两个矩形特征层及各自两组 Anchor 解码共 840 个 Anchor，合并后执行一次全局 NMS（score `0.25`、IoU `0.10`、最多 2 手），再沿用 scale `1.8/1.8`、shift `0/-0.1` 构造 `256×256` canonical Hand ROI 并运行 v2 Hand Landmarker。EOS 1.0 的方形 `input_size`、旧 Anchor 和 `cross_head_suppress_iou` 已不再支持。这是部署前人工检查工具，不能把结果当 Val/Test fixed-ROI 指标。
 
 输出：
 
@@ -462,7 +464,7 @@ make help
 make acceptance-smoke
 ```
 
-该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；合成接口覆盖 HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath`、双头 teacher ID 与可选几何补救字段，不使用真实 Test 选择模型。
+该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；合成接口覆盖 EOS 2.0 proposal variant、HCF 0809 双头 teacher ID、HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath` 与可选几何补救字段，不使用真实 Test 选择模型。Palm 解码回归测试另行校验 `[1,1,224,384]`、840 Anchor、矩形输出映射和全局 NMS。
 
 ## 15. `configs/datasets.yaml` 参数说明
 
@@ -524,7 +526,8 @@ make acceptance-smoke
 ### 17.2 `inference.yaml`：Folder Inference
 
 - `input.images_dir/extensions/recursive`：任意文件夹推理的输入范围。
-- `palm.models_root/model_id/model_filename`：默认解析为 `palm_detector/<model_id>/model_opt.onnx`；`--palm-model-id` 仅覆盖本次 infer。调整 Palm 选择或 score/NMS/ROI 几何不会改变固定 ROI 评估。
+- `palm.models_root/model_id/model_filename`：当前默认解析为 `palm_detector/eos-2.0/model_opt.onnx`；`--palm-model-id` 只改变模型目录，所选模型仍必须满足冻结的 EOS 2.0 输入、矩形输出和 Anchor 契约。
+- `palm.input_width/input_height/feature_levels`：固定为 `384/224`、`14×24` 与 `7×12` 两层；每层两组 Anchor 尺寸必须与 HLMF EOS 2.0 一致。`score_threshold=0.25`、`nms_iou_threshold=0.10`，所有层合并后只执行一次全局 NMS。
 - `hand_roi.*`：应与部署端和 HLMF 使用的 ROI contract 对齐。
 - `output.write_annotated_images/write_jsonl/draw_*`：控制检查产物，不影响模型数值。
 

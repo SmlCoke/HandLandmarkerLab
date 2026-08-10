@@ -31,7 +31,7 @@ def _points(offset: float = 0.0):
 
 
 class SyntheticWarehouse:
-    variant = "palm-v1"
+    variant = "eos-2.0"
     train_capture = "room-near-daylight-normal-train-s01-alice"
     val_capture = "room-near-daylight-normal-val-s01-bob"
     test_capture = "room-far-dim-normal-test-s01-carol"
@@ -348,8 +348,8 @@ class WarehouseV4Tests(unittest.TestCase):
                     "label_origin": "mediapipe",
                     "annotation_style": "mediapipe_tflite_rescue_v1",
                     "teacher_model_id": "mediapipe-hand-landmark-full-tflite",
-                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0807",
-                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0807",
+                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0809",
+                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0809",
                     "rtmpose_geometry_rescue": {
                         "attempted": True,
                         "accepted": True,
@@ -366,7 +366,7 @@ class WarehouseV4Tests(unittest.TestCase):
             rescued = next(row for row in snapshot_rows if row["roi_id"] == rows[0]["roi_id"])
             self.assertEqual("mediapipe_tflite_rescue_v1", rescued["annotation_style"])
             self.assertEqual(
-                "hand-classifier-handedness-handpresence-0807",
+                "hand-classifier-handedness-handpresence-0809",
                 rescued["hand_presence_teacher_model_id"],
             )
             self.assertTrue(rescued["rtmpose_geometry_rescue"]["accepted"])

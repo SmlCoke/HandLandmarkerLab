@@ -10,7 +10,7 @@ from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from .contracts import BOARD_CONTRACT
 from .geometry import RoiRect, build_roi_rect, crop_hand_roi, project_normalized_points
-from .palm import PalmDetection, PalmPredictor
+from .palm import PalmDetection, PalmPredictor, normalize_feature_levels
 
 
 @dataclass(frozen=True)
@@ -97,16 +97,37 @@ def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
         raise ValueError("palm.input_layout must remain NCHW")
     if palm.get("color_mode", "grayscale") != "grayscale":
         raise ValueError("palm.color_mode must remain grayscale")
+    if "input_size" in palm:
+        raise ValueError("palm.input_size is obsolete; use input_width and input_height")
+    if "cross_head_suppress_iou" in palm:
+        raise ValueError("palm.cross_head_suppress_iou is obsolete; EOS 2.0 uses one global NMS")
+    if str(palm.get("output_layout", "nchw")).lower() != "nchw":
+        raise ValueError("palm.output_layout must remain nchw")
     palm_fixed = (
-        ("input_size", BOARD_CONTRACT["palm_input_size"]),
+        ("input_width", BOARD_CONTRACT["palm_input_width"]),
+        ("input_height", BOARD_CONTRACT["palm_input_height"]),
         ("score_threshold", BOARD_CONTRACT["palm_score_threshold"]),
         ("nms_iou_threshold", BOARD_CONTRACT["palm_nms_iou_threshold"]),
-        ("cross_head_suppress_iou", BOARD_CONTRACT["palm_cross_head_suppress_iou"]),
         ("max_detections", BOARD_CONTRACT["palm_max_detections"]),
     )
     for key, expected in palm_fixed:
         if key in palm and abs(float(palm[key]) - float(expected)) > 1e-9:
             raise ValueError("palm.{} must match the A1 value {}".format(key, expected))
+        palm.setdefault(key, expected)
+    expected_levels = normalize_feature_levels(
+        {"feature_levels": copy.deepcopy(BOARD_CONTRACT["palm_feature_levels"])}
+    )
+    configured_levels = normalize_feature_levels(
+        {
+            "feature_levels": copy.deepcopy(
+                palm.get("feature_levels", BOARD_CONTRACT["palm_feature_levels"])
+            )
+        }
+    )
+    if configured_levels != expected_levels:
+        raise ValueError("palm.feature_levels must match the EOS 2.0 board contract")
+    palm.setdefault("feature_levels", copy.deepcopy(BOARD_CONTRACT["palm_feature_levels"]))
+    palm.setdefault("output_layout", "nchw")
 
     roi = value.setdefault("hand_roi", {})
     if int(roi.get("output_size", BOARD_CONTRACT["hand_input_width"])) != 256:
@@ -325,14 +346,15 @@ class CascadeRunner:
         palm_config = config.get("palm", {})
         self.palm = PalmPredictor(
             model_path=str(palm_config["model_path"]),
-            input_size=int(palm_config.get("input_size", BOARD_CONTRACT["palm_input_size"])),
+            input_width=int(palm_config.get("input_width", BOARD_CONTRACT["palm_input_width"])),
+            input_height=int(palm_config.get("input_height", BOARD_CONTRACT["palm_input_height"])),
+            feature_levels=palm_config.get(
+                "feature_levels", BOARD_CONTRACT["palm_feature_levels"]
+            ),
             score_threshold=float(palm_config.get("score_threshold", BOARD_CONTRACT["palm_score_threshold"])),
             nms_iou_threshold=float(palm_config.get("nms_iou_threshold", BOARD_CONTRACT["palm_nms_iou_threshold"])),
-            cross_head_suppress_iou=float(
-                palm_config.get("cross_head_suppress_iou", BOARD_CONTRACT["palm_cross_head_suppress_iou"])
-            ),
             max_detections=int(palm_config.get("max_detections", BOARD_CONTRACT["palm_max_detections"])),
-            output_layout=str(palm_config.get("output_layout", "auto")),
+            output_layout=str(palm_config.get("output_layout", "nchw")),
             providers=palm_config.get("providers") or ["CPUExecutionProvider"],
         )
         self.hand = create_hand_predictor(config)
