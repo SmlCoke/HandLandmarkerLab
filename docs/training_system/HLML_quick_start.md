@@ -18,7 +18,7 @@ make environment-check
 
 ## 0. 设置运行身份
 
-`HAND_DATASET_ROOT` 保存 HLMF 发布的数据和 registry；`HAND_TRAIN_ROOT` 只保存 HLML 索引、训练与发布产物。
+`HAND_DATASET_ROOT` 保存 HLMF 发布的数据和 registry；其中负样本与困难样本使用 HLMF 独立 published 图片副本。`HAND_TRAIN_ROOT` 只保存 HLML 索引、训练与发布产物，不复制图片。
 
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
@@ -33,7 +33,7 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：单成员可设置 `HLML_*` 环境变量；多成员在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant 和 `weight`。输出：只确定成员关系，不复制图片。
+输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：单成员可设置 `HLML_*` 环境变量；多成员在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant 和 `weight`。输出：只确定成员关系；negative/selection 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
 
 ```bash
 export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
@@ -87,11 +87,11 @@ Export 同时生成 ONNX/A1 报告和配套 conversion `datasets.zip`。
 make mine-hard
 ```
 
-在 HLMF 完成 `hard-review` / `hard-publish` 后，把发布的 `selection_id` 写回 `configs/datasets.yaml`。
+在 HLMF 完成 `hard-review` / `hard-publish` 后，把发布的 `selection_id` 写回 `configs/datasets.yaml`；HLML 会核对 `source_crop_relpath`，并读取独立的 `published_relpath` 图片。
 
 ## 6. Multi-finetune 阶段
 
-输入：multitask winner、困难 selection、可选新录制 Train 数据、真负样本和 mandatory pretrain replay。默认 hard/new 55%、replay 45%，replay 不可为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
+输入：multitask winner、带独立 published 图片的困难 selection、可选新录制 Train 数据、真负样本和 mandatory pretrain replay。默认 hard/new 55%、replay 45%，replay 不可为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
 
 ```bash
 make multi-finetune

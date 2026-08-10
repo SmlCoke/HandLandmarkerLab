@@ -2,12 +2,12 @@
 
 ## 当前目标
 
-`national-final-geometry-eos_1.0-gate-r1` 的 geometry 正式训练、固定 ROI Val 和 0718 原图 infer 已完成。下一目标是在 HLMF 发布一个或多个人工确认的 true-negative dataset，完成 multitask 训练与评估。
+`national-final-geometry-eos_1.0-gate-r1` 的 geometry 正式训练、固定 ROI Val 和 0718 原图 infer 已完成。HLMF 已发布 `0809-soar-enhance` 等人工确认的 true-negative dataset，最新版接口兼容测试已通过；下一目标是选定负样本成员并完成 multitask 训练与评估。
 
 ## 执行顺序
 
 1. 保留 geometry 第 68 epoch winner、Val 指标和 0718 inference 产物，不使用 Test 重新选 checkpoint。
-2. 在 HLMF 将人工复核的真负样本发布为一个或多个 negative dataset。
+2. 复核并选定已发布的 true-negative dataset；当前可用成员包括 `0809-soar-enhance` 与 `background-neg-0801-full`。
 3. 在 `configs/datasets.yaml` 的 `stages.multitask.datasets` 与 `negative_datasets` 列表逐项配置 ID、proposal variant 和权重。
 4. 设置新的 multitask `HLML_SNAPSHOT_ID`、`HLML_EXPERIMENT_ID`，执行 `make multitask`。
 5. multitask 结束后执行 Val、infer、export；确认 ONNX/A1 报告和 conversion `datasets.zip`。
@@ -20,6 +20,6 @@
 - geometry 基线固定为第 68 epoch winner；Val landmarks mean pixel error 为 10.1930 px、PCK@0.10 为 0.8377。
 - unknown handedness positive 保留 presence/landmarks 指标，只从 handedness 指标排除。
 - 每阶段均保存 winner 并完成 Val/infer；multitask、multi-finetune 的 export 同时交付模型与配套数据包。
-- multitask 负样本仅来自 HLMF published negative dataset；multi-finetune selection 仅来自 Train mining 与人工删除式复核。
+- multitask 负样本仅来自 HLMF published negative dataset；multi-finetune selection 仅来自 Train mining 与人工删除式复核。两类输入都读取 HLMF 独立 `published_relpath` 图片，selection 同时用 `source_crop_relpath` 核对来源身份。
 - 多成员合并必须保持 ROI 唯一、split 隔离和同一 capture source 单 variant。
 - Test 不回流到采样、阈值、checkpoint 或困难挖掘。

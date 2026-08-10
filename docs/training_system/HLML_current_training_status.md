@@ -1,8 +1,8 @@
-# HLML 当前状态（2026-08-07）
+# HLML 当前状态（2026-08-10）
 
 ## 代码与流程
 
-HLML 4.0 已保持 HLMF manifest 零拷贝接口和三阶段 v2 训练契约。训练默认使用 `tqdm` epoch/batch 进度条；multitask 与 multi-finetune 的 `make export` 同时生成 ONNX/A1 审计物和符合官方转换工具要求的 `datasets.zip`。
+HLML 4.0 已对齐最新版 HLMF 3.0 manifest 接口和三阶段 v2 训练契约。PretrainSource/EValSource 原位读取来源 ROI；HLMF published negative/selection 读取其独立图片副本；HLML 的 `HAND_TRAIN_ROOT` 仍只写索引和训练产物。训练默认使用 `tqdm` epoch/batch 进度条；multitask 与 multi-finetune 的 `make export` 同时生成 ONNX/A1 审计物和符合官方转换工具要求的 `datasets.zip`。
 
 文件夹推理的 Palm 模型已迁移到 `palm_detector/<model_id>/model_opt.onnx`。全局模型由 `configs/inference.yaml` 的 `palm.model_id` 选择，`make infer ... INFER_ARGS='--palm-model-id <id>'` 可单次覆盖。
 
@@ -22,4 +22,6 @@ HLML 4.0 已保持 HLMF manifest 零拷贝接口和三阶段 v2 训练契约。�
 
 warehouse 的 `datasets`、`negative_datasets`、`new_datasets`、`selections` 与 `evaluation.val/test` 均支持多个成员 ID；每个 dataset 类成员可独立选择 proposal variant，每个成员有独立权重。
 
-当前服务器没有已发布 negative dataset 或 hard-positive selection，因此 geometry 已完成，multitask 与 multi-finetune 仍需先完成对应 HLMF 发布物。
+2026-08-10 完成最新版 HLMF/HLML 接口复核：真实 `FullEnhanceVal0808/eos_1.0-gate_r2` 共 1,989 条 Val 记录，包含 RTMPose、人工修正、双头 HCF teacher ID；真实 `0809-soar-enhance` 共 281 条 published negative。两者均完成图片解码和 canonical 严格校验，错误为 0；18 条警告均为 HLMF 契约允许的截断 ROI 边界外关键点。合成 selection 还验证了 `source_crop_relpath`/`published_relpath`、源 ROI 删除后独立副本继续可读，以及 MediaPipe TFLite 几何补救字段无损保留。HLMF 54 项、HLML 184 项单元测试全部通过。
+
+当前服务器已有 `0809-soar-enhance`、`background-neg-0801-full` 等 published negative dataset，multitask 的 HLMF 数据前置条件已经具备；尚无 published hard-positive selection，因此 multi-finetune 仍需先完成困难样本复核与发布。

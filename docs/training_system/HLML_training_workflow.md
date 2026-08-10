@@ -22,7 +22,7 @@ make environment-check
 
 ## 1. 系统边界与工作目录
 
-HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 原位加载 `256×256` Hand ROI。`HAND_TRAIN_ROOT` 只保存零拷贝索引快照、训练报告、checkpoint、评估结果和导出物，不复制数据集图片。
+HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 使用来源 ROI；GoldSource 负样本和 Selections 困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
 
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
@@ -39,8 +39,8 @@ cd /path/to/HandLandmarkerLab
 HAND_DATASET_ROOT/
   PretrainSource/<dataset_id>/dataset_manifest.json
   EValSource/<dataset_id>/dataset_manifest.json
-  GoldSource/NegativeSamples/<negative_dataset_id>/published/manifest.json
-  Selections/<selection_id>/published/manifest.json
+  GoldSource/NegativeSamples/<negative_dataset_id>/published/{manifest.json,negative_labels.jsonl,images/}
+  Selections/<selection_id>/published/{manifest.json,selection.jsonl,images/}
   Registry/registry.sqlite3
 ```
 
@@ -68,8 +68,8 @@ HAND_TRAIN_ROOT/
 输入位置与选择键：
 
 - `stages.*.datasets` → `PretrainSource/<dataset_id>/dataset_manifest.json`。
-- `stages.multitask.negative_datasets` → `GoldSource/NegativeSamples/<id>/published/manifest.json`。
-- `stages.multi_finetune.selections` → `Selections/<id>/published/manifest.json`。
+- `stages.multitask.negative_datasets` → `GoldSource/NegativeSamples/<id>/published/manifest.json`；训练图片取每行 `published_relpath`。
+- `stages.multi_finetune.selections` → `Selections/<id>/published/manifest.json`；用 `source_crop_relpath` 核对 registry，用 `published_relpath` 读取独立发布副本。
 - `stages.multi_finetune.new_datasets` → 新录制的 Train dataset manifest。
 - `evaluation.val/test` → `EValSource/<dataset_id>/dataset_manifest.json` 中相应 split。
 
@@ -138,9 +138,12 @@ make data-audit HLML_STAGE=multi_finetune
 1. 解析新来源名 `<background>-<distance>-<lighting>-<condition>-<split>-<session>-<performer>`。
 2. 检查 capture source 和 raw image 不跨 Train/Val/Test。
 3. 检查一次运行中同一 `capture_source_id` 只选择一个 `proposal_variant`。
-4. 核对 `roi_id`、registry 记录、相对路径和 dataset/source/split 字段。
-5. 限制图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
-6. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
+4. 要求 dataset、negative dataset 与 selection manifest 使用当前 HLMF `hlmf_dataset_v1` schema，并核对 `roi_id`、registry 记录、相对路径和 dataset/source/split 字段。
+5. negative dataset 与 selection 必须声明 `image_policy=copied_review_and_published_images`；negative 直接读取 `published_relpath`，selection 先用 `source_crop_relpath` 验证原 ROI 身份，再从 `published_relpath` 读取独立副本。源 ROI 图片被删除或源 variant 退役后，已发布 selection 仍可单独读取。
+6. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
+7. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
+
+HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`。因此 RTMPose 双头 HCF 输出和 MediaPipe TFLite 几何补救不会在 HLML 入库时丢失。
 
 完整性检查使用稳定 ID、SQLite、文件路径、尺寸与解码，不对数据集图片反复计算 SHA-256。
 
@@ -459,7 +462,7 @@ make help
 make acceptance-smoke
 ```
 
-该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；不使用真实 Test 选择模型。
+该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；合成接口覆盖 HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath`、双头 teacher ID 与可选几何补救字段，不使用真实 Test 选择模型。
 
 ## 15. `configs/datasets.yaml` 参数说明
 
@@ -467,8 +470,8 @@ make acceptance-smoke
 - `dataset_id`：HLMF 发布的数据集逻辑 ID，不是目录绝对路径。
 - `proposal_variant`：选择同一来源的哪一版 Palm/ROI 结果。`stages.*.datasets` 由 `HLML_PROPOSAL_VARIANT` 选择 Train variant，`evaluation.val/test` 由 `HLML_EVAL_PROPOSAL_VARIANT` 独立选择 Val/Test variant；一次运行中同一 `capture_source_id` 仍只能选择一个 variant。
 - `weight`：正数，写入该来源记录的 `sampling_weight`。它控制相对抽样权重，不复制样本。
-- `negative_dataset_id`：只能引用 HLMF `GoldSource/NegativeSamples/<id>/published/`。
-- `selection_id`：只能引用 HLMF `Selections/<id>/published/` 的零拷贝困难样本集合。
+- `negative_dataset_id`：只能引用 HLMF `GoldSource/NegativeSamples/<id>/published/`；HLML 读取其独立 `published_relpath` 图片副本。
+- `selection_id`：只能引用 HLMF `Selections/<id>/published/` 的困难样本集合；来源身份由 `source_crop_relpath` 与 registry 核对，实际输入为独立 `published_relpath` 图片。
 - `new_datasets`：multi-finetune 可选新录制 Train positive，格式与 `datasets` 相同。
 - `hard_fraction/replay_fraction`：默认 `0.55/0.45`，必须均大于 0 且总和为 1。
 - `evaluation.val/test`：只选择 EValSource 中已复核 fixed ROI；两者按 manifest 的 split 字段过滤。

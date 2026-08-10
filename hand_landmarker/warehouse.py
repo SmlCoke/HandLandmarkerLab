@@ -21,6 +21,7 @@ from .config import load_config
 from .io_utils import read_image, read_jsonl, write_json, write_jsonl
 
 
+HLMF_SCHEMA = "hlmf_dataset_v1"
 SNAPSHOT_SCHEMA = "hlml_warehouse_snapshot_v1"
 TRAIN_SCHEMA = "hlml_warehouse_train_v1"
 EVALUATION_SCHEMA = "hlml_fixed_roi_evaluation_v1"
@@ -188,6 +189,10 @@ class WarehouseReader:
         bucket = "PretrainSource" if scope == "pretrain" else "EValSource"
         manifest_path = self.root / bucket / dataset_id / "dataset_manifest.json"
         manifest = _read_json(manifest_path)
+        if str(manifest.get("schema_version")) != HLMF_SCHEMA:
+            raise WarehouseContractError(
+                "unsupported HLMF dataset manifest schema: {}".format(manifest_path)
+            )
         if str(manifest.get("dataset_id")) != dataset_id or str(manifest.get("scope")) != scope:
             raise WarehouseContractError("dataset manifest identity mismatch: {}".format(manifest_path))
         rows: List[Dict[str, Any]] = []
@@ -244,6 +249,12 @@ class WarehouseReader:
     def negative_rows(self, negative_dataset_id: str, weight: float = 1.0) -> List[Dict[str, Any]]:
         root = self.root / "GoldSource" / "NegativeSamples" / negative_dataset_id / "published"
         manifest = _read_json(root / "manifest.json")
+        if str(manifest.get("schema_version")) != HLMF_SCHEMA:
+            raise WarehouseContractError("unsupported HLMF negative manifest schema")
+        if str(manifest.get("image_policy")) != "copied_review_and_published_images":
+            raise WarehouseContractError(
+                "negative dataset must use independent HLMF published images"
+            )
         if str(manifest.get("negative_dataset_id")) != negative_dataset_id:
             raise WarehouseContractError("negative dataset manifest identity mismatch")
         rows = _clean_rows(root / str(manifest.get("labels", "negative_labels.jsonl")))
@@ -276,17 +287,30 @@ class WarehouseReader:
             row["dataset_weight"] = float(weight)
             row["hand_presence"] = {"present": False}
             row["landmarks_crop_norm"] = []
-            row["crop_relpath"] = str(row.get("published_relpath"))
+            source_relative = str(row.get("crop_relpath") or row.get("crop_path") or "")
+            published_relative = str(row.get("published_relpath") or "")
+            if not published_relative:
+                raise WarehouseContractError("negative row is missing published_relpath")
+            if published_relative == source_relative:
+                raise WarehouseContractError(
+                    "negative published image must be independent from its source ROI"
+                )
+            row["crop_relpath"] = published_relative
+            row["crop_path"] = published_relative
             row["_absolute_crop_path"] = str(self._check_image(row["crop_relpath"]))
         return rows
 
     def selection_rows(self, selection_id: str, weight: float = 1.0) -> List[Dict[str, Any]]:
         root = self.root / "Selections" / selection_id / "published"
         manifest = _read_json(root / "manifest.json")
+        if str(manifest.get("schema_version")) != HLMF_SCHEMA:
+            raise WarehouseContractError("unsupported HLMF selection manifest schema")
         if str(manifest.get("selection_id")) != selection_id:
             raise WarehouseContractError("selection manifest identity mismatch")
-        if str(manifest.get("image_policy")) != "zero_copy_reference_pretrain_roi":
-            raise WarehouseContractError("selection must use zero-copy PretrainSource references")
+        if str(manifest.get("image_policy")) != "copied_review_and_published_images":
+            raise WarehouseContractError(
+                "selection must use independent HLMF published images"
+            )
         rows = _clean_rows(root / str(manifest.get("selection", "selection.jsonl")))
         if len(rows) != int(manifest.get("records", -1)):
             raise WarehouseContractError("selection record count mismatch")
@@ -299,12 +323,27 @@ class WarehouseReader:
         for row in rows:
             if str(row.get("split")) != "train" or not _positive(row):
                 raise WarehouseContractError("hard selection accepts Train positives only")
+            source_relative = str(row.get("source_crop_relpath") or "")
+            published_relative = str(row.get("published_relpath") or "")
+            original_relative = str(row.get("crop_relpath") or row.get("crop_path") or "")
+            if not source_relative or not published_relative:
+                raise WarehouseContractError(
+                    "selection row requires source_crop_relpath and published_relpath"
+                )
+            if original_relative != source_relative:
+                raise WarehouseContractError(
+                    "selection source_crop_relpath disagrees with its source ROI path"
+                )
+            if published_relative == source_relative:
+                raise WarehouseContractError(
+                    "selection published image must be independent from its source ROI"
+                )
+            self._check_registry_roi(row)
             row["selection_id"] = selection_id
             row["dataset_weight"] = float(weight)
-            relative = str(row.get("crop_relpath") or row.get("crop_path") or "")
-            row["crop_relpath"] = relative
-            row["_absolute_crop_path"] = str(self._check_image(relative))
-            self._check_registry_roi(row)
+            row["crop_relpath"] = published_relative
+            row["crop_path"] = published_relative
+            row["_absolute_crop_path"] = str(self._check_image(published_relative))
         return rows
 
 

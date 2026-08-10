@@ -149,11 +149,15 @@ class SyntheticWarehouse:
         )
 
     def _publish_negative(self):
-        root = self.root / "GoldSource" / "NegativeSamples" / "neg-set" / "published"
-        relative = "GoldSource/NegativeSamples/neg-set/published/images/{}/neg-roi.png".format(
+        published_root = self.root / "GoldSource" / "NegativeSamples" / "neg-set" / "published"
+        source_relative = "PretrainSource/train-set/{}/02_roi_crops/{}/neg-roi.png".format(
+            self.train_capture, self.variant
+        )
+        published_relative = "GoldSource/NegativeSamples/neg-set/published/images/{}/neg-roi.png".format(
             self.train_capture
         )
-        write_image(self.root / relative, np.zeros((256, 256), dtype=np.uint8))
+        write_image(self.root / source_relative, np.zeros((256, 256), dtype=np.uint8))
+        write_image(self.root / published_relative, np.zeros((256, 256), dtype=np.uint8))
         row = dict(self.train_rows[0])
         row.update(
             {
@@ -161,41 +165,56 @@ class SyntheticWarehouse:
                 "crop_id": "neg-roi",
                 "raw_image_id": "neg-raw",
                 "proposal_kind": "negative_candidate",
-                "crop_relpath": relative,
-                "crop_path": relative,
-                "published_relpath": relative,
+                "crop_relpath": source_relative,
+                "crop_path": source_relative,
+                "published_relpath": published_relative,
                 "hand_presence": {"present": False},
                 "handedness": {"label": "unknown", "score": None},
                 "landmarks_crop_norm": [],
                 "negative_dataset_id": "neg-set",
             }
         )
-        write_jsonl(root / "negative_labels.jsonl", [row])
+        write_jsonl(published_root / "negative_labels.jsonl", [row])
         write_json(
-            root / "manifest.json",
-            {"negative_dataset_id": "neg-set", "records": 1, "labels": "negative_labels.jsonl"},
+            published_root / "manifest.json",
+            {
+                "schema_version": "hlmf_dataset_v1",
+                "negative_dataset_id": "neg-set",
+                "records": 1,
+                "labels": "negative_labels.jsonl",
+                "image_policy": "copied_review_and_published_images",
+            },
         )
         with closing(sqlite3.connect(str(self.registry))) as db:
             db.execute(
                 "INSERT INTO rois VALUES(?,?,?,?,?,?)",
-                ("neg-roi", "neg-raw", self.train_capture, self.variant, 1, relative),
+                ("neg-roi", "neg-raw", self.train_capture, self.variant, 1, source_relative),
             )
             db.execute("INSERT INTO negative_datasets VALUES('neg-set','published')")
-            db.execute("INSERT INTO published_negatives VALUES('neg-roi','neg-set',?)", (relative,))
+            db.execute(
+                "INSERT INTO published_negatives VALUES('neg-roi','neg-set',?)",
+                (published_relative,),
+            )
             db.commit()
 
     def _publish_selection(self):
         root = self.root / "Selections" / "hard-set" / "published"
         row = dict(self.train_rows[0])
         row["selection_id"] = "hard-set"
+        row["source_crop_relpath"] = row["crop_relpath"]
+        row["published_relpath"] = "Selections/hard-set/published/images/{}/train-roi-1.png".format(
+            self.train_capture
+        )
+        write_image(self.root / row["published_relpath"], np.full((256, 256), 70, dtype=np.uint8))
         write_jsonl(root / "selection.jsonl", [row])
         write_json(
             root / "manifest.json",
             {
+                "schema_version": "hlmf_dataset_v1",
                 "selection_id": "hard-set",
                 "records": 1,
                 "selection": "selection.jsonl",
-                "image_policy": "zero_copy_reference_pretrain_roi",
+                "image_policy": "copied_review_and_published_images",
             },
         )
         with closing(sqlite3.connect(str(self.registry))) as db:
@@ -246,6 +265,31 @@ class WarehouseV4Tests(unittest.TestCase):
             self.assertFalse(any(path.suffix.lower() in {".png", ".tif", ".tiff"} for path in train.rglob("*")))
             negative = next(row for row in rows if row.get("negative_dataset_id") == "neg-set")
             self.assertEqual(2.0, negative["sampling_weight"])
+            negative_labels = read_jsonl(
+                warehouse.root
+                / "GoldSource"
+                / "NegativeSamples"
+                / "neg-set"
+                / "published"
+                / "negative_labels.jsonl"
+            )
+            (warehouse.root / negative_labels[0]["crop_relpath"]).unlink()
+            negatives_after_source_delete = WarehouseReader(warehouse.root).negative_rows("neg-set")
+            self.assertEqual(1, len(negatives_after_source_delete))
+            self.assertTrue(Path(negatives_after_source_delete[0]["_absolute_crop_path"]).is_file())
+
+            finetune_rows = read_jsonl(
+                train / "snapshots" / "run" / "multi_finetune" / "train.jsonl"
+            )
+            selected = next(row for row in finetune_rows if row.get("selection_id") == "hard-set")
+            self.assertIn("/Selections/hard-set/published/images/", selected["crop_path"].replace("\\", "/"))
+            self.assertTrue(selected["source_crop_relpath"].startswith("PretrainSource/train-set/"))
+
+            source_image = warehouse.root / selected["source_crop_relpath"]
+            source_image.unlink()
+            rows_after_source_delete = WarehouseReader(warehouse.root).selection_rows("hard-set")
+            self.assertEqual(1, len(rows_after_source_delete))
+            self.assertTrue(Path(rows_after_source_delete[0]["_absolute_crop_path"]).is_file())
 
     def test_geometry_combines_multiple_dataset_ids_variants_and_weights(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -287,6 +331,45 @@ class WarehouseV4Tests(unittest.TestCase):
             second = next(row for row in rows if row["dataset_id"] == "train-set-2")
             self.assertEqual("palm-v2", second["proposal_variant"])
             self.assertEqual(3.0, second["sampling_weight"])
+
+    def test_latest_hlmf_teacher_and_geometry_rescue_provenance_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            warehouse = SyntheticWarehouse(root / "dataset")
+            manifest_path = warehouse.root / "PretrainSource" / "train-set" / "dataset_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            labels_path = warehouse.root / manifest["capture_sources"][0]["published_variants"][0][
+                "labels_relpath"
+            ]
+            rows = read_jsonl(labels_path)
+            rows[0].update(
+                {
+                    "source": "mediapipe_hand_landmarker_full_tflite_rtmpose_rescue",
+                    "label_origin": "mediapipe",
+                    "annotation_style": "mediapipe_tflite_rescue_v1",
+                    "teacher_model_id": "mediapipe-hand-landmark-full-tflite",
+                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0807",
+                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0807",
+                    "rtmpose_geometry_rescue": {
+                        "attempted": True,
+                        "accepted": True,
+                        "trigger_errors": ["rtmpose_boundary_coordinate_count>=2"],
+                        "result_errors": [],
+                        "model_id": "mediapipe-hand-landmark-full-tflite",
+                    },
+                }
+            )
+            write_jsonl(labels_path, rows)
+
+            build_snapshot(warehouse.config(), warehouse.root, root / "train", "rescue", "geometry")
+            snapshot_rows = read_jsonl(root / "train" / "snapshots" / "rescue" / "geometry" / "train.jsonl")
+            rescued = next(row for row in snapshot_rows if row["roi_id"] == rows[0]["roi_id"])
+            self.assertEqual("mediapipe_tflite_rescue_v1", rescued["annotation_style"])
+            self.assertEqual(
+                "hand-classifier-handedness-handpresence-0807",
+                rescued["hand_presence_teacher_model_id"],
+            )
+            self.assertTrue(rescued["rtmpose_geometry_rescue"]["accepted"])
 
     def test_geometry_rejects_negative_dataset(self):
         with tempfile.TemporaryDirectory() as temp:
