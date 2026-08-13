@@ -206,6 +206,11 @@ class WarehouseReader:
                 for item in source.get("published_variants") or []
                 if str(item.get("proposal_variant")) == proposal_variant
             ]
+            if not variants:
+                # HLMF may publish a proposal variant for only the capture
+                # distances supported by that Palm model while retaining
+                # historical sources and variants in the same dataset manifest.
+                continue
             if len(variants) != 1:
                 raise WarehouseContractError(
                     "capture source {} must publish exactly one selected variant {}; got {}".format(

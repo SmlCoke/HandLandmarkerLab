@@ -332,6 +332,46 @@ class WarehouseV4Tests(unittest.TestCase):
             self.assertEqual("palm-v2", second["proposal_variant"])
             self.assertEqual(3.0, second["sampling_weight"])
 
+    def test_partial_variant_skips_unpublished_sources_but_requires_split_rows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            warehouse = SyntheticWarehouse(Path(temp) / "dataset")
+            manifest_path = (
+                warehouse.root / "EValSource" / "eval-set" / "dataset_manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["quality_gate_counting_policy"] = (
+                "exclusive_by_publish_routing_priority"
+            )
+            manifest["quality_gate_rejections"] = {
+                "hand_presence": 0,
+                "boundary_coordinate": 0,
+                "connection_length": 0,
+                "handedness": 0,
+            }
+            manifest["capture_sources"].append(
+                {
+                    "capture_source_id": "room-far-dim-normal-val-s02-dave",
+                    "split": "val",
+                    "published_variants": [
+                        {
+                            "proposal_variant": "eos-1.0",
+                            "published_labels": 1,
+                            "labels_relpath": "not-read-for-unselected-variant.jsonl",
+                        }
+                    ],
+                }
+            )
+            write_json(manifest_path, manifest)
+
+            rows = WarehouseReader(warehouse.root).source_rows(
+                "eval", "eval-set", warehouse.variant, expected_split="val"
+            )
+            self.assertEqual(["val-roi-1"], [row["roi_id"] for row in rows])
+            with self.assertRaisesRegex(WarehouseContractError, "has no published rows"):
+                WarehouseReader(warehouse.root).source_rows(
+                    "eval", "eval-set", "missing-variant", expected_split="val"
+                )
+
     def test_latest_hlmf_teacher_and_geometry_rescue_provenance_is_preserved(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -348,8 +388,8 @@ class WarehouseV4Tests(unittest.TestCase):
                     "label_origin": "mediapipe",
                     "annotation_style": "mediapipe_tflite_rescue_v1",
                     "teacher_model_id": "mediapipe-hand-landmark-full-tflite",
-                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0809",
-                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0809",
+                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0813",
+                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0813",
                     "rtmpose_geometry_rescue": {
                         "attempted": True,
                         "accepted": True,
@@ -366,7 +406,7 @@ class WarehouseV4Tests(unittest.TestCase):
             rescued = next(row for row in snapshot_rows if row["roi_id"] == rows[0]["roi_id"])
             self.assertEqual("mediapipe_tflite_rescue_v1", rescued["annotation_style"])
             self.assertEqual(
-                "hand-classifier-handedness-handpresence-0809",
+                "hand-classifier-handedness-handpresence-0813",
                 rescued["hand_presence_teacher_model_id"],
             )
             self.assertTrue(rescued["rtmpose_geometry_rescue"]["accepted"])

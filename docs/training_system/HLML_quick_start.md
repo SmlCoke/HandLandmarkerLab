@@ -33,15 +33,15 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：单成员可设置 `HLML_*` 环境变量；多成员在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant 和 `weight`。输出：只确定成员关系；negative/selection 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
+输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：单成员可设置 `HLML_*` 环境变量；多成员在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant 和 `weight`。同一 manifest 中没有发布所选 variant 的历史 source 会被跳过，目标 split 至少要有一个匹配 source；near/mid/far 能力由 HLMF 在发布前限制。输出：只确定成员关系；negative/selection 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
 
 ```bash
 export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
 export HLML_NEGATIVE_DATASET_ID=background-neg-0801
 export HLML_SELECTION_ID=hard-positive-0801
-export HLML_EVAL_DATASET_ID=national-eval-0801
+export HLML_EVAL_DATASET_ID=FullEnhanceVal0801
 export HLML_PROPOSAL_VARIANT=eos_1.0-gate
-export HLML_EVAL_PROPOSAL_VARIANT=eos-1.0
+export HLML_EVAL_PROPOSAL_VARIANT=eos_2.0-rtmpose-gate
 ```
 
 ## 2. 配置解析（Config Check）

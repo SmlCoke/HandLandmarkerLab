@@ -1,4 +1,4 @@
-# HLML 当前状态（2026-08-10）
+# HLML 当前状态（2026-08-13）
 
 ## 代码与流程
 
@@ -24,6 +24,8 @@ warehouse 的 `datasets`、`negative_datasets`、`new_datasets`、`selections` �
 
 2026-08-10 完成最新版 HLMF/HLML 接口复核：真实 `FullEnhanceVal0808/eos_1.0-gate_r2` 共 1,989 条 Val 记录，包含 RTMPose、人工修正、双头 HCF teacher ID；真实 `0809-soar-enhance` 共 281 条 published negative。两者均完成图片解码和 canonical 严格校验，错误为 0；18 条警告均为 HLMF 契约允许的截断 ROI 边界外关键点。合成 selection 还验证了 `source_crop_relpath`/`published_relpath`、源 ROI 删除后独立副本继续可读，以及 MediaPipe TFLite 几何补救字段无损保留。HLMF 54 项、HLML 184 项单元测试全部通过。
 
-同日针对 HLMF 后续 EOS 2.0 与 HCF 0809 更新再次复核：HLMF 对 HLML 发布的数据外层契约仍为 `hlmf_dataset_v1 + 256×256` 灰度 Hand ROI，HCF 变更只体现在可选教师溯源字段，训练读取器无需改变；HLML 原有文件夹推理链路则与 EOS 2.0 不兼容，现已同步矩形前处理、Anchor、阈值与全局 NMS。服务器当前还没有 `proposal_variant=eos-2.0` 的正式 dataset manifest，因此接口验收使用当前 HLMF 契约生成的临时发布集，并在验收后删除；后续正式发布 EOS 2.0 数据时仍需用新的 snapshot ID 执行一次 `make data-audit`。更新后的 HLMF 66 项、HLML 188 项测试全部通过；同一张真实 TIFF 经同一 EOS 2.0 ONNX 推理后，两仓解码结果逐字段完全一致（1 个检测）。
+同日针对 HLMF 后续 EOS 2.0 与 HCF 0809 更新再次复核：HLMF 对 HLML 发布的数据外层契约仍为 `hlmf_dataset_v1 + 256×256` 灰度 Hand ROI，HCF 变更只体现在可选教师溯源字段；HLML 文件夹推理已同步矩形前处理、Anchor、阈值与全局 NMS。当时服务器尚无正式 EOS 2.0 manifest，接口验收使用合成发布集；HLMF 66 项、HLML 188 项测试通过，同一张真实 TIFF 的两仓 EOS 2.0 解码结果逐字段一致。
+
+2026-08-13 HLMF 已发布正式 EOS 2.0 Gold：`FullEnhanceVal0801/eos_2.0-rtmpose-gate` 含 Val 3,453、Test 2,342 条，`RTMPose-Finetune-Test-0812/rtmpose-finetune-test` 另含冻结 Test 396 条；全部来源均为 near/mid。前者与同一 manifest 中 6 个仅发布旧 variant 的历史 source 共存，暴露出 HLML 旧读取器会把“所选 variant 缺失”误判为错误。当前读取器已改为只消费实际发布所选 variant 的 source，并在目标 split 完全无匹配时继续失败。连接长度门控只改变 HLMF Train published/ignored 分流，新增 manifest 汇总字段不改变 HLML 行接口。HCF 默认已更新到 0813，模型结构未变；HLML 对 teacher ID 不做版本硬编码，未来 0813 行与现有 0809 Gold 均可无损读取。上述 6,191 条真实 Gold 已全部通过图片解码、Registry 路径与 canonical 校验，错误为 0；HLMF 72 项、HLML 189 项完整测试通过。
 
 当前服务器已有 `0809-soar-enhance`、`background-neg-0801-full` 等 published negative dataset，multitask 的 HLMF 数据前置条件已经具备；尚无 published hard-positive selection，因此 multi-finetune 仍需先完成困难样本复核与发布。
