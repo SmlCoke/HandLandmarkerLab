@@ -63,9 +63,9 @@ HAND_TRAIN_ROOT/
 
 阶段名：Dataset Selection。
 
-操作：编辑 `configs/datasets.yaml`，只填写 HLMF 已发布的 `dataset_id`、`negative_dataset_id`、`selection_id`、`proposal_variant` 和权重。不要手工拼接 JSONL，也不要把 ROI 复制到 `HAND_TRAIN_ROOT`。
+操作：编辑 `configs/datasets.yaml`，只填写 HLMF 已发布的 `dataset_id`、`negative_dataset_id`、`selection_id`、`proposal_variant`、可选的 `capture_source_ids` 白名单和权重。不要手工拼接 JSONL，也不要把 ROI 复制到 `HAND_TRAIN_ROOT`。
 
-`datasets`、`negative_datasets`、`new_datasets`、`selections` 和 `evaluation.val/test` 都是成员列表，可各自配置一个或多个已发布 ID；每个成员独立填写 variant（dataset 类）和 `weight`。环境变量占位只适合单成员快捷配置，多成员直接编辑 YAML。
+`datasets`、`negative_datasets`、`new_datasets`、`selections` 和 `evaluation.val/test` 都是成员列表，可各自配置一个或多个已发布 ID；每个 dataset 类成员独立填写 variant 和 `weight`。省略 `capture_source_ids` 时消费该 split 中所有已发布所选 variant 的 source；提供非空白名单时，每个 ID 必须存在于 dataset manifest、属于目标 split 并发布所选 variant，否则审计失败。该白名单用于冻结正式 Val/Test，也可用于确有需要的 Train 子集。
 
 输入位置与选择键：
 
@@ -75,33 +75,34 @@ HAND_TRAIN_ROOT/
 - `stages.multi_finetune.new_datasets` → 新录制的 Train dataset manifest。
 - `evaluation.val/test` → `EValSource/<dataset_id>/dataset_manifest.json` 中相应 split。
 
-可以直接编辑 YAML，也可以使用其中的环境变量占位：
-
-```bash
-export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
-export HLML_NEGATIVE_DATASET_ID=background-neg-0801
-export HLML_SELECTION_ID=hard-positive-0801
-export HLML_EVAL_DATASET_ID=FullEnhanceVal0801
-export HLML_PROPOSAL_VARIANT=eos_1.0-gate
-export HLML_EVAL_PROPOSAL_VARIANT=eos_2.0-rtmpose-gate
-```
-
-多成员示例：
+当前 Iris-1.1 geometry 成员示例（正式配置已写入 `configs/datasets.yaml`）：
 
 ```yaml
 stages:
   geometry:
     datasets:
-      - {dataset_id: FullEnhance0801, proposal_variant: eos_1.0-gate, weight: 1.0}
-      - {dataset_id: FullEnhance0803, proposal_variant: eos_1.0-gate-v2, weight: 1.0}
-  multitask:
-    datasets:
-      - {dataset_id: FullEnhance0801, proposal_variant: eos_1.0-gate, weight: 1.0}
-      - {dataset_id: FullEnhance0803, proposal_variant: eos_1.0-gate-v2, weight: 1.0}
-    negative_datasets:
-      - {negative_dataset_id: background-neg-0801, weight: 1.0}
-      - {negative_dataset_id: background-neg-0802, weight: 1.0}
+      - {dataset_id: FullEnhance0801, proposal_variant: eos_2.0-rtmpose-hcf0813-gate, weight: 1.0}
+      - {dataset_id: FullEnhance0803, proposal_variant: eos_2.0-rtmpose-hcf0813-gate, weight: 1.0}
+      - {dataset_id: FullEnhance0810, proposal_variant: eos_2.0-rtmpose-hcf0813-gate, weight: 1.0}
+evaluation:
+  val:
+    - dataset_id: FullEnhanceVal0801
+      proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+      capture_source_ids: [complex-mid-bright-random-val-s01-peak,
+                           complex-mid-bright-random-val-s01-soar,
+                           complex-near-bright-random-val-s01-peak]
+    - dataset_id: FullEnhanceVal0801
+      proposal_variant: eos_2.0-rtmpose-gate
+      capture_source_ids: [complex-mid-dark-random-val-s01-peak,
+                           white-mid-bright-random-val-s01-soar]
+  test:
+    - dataset_id: FullEnhanceVal0801
+      proposal_variant: eos_2.0-rtmpose-gate
+      capture_source_ids: [complex-mid-bright-random-test-s01-peak,
+                           complex-near-bright-random-test-s01-peak]
 ```
+
+Eos-1.0 ROI 来自只覆盖手掌的旧 Palm 几何，只能作为独立 legacy/stress 回放；它不能与完整手掌和手指 Anchor 产生的 Eos-2.0 ROI 合并成主 Val/Test headline 指标。同一原图已进入 Eos-2.0 主集时，也不得再以旧 variant 重复进入 legacy 集。`FullEnhanceVal0803`、`RTMPose-Finetune-Test-0812` 不属于本轮成员。
 
 输出：本阶段只确定成员关系，不写新数据。
 
@@ -139,13 +140,15 @@ make data-audit HLML_STAGE=multi_finetune
 
 1. 解析新来源名 `<background>-<distance>-<lighting>-<condition>-<split>-<session>-<performer>`。
 2. 检查 capture source 和 raw image 不跨 Train/Val/Test。
-3. 对每个 dataset 只读取包含所选 `proposal_variant` 的 capture source；同一 manifest 中仅发布其他历史 variant 的 source 会被跳过。目标 split 至少要有一个所选 variant，且同一 source 不得重复发布同名 variant。
+3. 对每个 dataset 只读取包含所选 `proposal_variant` 的 capture source；同一 manifest 中仅发布其他历史 variant 的 source 会被跳过。配置 `capture_source_ids` 后则要求白名单逐项精确命中，不允许缺失 source、错误 split 或未发布目标 variant。目标 split 至少要有一个所选 variant，且同一 source 不得重复发布同名 variant。
 4. 要求 dataset、negative dataset 与 selection manifest 使用当前 HLMF `hlmf_dataset_v1` schema，并核对 `roi_id`、registry 记录、相对路径和 dataset/source/split 字段。
 5. negative dataset 与 selection 必须声明 `image_policy=copied_review_and_published_images`；negative 直接读取 `published_relpath`，selection 先用 `source_crop_relpath` 验证原 ROI 身份，再从 `published_relpath` 读取独立副本。源 ROI 图片被删除或源 variant 退役后，已发布 selection 仍可单独读取。
 6. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
 7. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
 
 HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`。新发布行的两个 HCF 字段可记录 `hand-classifier-handedness-handpresence-0813`；历史 Gold 中的 0809 ID 仍按原值保留。读取器不硬编码某个 HCF 版本，因此版本更新不会在 HLML 入库时丢失 provenance。
+
+HLMF 当前有两种等价的辅助 crop-pixel 表示：常规 MediaPipe/RTMPose 行满足 `crop_px = crop_norm × 255`，`mediapipe_tflite_rescue_v1` 行满足连续 crop extent 约定 `crop_px = crop_norm × 256`。两者的实际训练目标都是同一 `landmarks_crop_norm`。HLML warehouse 审计要求整行严格匹配其中一种约定，不匹配任一种即失败；随后记录 `warehouse_crop_pixel_convention`，并把内部 snapshot 的辅助 `landmarks_crop_px` 统一规范化为 `crop_norm × 255`。这不会改写 HLMF 发布物，也不会改变归一化训练目标或 image-space 坐标。
 
 完整性检查使用稳定 ID、SQLite、文件路径、尺寸与解码，不对数据集图片反复计算 SHA-256。
 
@@ -464,13 +467,14 @@ make help
 make acceptance-smoke
 ```
 
-该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；合成接口覆盖部分发布的 EOS 2.0 proposal variant、HCF 0813 双头 teacher ID、HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath` 与可选几何补救字段，不使用真实 Test 选择模型。Palm 解码回归测试另行校验 `[1,1,224,384]`、840 Anchor、矩形输出映射和全局 NMS。
+该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；合成接口覆盖部分发布的 EOS 2.0 proposal variant、同一 dataset 按 source 白名单跨 variant 组集、HCF 0813 双头 teacher ID、TFLite rescue 的 `norm×256` 上游 crop-pixel 约定及 canonical 规范化、HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath` 与可选几何补救字段，不使用真实 Test 选择模型。Palm 解码回归测试另行校验 `[1,1,224,384]`、840 Anchor、矩形输出映射和全局 NMS。
 
 ## 15. `configs/datasets.yaml` 参数说明
 
 - 成员列表：`stages.*.datasets`、`negative_datasets`、`new_datasets`、`selections`、`evaluation.val/test` 均支持多个条目；构建 snapshot 时合并所有成员，并保留每个成员的 ID、variant 和权重。重复 ROI、跨 split 或同一 capture source 混用多个 variant 仍会失败。
 - `dataset_id`：HLMF 发布的数据集逻辑 ID，不是目录绝对路径。
-- `proposal_variant`：选择 dataset 中已发布的哪一版 Palm/ROI 结果。`stages.*.datasets` 由 `HLML_PROPOSAL_VARIANT` 选择 Train variant，`evaluation.val/test` 由 `HLML_EVAL_PROPOSAL_VARIANT` 独立选择 Val/Test variant。HLMF 允许一个 variant 只发布到 dataset 的部分 source；HLML 会跳过未发布该 variant 的 source，但目标 split 若一个匹配 source 都没有则失败。
+- `proposal_variant`：选择 dataset 中已发布的哪一版 Palm/ROI 结果。每个列表成员独立选择，因此同一 dataset 可用多个成员在不同 source 上消费不同 variant。HLMF 允许一个 variant 只发布到 dataset 的部分 source；没有 source 白名单时 HLML 会跳过未发布该 variant 的 source，但目标 split 若一个匹配 source 都没有则失败。
+- `capture_source_ids`：dataset 类成员的可选非空、无重复 source ID 白名单。提供后不再宽泛消费该 variant 的其他 source；每个 ID 都必须存在于 manifest、匹配当前 Train/Val/Test split 且发布该成员的 `proposal_variant`。
 - `weight`：正数，写入该来源记录的 `sampling_weight`。它控制相对抽样权重，不复制样本。
 - `negative_dataset_id`：只能引用 HLMF `GoldSource/NegativeSamples/<id>/published/`；HLML 读取其独立 `published_relpath` 图片副本。
 - `selection_id`：只能引用 HLMF `Selections/<id>/published/` 的困难样本集合；来源身份由 `source_crop_relpath` 与 registry 核对，实际输入为独立 `published_relpath` 图片。
@@ -502,7 +506,7 @@ make acceptance-smoke
 
 ### 16.3 采样、损失和增强
 
-- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 `FullEnhance0801/eos_1.0-gate` geometry Train 的 65,089 条记录全部是 `pseudo/POS_RUNTIME`，所以基础 geometry 配置使用 `POS_RUNTIME=1.0`、其他类型为 0，并保持 `missing_cell_policy.pseudo=fail`；这不会伪造或静默重分配不存在的 `POS_LOW_PALM`。后续 HLMF 发布新的 sample type 后，须先审计实际单元计数，再显式修改比例。
+- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 Iris-1.1 geometry 使用三个 `eos_2.0-rtmpose-hcf0813-gate` Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；正式训练前仍须以 snapshot audit 的实际单元计数为准。`missing_cell_policy.pseudo=fail` 不会伪造或静默重分配不存在的 sample type。
 - `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
 - `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
 - `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。

@@ -367,10 +367,121 @@ class WarehouseV4Tests(unittest.TestCase):
                 "eval", "eval-set", warehouse.variant, expected_split="val"
             )
             self.assertEqual(["val-roi-1"], [row["roi_id"] for row in rows])
+            selected_rows = WarehouseReader(warehouse.root).source_rows(
+                "eval",
+                "eval-set",
+                warehouse.variant,
+                expected_split="val",
+                capture_source_ids=[warehouse.val_capture],
+            )
+            self.assertEqual(["val-roi-1"], [row["roi_id"] for row in selected_rows])
+            with self.assertRaisesRegex(
+                WarehouseContractError, "does not publish selected variant"
+            ):
+                WarehouseReader(warehouse.root).source_rows(
+                    "eval",
+                    "eval-set",
+                    warehouse.variant,
+                    expected_split="val",
+                    capture_source_ids=["room-far-dim-normal-val-s02-dave"],
+                )
+            with self.assertRaisesRegex(WarehouseContractError, "manifest is missing"):
+                WarehouseReader(warehouse.root).source_rows(
+                    "eval",
+                    "eval-set",
+                    warehouse.variant,
+                    expected_split="val",
+                    capture_source_ids=["studio-mid-daylight-normal-val-s03-erin"],
+                )
+            with self.assertRaisesRegex(WarehouseContractError, "belongs to split test"):
+                WarehouseReader(warehouse.root).source_rows(
+                    "eval",
+                    "eval-set",
+                    warehouse.variant,
+                    expected_split="val",
+                    capture_source_ids=[warehouse.test_capture],
+                )
             with self.assertRaisesRegex(WarehouseContractError, "has no published rows"):
                 WarehouseReader(warehouse.root).source_rows(
                     "eval", "eval-set", "missing-variant", expected_split="val"
                 )
+
+    def test_evaluation_selects_exact_capture_sources_across_variants(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            warehouse = SyntheticWarehouse(root / "dataset")
+            second_capture = "studio-mid-daylight-normal-val-s02-dave"
+            second_variant = "eos-2.0-hcf0813"
+            second_row = warehouse._source_row(
+                "val-roi-2",
+                "val-raw-2",
+                second_capture,
+                "EValSource/eval-set",
+                120,
+                dataset_id="eval-set",
+                proposal_variant=second_variant,
+            )
+            labels = (
+                warehouse.root
+                / "EValSource"
+                / "eval-set"
+                / second_capture
+                / "05_labels"
+                / second_variant
+                / "hand_evaluation_labels.jsonl"
+            )
+            write_jsonl(labels, [second_row])
+            manifest_path = (
+                warehouse.root / "EValSource" / "eval-set" / "dataset_manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["capture_sources"].append(
+                {
+                    "capture_source_id": second_capture,
+                    "split": "val",
+                    "published_variants": [
+                        {
+                            "proposal_variant": second_variant,
+                            "published_labels": 1,
+                            "labels_relpath": str(labels.relative_to(warehouse.root)).replace(
+                                "\\", "/"
+                            ),
+                        }
+                    ],
+                }
+            )
+            write_json(manifest_path, manifest)
+
+            config = warehouse.config()
+            config["evaluation"]["val"] = [
+                {
+                    "dataset_id": "eval-set",
+                    "proposal_variant": warehouse.variant,
+                    "capture_source_ids": [warehouse.val_capture],
+                },
+                {
+                    "dataset_id": "eval-set",
+                    "proposal_variant": second_variant,
+                    "capture_source_ids": [second_capture],
+                },
+            ]
+            config["evaluation"]["test"][0]["capture_source_ids"] = [
+                warehouse.test_capture
+            ]
+            train_root = root / "train"
+            report = build_snapshot(config, warehouse.root, train_root, "selected", "geometry")
+            self.assertEqual({"train": 2, "val": 2, "test": 1}, report["records"])
+            val_rows = read_jsonl(
+                train_root / "snapshots" / "selected" / "geometry" / "val.jsonl"
+            )
+            self.assertEqual(
+                {warehouse.val_capture, second_capture},
+                {row["capture_source_id"] for row in val_rows},
+            )
+            self.assertEqual(
+                {warehouse.variant, second_variant},
+                {row["proposal_variant"] for row in val_rows},
+            )
 
     def test_latest_hlmf_teacher_and_geometry_rescue_provenance_is_preserved(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -399,6 +510,14 @@ class WarehouseV4Tests(unittest.TestCase):
                     },
                 }
             )
+            rows[0]["landmarks_crop_px"] = [
+                {
+                    "id": point["id"],
+                    "x": point["x"] * 256.0,
+                    "y": point["y"] * 256.0,
+                }
+                for point in rows[0]["landmarks_crop_norm"]
+            ]
             write_jsonl(labels_path, rows)
 
             build_snapshot(warehouse.config(), warehouse.root, root / "train", "rescue", "geometry")
@@ -410,6 +529,42 @@ class WarehouseV4Tests(unittest.TestCase):
                 rescued["hand_presence_teacher_model_id"],
             )
             self.assertTrue(rescued["rtmpose_geometry_rescue"]["accepted"])
+            self.assertEqual(
+                "crop_extent_0_to_size", rescued["warehouse_crop_pixel_convention"]
+            )
+            self.assertAlmostEqual(
+                rescued["landmarks_crop_norm"][0]["x"] * 255.0,
+                rescued["landmarks_crop_px"][0]["x"],
+            )
+
+    def test_hlmf_crop_pixel_coordinates_must_match_a_supported_convention(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            warehouse = SyntheticWarehouse(root / "dataset")
+            manifest_path = (
+                warehouse.root / "PretrainSource" / "train-set" / "dataset_manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            labels_path = warehouse.root / manifest["capture_sources"][0][
+                "published_variants"
+            ][0]["labels_relpath"]
+            rows = read_jsonl(labels_path)
+            rows[0]["landmarks_crop_px"] = [
+                {
+                    "id": point["id"],
+                    "x": point["x"] * 255.0,
+                    "y": point["y"] * 255.0,
+                }
+                for point in rows[0]["landmarks_crop_norm"]
+            ]
+            rows[0]["landmarks_crop_px"][0]["x"] += 5.0
+            write_jsonl(labels_path, rows)
+            with self.assertRaisesRegex(
+                WarehouseContractError, "disagree under both HLMF coordinate conventions"
+            ):
+                build_snapshot(
+                    warehouse.config(), warehouse.root, root / "train", "bad-pixels", "geometry"
+                )
 
     def test_geometry_rejects_negative_dataset(self):
         with tempfile.TemporaryDirectory() as temp:

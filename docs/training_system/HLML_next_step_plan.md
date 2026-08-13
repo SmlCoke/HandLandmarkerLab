@@ -2,25 +2,24 @@
 
 ## 当前目标
 
-`national-final-geometry-eos_1.0-gate-r1` 的 geometry 正式训练、固定 ROI Val 和 EOS 1.0 历史 infer 已完成。HLMF 已发布 near/mid EOS 2.0 Gold、`0809-soar-enhance` 等人工确认的 true-negative dataset；HLML 已兼容部分 source 发布 variant，文件夹推理也已切换到 EOS 2.0。下一目标是冻结本轮 near/mid 数据成员，选定负样本并完成 multitask 训练与评估。
+`national-final-geometry-eos_1.0-gate-r1` 的旧 geometry、固定 ROI Val 和 EOS 1.0 历史 infer 已完成。当前目标是以 Eos-2.0/HCF0813 发布域启动 Iris-1.1 geometry；本轮成员已在 `configs/datasets.yaml` 冻结，Eos-1.0 仅保留为独立 legacy/stress 回放。
 
 ## 执行顺序
 
-1. 保留 geometry 第 68 epoch winner、Val 指标和 0718 inference 产物，不使用 Test 重新选 checkpoint。
-2. 复核并选定已发布的 true-negative dataset；当前可用成员包括 `0809-soar-enhance` 与 `background-neg-0801-full`。
-3. 在 `configs/datasets.yaml` 的 `stages.multitask.datasets` 与 `negative_datasets` 列表逐项配置 ID、proposal variant 和权重；固定 ROI Val 使用 `FullEnhanceVal0801/eos_2.0-rtmpose-gate` 的两条 Val source。EOS 2.0 的 far 排除继续由 HLMF 发布契约负责。
-4. 设置新的 multitask `HLML_SNAPSHOT_ID`、`HLML_EXPERIMENT_ID`，执行 `make multitask`。
-5. multitask 结束后执行 Val、EOS 2.0 infer、export；infer 使用 `[1,1,224,384]` Palm 与现有 ROI 几何，确认 ONNX/A1 报告和 conversion `datasets.zip`。
-6. 运行 Train-only mining，在 HLMF 删除教师错误并发布一个或多个 selection；可同时加入多个 `new_datasets` 和 negative dataset。
-7. 以困难 55%、replay 45% 完成 multi-finetune，再执行 Val、infer、export。
-8. 根据固定 Val 冻结唯一 winner，最后执行一次 locked Test。
+1. 已刷新并冻结 HLMF dataset manifest，确认三个 Train dataset 的 HCF0813 variant 与五条 Val、两条 Test 白名单均已发布；EOS 2.0 的 far 排除继续由 HLMF 发布契约负责。
+2. 双仓库测试、真实全量 data audit 与临时 CPU 1-step geometry smoke 已通过，临时产物已删除；Test 只验证输入契约，不用于模型选择或调参。
+3. 在 AutoDL 重启实例/容器或请求平台刷新 NVIDIA UVM；运行 `make environment-check`，要求 TensorFlow 枚举到一张 physical GPU 且不再出现 `/dev/nvidia-uvm` EIO / `cuInit=999`。
+4. 设置 `HLML_SNAPSHOT_ID=iris-1.1-geometry-eos2-hcf0813-r1`、同名 `HLML_EXPERIMENT_ID`，执行 `make geometry`。
+5. geometry 结束后执行固定 ROI Val 与 EOS 2.0 代表性原图 infer；Test 仍保持锁定，直到 winner 冻结后才运行。
+6. 后续再复核并选定 published true-negative dataset，进入 multitask、Train-only mining 与 multi-finetune。
 
 ## 验收条件
 
-- geometry 基线固定为第 68 epoch winner；Val landmarks mean pixel error 为 10.1930 px、PCK@0.10 为 0.8377。
+- 新 geometry 只使用 `FullEnhance0801/0803/0810:eos_2.0-rtmpose-hcf0813-gate` 的 Train positive；不混入 Eos-1.0 ROI 或负样本。
+- Val 精确为三条 HCF0813 Eos-2.0 source 加两条旧 Eos-2.0 Gold source；Test 精确为两条 Eos-2.0 s01 Test source。每个白名单 ID 必须命中正确 split 和 variant。
 - unknown handedness positive 保留 presence/landmarks 指标，只从 handedness 指标排除。
 - 每阶段均保存 winner 并完成 Val/infer；multitask、multi-finetune 的 export 同时交付模型与配套数据包。
 - multitask 负样本仅来自 HLMF published negative dataset；multi-finetune selection 仅来自 Train mining 与人工删除式复核。两类输入都读取 HLMF 独立 `published_relpath` 图片，selection 同时用 `source_crop_relpath` 核对来源身份。
 - 多成员合并必须保持 ROI 唯一、split 隔离和同一 capture source 单 variant。
-- 以新 snapshot ID 运行 data audit，确认部分 variant source 选择、manifest、Registry、0809/0813 HCF 溯源字段和 `256×256` published ROI；`FullEnhanceVal0801` 两条 s01 Test 与 s05 frozen Test 不参与调参。
+- 以新 snapshot ID 运行 data audit，确认 source 白名单、manifest、Registry、0809/0813 HCF 溯源字段、`256×256` published ROI，以及 TFLite rescue `norm×256` 上游表示到 canonical `norm×255` 辅助字段的严格规范化；`FullEnhanceVal0801` 两条 s01 Test 不参与调参，`RTMPose-Finetune-Test-0812` 不参与本轮。
 - Test 不回流到采样、阈值、checkpoint 或困难挖掘。

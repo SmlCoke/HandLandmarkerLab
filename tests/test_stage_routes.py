@@ -56,23 +56,31 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertIn("selection_id", stage["selections"][0])
         self.assertIn("negative_dataset_id", config["stages"]["multitask"]["negative_datasets"][0])
 
-    def test_dataset_config_separates_train_and_evaluation_proposal_variants(self) -> None:
-        environment = {
-            "HLML_PROPOSAL_VARIANT": "train-gated",
-            "HLML_EVAL_PROPOSAL_VARIANT": "eval-stable",
-        }
-        with mock.patch.dict(os.environ, environment, clear=False):
-            config = load_config(CONFIGS / "datasets.yaml")
+    def test_dataset_config_freezes_iris_1_1_membership_and_variants(self) -> None:
+        config = load_config(CONFIGS / "datasets.yaml")
         for stage in ("geometry", "multitask", "multi_finetune"):
             self.assertEqual(
-                "train-gated",
-                config["stages"][stage]["datasets"][0]["proposal_variant"],
+                {"FullEnhance0801", "FullEnhance0803", "FullEnhance0810"},
+                {entry["dataset_id"] for entry in config["stages"][stage]["datasets"]},
             )
-        for split in ("val", "test"):
             self.assertEqual(
-                "eval-stable",
-                config["evaluation"][split][0]["proposal_variant"],
+                {"eos_2.0-rtmpose-hcf0813-gate"},
+                {entry["proposal_variant"] for entry in config["stages"][stage]["datasets"]},
             )
+        self.assertEqual(
+            {"eos_2.0-rtmpose-hcf0813-gate", "eos_2.0-rtmpose-gate"},
+            {entry["proposal_variant"] for entry in config["evaluation"]["val"]},
+        )
+        self.assertEqual(
+            ["eos_2.0-rtmpose-gate"],
+            [entry["proposal_variant"] for entry in config["evaluation"]["test"]],
+        )
+        self.assertTrue(
+            all(entry.get("capture_source_ids") for entry in config["evaluation"]["val"])
+        )
+        self.assertTrue(
+            all(entry.get("capture_source_ids") for entry in config["evaluation"]["test"])
+        )
 
     def test_val_and_test_profiles_are_fixed_roi_only(self) -> None:
         for action in ("val", "test"):

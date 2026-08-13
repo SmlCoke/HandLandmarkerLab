@@ -95,6 +95,23 @@ def _dataset_entries(config: Mapping[str, Any], key: str) -> List[Dict[str, Any]
         if not math.isfinite(weight) or weight <= 0.0:
             raise WarehouseContractError("dataset weight must be finite and positive")
         entry["weight"] = weight
+        if "capture_source_ids" in entry:
+            capture_source_ids = entry["capture_source_ids"]
+            if not isinstance(capture_source_ids, list) or not capture_source_ids:
+                raise WarehouseContractError(
+                    "capture_source_ids must be a non-empty list when provided"
+                )
+            normalized_capture_source_ids = []
+            for capture_source_id in capture_source_ids:
+                if not isinstance(capture_source_id, str) or not capture_source_id:
+                    raise WarehouseContractError(
+                        "capture_source_ids entries must be non-empty strings"
+                    )
+                _capture_fields(capture_source_id)
+                normalized_capture_source_ids.append(capture_source_id)
+            if len(set(normalized_capture_source_ids)) != len(normalized_capture_source_ids):
+                raise WarehouseContractError("capture_source_ids must not contain duplicates")
+            entry["capture_source_ids"] = normalized_capture_source_ids
         output.append(entry)
     return output
 
@@ -185,6 +202,7 @@ class WarehouseReader:
         proposal_variant: str,
         expected_split: str | None = None,
         weight: float = 1.0,
+        capture_source_ids: Sequence[str] | None = None,
     ) -> List[Dict[str, Any]]:
         bucket = "PretrainSource" if scope == "pretrain" else "EValSource"
         manifest_path = self.root / bucket / dataset_id / "dataset_manifest.json"
@@ -195,9 +213,28 @@ class WarehouseReader:
             )
         if str(manifest.get("dataset_id")) != dataset_id or str(manifest.get("scope")) != scope:
             raise WarehouseContractError("dataset manifest identity mismatch: {}".format(manifest_path))
+        selected_capture_ids = None
+        if capture_source_ids is not None:
+            selected_capture_ids = set(capture_source_ids)
+            if not selected_capture_ids:
+                raise WarehouseContractError("capture_source_ids must not be empty")
+            if len(selected_capture_ids) != len(capture_source_ids):
+                raise WarehouseContractError("capture_source_ids must not contain duplicates")
+            for capture_id in selected_capture_ids:
+                capture = _capture_fields(capture_id)
+                if expected_split and capture["split"] != expected_split:
+                    raise WarehouseContractError(
+                        "capture source {} belongs to split {}, expected {}".format(
+                            capture_id, capture["split"], expected_split
+                        )
+                    )
+        manifest_capture_ids: set[str] = set()
         rows: List[Dict[str, Any]] = []
         for source in manifest.get("capture_sources") or []:
             capture_id = str(source.get("capture_source_id"))
+            manifest_capture_ids.add(capture_id)
+            if selected_capture_ids is not None and capture_id not in selected_capture_ids:
+                continue
             capture = _capture_fields(capture_id)
             if expected_split and capture["split"] != expected_split:
                 continue
@@ -207,6 +244,12 @@ class WarehouseReader:
                 if str(item.get("proposal_variant")) == proposal_variant
             ]
             if not variants:
+                if selected_capture_ids is not None:
+                    raise WarehouseContractError(
+                        "capture source {} does not publish selected variant {}".format(
+                            capture_id, proposal_variant
+                        )
+                    )
                 # HLMF may publish a proposal variant for only the capture
                 # distances supported by that Palm model while retaining
                 # historical sources and variants in the same dataset manifest.
@@ -241,6 +284,14 @@ class WarehouseReader:
                 item["crop_relpath"] = relative
                 item["_absolute_crop_path"] = str(self._check_image(relative))
                 rows.append(item)
+        if selected_capture_ids is not None:
+            missing_capture_ids = sorted(selected_capture_ids - manifest_capture_ids)
+            if missing_capture_ids:
+                raise WarehouseContractError(
+                    "dataset {} manifest is missing selected capture sources: {}".format(
+                        dataset_id, missing_capture_ids
+                    )
+                )
         if not rows:
             raise WarehouseContractError(
                 "dataset {} has no published rows for variant {}{}".format(
@@ -358,6 +409,7 @@ def _head_points(row: MutableMapping[str, Any]) -> None:
         row["landmarks_crop_norm"] = []
         row["landmarks_crop_px"] = []
         row["landmarks_image_px"] = []
+        row["warehouse_crop_pixel_convention"] = None
         row["handedness"] = {"label": "unknown", "score": None}
         row["hand_id"] = None
         return
@@ -372,11 +424,62 @@ def _head_points(row: MutableMapping[str, Any]) -> None:
         for index in range(21)
     ]
     row["landmarks_crop_norm"] = normalized
-    if len(row.get("landmarks_crop_px") or []) != 21:
-        row["landmarks_crop_px"] = [
-            {"id": point["id"], "x": point["x"] * 255.0, "y": point["y"] * 255.0}
+    crop_px = list(row.get("landmarks_crop_px") or [])
+    if crop_px:
+        if len(crop_px) != 21:
+            raise WarehouseContractError(
+                "landmarks_crop_px must contain exactly 21 points: {}".format(
+                    row.get("roi_id")
+                )
+            )
+        crop_px_by_id = {
+            int(point.get("id", index)): point for index, point in enumerate(crop_px)
+        }
+        if set(crop_px_by_id) != set(range(21)):
+            raise WarehouseContractError(
+                "landmarks_crop_px IDs must be exactly 0..20: {}".format(
+                    row.get("roi_id")
+                )
+            )
+        pixel_index_error = max(
+            max(
+                abs(point["x"] * 255.0 - float(crop_px_by_id[point["id"]]["x"])),
+                abs(point["y"] * 255.0 - float(crop_px_by_id[point["id"]]["y"])),
+            )
             for point in normalized
-        ]
+        )
+        crop_extent_error = max(
+            max(
+                abs(point["x"] * 256.0 - float(crop_px_by_id[point["id"]]["x"])),
+                abs(point["y"] * 256.0 - float(crop_px_by_id[point["id"]]["y"])),
+            )
+            for point in normalized
+        )
+        best_error = min(pixel_index_error, crop_extent_error)
+        if best_error > 0.08:
+            raise WarehouseContractError(
+                "landmarks_crop_norm and landmarks_crop_px disagree under both HLMF "
+                "coordinate conventions for {}: pixel_index_error={} crop_extent_error={}".format(
+                    row.get("roi_id"), pixel_index_error, crop_extent_error
+                )
+            )
+        convention = (
+            "pixel_index_0_to_size_minus_1"
+            if pixel_index_error <= crop_extent_error
+            else "crop_extent_0_to_size"
+        )
+    else:
+        convention = "missing_regenerated_from_norm"
+    # HLML's canonical model target is landmarks_crop_norm. HLMF's regular
+    # MediaPipe/RTMPose paths publish crop pixels on 0..255, while the current
+    # TFLite geometry-rescue worker publishes the same normalized target on
+    # the continuous 0..256 crop extent. Validate either upstream convention,
+    # record it, and normalize this auxiliary canonical field to 0..255.
+    row["warehouse_crop_pixel_convention"] = convention
+    row["landmarks_crop_px"] = [
+        {"id": point["id"], "x": point["x"] * 255.0, "y": point["y"] * 255.0}
+        for point in normalized
+    ]
     if len(row.get("landmarks_image_px") or []) != 21:
         # Training and fixed-ROI evaluation never consume image-space points.
         # Preserve the field contract without reconstructing an original-image ROI.
@@ -514,6 +617,7 @@ def _load_stage_rows(
                 str(entry["proposal_variant"]),
                 expected_split="train",
                 weight=float(entry["weight"]),
+                capture_source_ids=entry.get("capture_source_ids"),
             )
         )
     if any(not _positive(row) for row in base_rows):
@@ -544,6 +648,7 @@ def _load_stage_rows(
                 str(entry["proposal_variant"]),
                 expected_split="train",
                 weight=float(entry["weight"]),
+                capture_source_ids=entry.get("capture_source_ids"),
             )
         )
     if any(not _positive(row) for row in new_recorded):
@@ -617,6 +722,7 @@ def _load_evaluation_rows(
                 str(entry["proposal_variant"]),
                 expected_split=split,
                 weight=float(entry["weight"]),
+                capture_source_ids=entry.get("capture_source_ids"),
             )
         )
     return [canonical_record(row, None) for row in rows]

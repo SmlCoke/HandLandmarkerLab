@@ -33,16 +33,7 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：单成员可设置 `HLML_*` 环境变量；多成员在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant 和 `weight`。同一 manifest 中没有发布所选 variant 的历史 source 会被跳过，目标 split 至少要有一个匹配 source；near/mid/far 能力由 HLMF 在发布前限制。输出：只确定成员关系；negative/selection 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
-
-```bash
-export HLML_PRETRAIN_DATASET_ID=FullEnhance0801
-export HLML_NEGATIVE_DATASET_ID=background-neg-0801
-export HLML_SELECTION_ID=hard-positive-0801
-export HLML_EVAL_DATASET_ID=FullEnhanceVal0801
-export HLML_PROPOSAL_VARIANT=eos_1.0-gate
-export HLML_EVAL_PROPOSAL_VARIANT=eos_2.0-rtmpose-gate
-```
+输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant、可选 `capture_source_ids` 白名单和 `weight`。没有白名单时，同一 manifest 中没有发布所选 variant 的历史 source 会被跳过；有白名单时，每个 source 必须存在、属于目标 split 并发布所选 variant。near/mid/far 能力由 HLMF 在发布前限制。当前 Iris-1.1 已冻结三个 HCF0813 Train dataset、五条 Eos-2.0 Val source 与两条 Eos-2.0 Test source；Eos-1.0 只可单独做 legacy/stress 回放。输出：只确定成员关系；negative/selection 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
 
 ## 2. 配置解析（Config Check）
 
@@ -54,9 +45,14 @@ make config-check
 
 ## 3. Geometry 阶段
 
-输入：PretrainSource 的可靠 positive 和 geometry profile；当前 `FullEnhance0801/eos_1.0-gate` 的 65,089 条 Train 记录均为 `POS_RUNTIME`，配置按 100% `POS_RUNTIME` 抽样。处理：先生成零拷贝 snapshot，再训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
+输入：`FullEnhance0801`、`FullEnhance0803`、`FullEnhance0810` 的 `eos_2.0-rtmpose-hcf0813-gate` positive 和 geometry profile，固定 Val/Test 由 `configs/datasets.yaml` 的 source 白名单选择。处理：先生成零拷贝 snapshot；TFLite rescue 的 `norm×256` 上游辅助 crop-pixel 表示会在严格核对后规范化为 HLML canonical `norm×255`，归一化训练目标不变；再按 100% `POS_RUNTIME` 训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
 
 ```bash
+export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
+export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
+export HLML_SNAPSHOT_ID=iris-1.1-geometry-eos2-hcf0813-r1
+export HLML_EXPERIMENT_ID=iris-1.1-geometry-eos2-hcf0813-r1
+export HLML_STAGE=geometry
 make geometry
 make val HLML_STAGE=geometry
 export HLML_INFER_INPUT=/path/to/representative/images

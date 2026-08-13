@@ -6,14 +6,26 @@ contract: hlml_warehouse_selection_v1
 stages:
   geometry:
     datasets:
-      - dataset_id: "${HLML_PRETRAIN_DATASET_ID:-replace-me-pretrain}"
-        proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+      - dataset_id: FullEnhance0801
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        weight: 1.0
+      - dataset_id: FullEnhance0803
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        weight: 1.0
+      - dataset_id: FullEnhance0810
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
         weight: 1.0
 
   multitask:
     datasets:
-      - dataset_id: "${HLML_PRETRAIN_DATASET_ID:-replace-me-pretrain}"
-        proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+      - dataset_id: FullEnhance0801
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        weight: 1.0
+      - dataset_id: FullEnhance0803
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        weight: 1.0
+      - dataset_id: FullEnhance0810
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
         weight: 1.0
     negative_datasets:
       - negative_dataset_id: "${HLML_NEGATIVE_DATASET_ID:-replace-me-negatives}"
@@ -22,8 +34,14 @@ stages:
   multi_finetune:
     # Mandatory pretrain replay pool.
     datasets:
-      - dataset_id: "${HLML_PRETRAIN_DATASET_ID:-replace-me-pretrain}"
-        proposal_variant: "${HLML_PROPOSAL_VARIANT:-palm-v1}"
+      - dataset_id: FullEnhance0801
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        weight: 1.0
+      - dataset_id: FullEnhance0803
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        weight: 1.0
+      - dataset_id: FullEnhance0810
+        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
         weight: 1.0
     # Optional newly recorded Train datasets join the hard/new 55% side.
     new_datasets: []
@@ -38,12 +56,25 @@ stages:
 
 evaluation:
   val:
-    - dataset_id: "${HLML_EVAL_DATASET_ID:-replace-me-eval}"
-      proposal_variant: "${HLML_EVAL_PROPOSAL_VARIANT:-palm-v1}"
+    - dataset_id: FullEnhanceVal0801
+      proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+      capture_source_ids:
+        - complex-mid-bright-random-val-s01-peak
+        - complex-mid-bright-random-val-s01-soar
+        - complex-near-bright-random-val-s01-peak
+      weight: 1.0
+    - dataset_id: FullEnhanceVal0801
+      proposal_variant: eos_2.0-rtmpose-gate
+      capture_source_ids:
+        - complex-mid-dark-random-val-s01-peak
+        - white-mid-bright-random-val-s01-soar
       weight: 1.0
   test:
-    - dataset_id: "${HLML_EVAL_DATASET_ID:-replace-me-eval}"
-      proposal_variant: "${HLML_EVAL_PROPOSAL_VARIANT:-palm-v1}"
+    - dataset_id: FullEnhanceVal0801
+      proposal_variant: eos_2.0-rtmpose-gate
+      capture_source_ids:
+        - complex-mid-bright-random-test-s01-peak
+        - complex-near-bright-random-test-s01-peak
       weight: 1.0
 
 policies:
