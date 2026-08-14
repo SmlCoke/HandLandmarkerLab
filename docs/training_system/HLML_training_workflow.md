@@ -220,7 +220,7 @@ make multitask
 - `stages.multitask.negative_datasets` 选择的 HLMF 已发布真负样本。
 - multitask profile 和审计生成的 snapshot。
 
-处理：从 geometry winner 初始化，保留 v2 的 landmarks、presence 和 handedness 输出与现有损失；真负样本的 `negative_dataset_id` 权重进入 `sampling_weight`，用于 presence 多任务训练。未经过 HLMF 删除式复核的 candidate negative 不可使用。
+处理：从 geometry winner 初始化，保留 v2 的 landmarks、presence 和 handedness 输出与现有损失；真负样本的 `negative_dataset_id` 权重进入 `sampling_weight`，用于 presence 多任务训练。未经过 HLMF 删除式复核的 candidate negative 不可使用。当前 Iris-1.1 multitask 使用 `neg-eos_2.0-hcf0813-hp0.5`；正式 snapshot 中有 74,225 条 `pseudo/POS_RUNTIME`、16,855 条 `pseudo/NEG_LOW_PALM_CANDIDATE` 和 55 条 `pseudo/NEG_RUNTIME_CANDIDATE`。本轮采样按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`，其余两类为 0；这与实际不存在 `POS_LOW_PALM` 的冻结数据一致，同时沿用不抽取 runtime candidate 的既定策略。
 
 输出：
 
@@ -506,7 +506,7 @@ make acceptance-smoke
 
 ### 16.3 采样、损失和增强
 
-- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 Iris-1.1 geometry 使用三个 `eos_2.0-rtmpose-hcf0813-gate` Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；正式训练前仍须以 snapshot audit 的实际单元计数为准。`missing_cell_policy.pseudo=fail` 不会伪造或静默重分配不存在的 sample type。
+- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 Iris-1.1 geometry 使用三个 `eos_2.0-rtmpose-hcf0813-gate` Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；当前 multitask 则按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`、其他类型为 0 抽样。正式训练前仍须以 snapshot audit 的实际单元计数为准；不得给实际缺失的 `POS_LOW_PALM` 配置正比例。`missing_cell_policy.pseudo=fail` 不会伪造或静默重分配不存在的 sample type。
 - `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
 - `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
 - `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。

@@ -63,9 +63,13 @@ make infer HLML_STAGE=geometry
 
 ## 4. Multitask 阶段
 
-输入：geometry winner、Train positive 和按 ID/权重选择的已发布真负样本。处理：训练 landmarks、presence、handedness 多任务。输出：`snapshots/<id>/multitask/` 和 `runs/<experiment>/multitask/checkpoints/best.weights.h5`。
+输入：`iris-1.1-geometry-eos2-hcf0813-r1` 的 geometry winner、三个 HCF0813 Train positive dataset 和已发布负样本集 `neg-eos_2.0-hcf0813-hp0.5`。处理：按 90% `POS_RUNTIME`、10% `NEG_LOW_PALM_CANDIDATE` 训练 landmarks、presence、handedness 多任务；输出：同一 ID 下的 `snapshots/<id>/multitask/` 和 `runs/<experiment>/multitask/checkpoints/best.weights.h5`。
 
 ```bash
+export HLML_SNAPSHOT_ID=iris-1.1-geometry-eos2-hcf0813-r1
+export HLML_EXPERIMENT_ID=iris-1.1-geometry-eos2-hcf0813-r1
+export HLML_NEGATIVE_DATASET_ID=neg-eos_2.0-hcf0813-hp0.5
+export HLML_STAGE=multitask
 make multitask
 make val HLML_STAGE=multitask
 export HLML_INFER_INPUT=/path/to/representative/images

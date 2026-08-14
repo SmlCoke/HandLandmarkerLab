@@ -1,4 +1,4 @@
-# HLML 当前状态（2026-08-13）
+# HLML 当前状态（2026-08-14）
 
 ## 代码与流程
 
@@ -30,6 +30,8 @@ warehouse 的 `datasets`、`negative_datasets`、`new_datasets`、`selections` �
 
 本轮 Iris-1.1 geometry 冻结成员为 `FullEnhance0801`、`FullEnhance0803`、`FullEnhance0810` 的 `eos_2.0-rtmpose-hcf0813-gate` Train，以及 `FullEnhanceVal0801` 内五条 Eos-2.0 Val source、两条 Eos-2.0 Test source。Val 同时消费 HCF0813 新 variant 与历史 `eos_2.0-rtmpose-gate` Gold，因此 HLML 新增可选 `capture_source_ids` 精确白名单；白名单中的 source 必须存在于 manifest、匹配 split 且发布指定 variant。`hlmf_dataset_v1`、256×256 单通道 ROI、21 点及 presence/handedness/provenance 字段未发生结构性变化。真实训练加载首次发现 3,955 条 `mediapipe_tflite_rescue_v1` 使用 HLMF 当前 `crop_px=norm×256` 连续 crop extent 表示，而 HLML canonical 使用 `norm×255` 像素索引表示；读取器现会严格识别两种上游约定、拒绝其他不一致，并只在内部 snapshot 规范化辅助 `crop_px`，不改变 `landmarks_crop_norm` 训练目标。Eos-1.0 旧 Palm 只覆盖手掌，ROI 域与 Eos-2.0 完整手掌加手指 Anchor 不同，不进入 Iris-1.1 主 Val/Test，只可作为独立 legacy/stress 指标；`FullEnhanceVal0803` 与 `RTMPose-Finetune-Test-0812` 不参与本轮。
 
-服务器真实全量 audit 得到 Train 74,225、Val 6,937、Test 2,342，invalid 与成员关系错误均为 0；Train 由 92 条 near/mid source 构成，全部为 `pseudo/POS_RUNTIME` 且 HCF teacher 为 0813。一次临时 CPU 1-step geometry + 1-step Val smoke 已完成，训练器、模型、采样、checkpoint 与报告链路均通过；HLMF 72 项、HLML 191 项测试通过，smoke snapshot/run/config 随后删除。当前服务器硬件可由 `nvidia-smi` 看到 RTX 3090，但 `/dev/nvidia-uvm` 打开返回 EIO、`libcuda.cuInit()` 返回 999，TensorFlow 因而找不到 physical GPU；这是容器/宿主 NVIDIA UVM 运行态故障，不是仓库或 Conda 依赖版本问题。正式 GPU geometry 必须先在 AutoDL 重启实例/容器或由平台刷新 UVM，并以 `make environment-check` 确认 GPU 通过。
+服务器真实全量 geometry audit 得到 Train 74,225、Val 6,937、Test 2,342，invalid 与成员关系错误均为 0；Train 由 92 条 near/mid source 构成，全部为 `pseudo/POS_RUNTIME` 且 HCF teacher 为 0813。正式 experiment `iris-1.1-geometry-eos2-hcf0813-r1` 已完成 70 个 epoch，`val_landmark_mae` 最优 checkpoint 位于第 58 epoch，值为 0.0218295。固定 ROI Val 已完成：6,907 条 positive 的 mean pixel error 为 8.8394 px、PCK@0.05/0.10/0.15 为 0.6301/0.8697/0.9408、collapse 为 0。EOS 2.0 infer 已完成 307 张原图，得到 543 个 Palm detection 和 543 个 Hand prediction，失败为 0。
 
-当前服务器已有 `0809-soar-enhance`、`background-neg-0801-full` 等 published negative dataset，multitask 的 HLMF 数据前置条件已经具备；尚无 published hard-positive selection，因此 multi-finetune 仍需先完成困难样本复核与发布。
+2026-08-14，负样本集 `neg-eos_2.0-hcf0813-hp0.5` 已发布：HCF 0.5 预审从 573,786 个输入候选选择 167,760 个供人工复核，最终保留并独立发布 16,910 个真负样本、删除 150,850 个有手或不确定候选。`complex-mid-bright-flat-train-s01-soar` 的 1,136 个候选全部被删除；单来源零保留不会阻止整个数据集发布，最终 manifest 含 91 个非空来源，Registry 状态为 `published`。
+
+同日真实 multitask audit 得到 Train 91,135（positive 74,225、negative 16,910）、Val 6,937、Test 2,342，成员错误为 0。snapshot 的实际采样单元为 `POS_RUNTIME=74,225`、`NEG_LOW_PALM_CANDIDATE=16,855`、`NEG_RUNTIME_CANDIDATE=55`，没有 `POS_LOW_PALM`；multitask profile 因此修正为 90% `POS_RUNTIME` + 10% `NEG_LOW_PALM_CANDIDATE`。RTX 3090 一步 GPU smoke 已从 geometry winner 正确初始化，完成 58 positive + 6 negative 的训练 batch 和 256 条 Val，有限 `val_multitask_score=0.0204787`，checkpoint 与报告链路通过。尚无 published hard-positive selection，multi-finetune 仍需先完成 Train-only mining、人工删除式复核与发布。

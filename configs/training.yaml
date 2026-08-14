@@ -167,8 +167,8 @@ profiles:
       max_average_cell_draws_per_unique_record: 4.0
       max_expected_row_draws_per_epoch: 8.0
       sample_type_fractions:
-        POS_RUNTIME: 0.72
-        POS_LOW_PALM: 0.18
+        POS_RUNTIME: 0.90
+        POS_LOW_PALM: 0.00
         NEG_RUNTIME_CANDIDATE: 0.0
         NEG_LOW_PALM_CANDIDATE: 0.10
     losses:
