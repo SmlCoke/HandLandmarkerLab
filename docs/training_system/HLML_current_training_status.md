@@ -1,8 +1,10 @@
-# HLML 当前状态（2026-08-14）
+# HLML 当前状态（2026-08-16）
 
 ## 代码与流程
 
-HLML 4.0 已对齐最新版 HLMF 3.0 manifest 接口和三阶段 v2 训练契约。PretrainSource/EValSource 原位读取来源 ROI；HLMF published negative/selection 读取其独立图片副本；HLML 的 `HAND_TRAIN_ROOT` 仍只写索引和训练产物。训练默认使用 `tqdm` epoch/batch 进度条；multitask 与 multi-finetune 的 `make export` 同时生成 ONNX/A1 审计物和符合官方转换工具要求的 `datasets.zip`。
+HLML 4.0 已对齐最新版 HLMF 3.0 manifest 接口和三阶段 v2 训练契约。PretrainSource/EValSource 原位读取来源 ROI；HLMF published negative 与 CVAT-reviewed hard dataset 读取独立图片副本；新录制的 reviewed Gold positive/negative 从 `GoldSource/ReviewedDatasets` 读取。旧 `Selections` 已发布资产仍可兼容读取，既有 PretrainSource/EValSource 合同未被迁移或改写。HLML 的 `HAND_TRAIN_ROOT` 仍只写索引和训练产物。
+
+困难挖掘已升级为 snapshot 内多轮合同：每轮必须给出唯一 `round_id` 与 `max_rois`，`selection_ledger.json` 阻止同一完整 geometry + multitask + multi-finetune 流程重复筛选 ROI，不进行全仓历史困难集扫描。困难度为关键点误差排序 80% + presence 误差 10% + handedness 误差 10%，发布前必须在 HLMF 完成 CVAT 1.1 精修。通用 `hard_dataset_id` 不与训练 run/snapshot/round 绑定。
 
 文件夹推理默认 Palm 已更新为 EOS 2.0：模型部署在 `palm_detector/eos-2.0/model_opt.onnx`，输入为 `[1,1,224,384]`，解码 `14×24` 与 `7×12` 两层共 840 个 Anchor，并在合并候选后执行 score 0.25、IoU 0.10 的一次全局 NMS。Hand ROI 继续使用 scale `1.8/1.8`、shift `0/-0.1` 和 `256×256` 输出。
 
@@ -20,7 +22,7 @@ HLML 4.0 已对齐最新版 HLMF 3.0 manifest 接口和三阶段 v2 训练契约
 
 `InferSource/0718/images` 的 `make infer` 已完成 307 张原图，Palm `eos-1.0` 产生 529 个检测并全部进入 Hand Landmarker，失败 0；输出位于 `HAND_TRAIN_ROOT/inference/national-final-geometry-eos_1.0-gate-r1/geometry`。
 
-warehouse 的 `datasets`、`negative_datasets`、`new_datasets`、`selections` 与 `evaluation.val/test` 均支持多个成员 ID；每个 dataset 类成员可独立选择 proposal variant，每个成员有独立权重。
+warehouse 的 `datasets`、`negative_datasets`、`hard_datasets`、`gold_datasets` 与 `evaluation.val/test` 均支持多个成员 ID；每个 dataset 类成员可独立选择 proposal variant，每个成员有独立权重。`selections` 只保留历史发布资产兼容读取。
 
 2026-08-10 完成最新版 HLMF/HLML 接口复核：真实 `FullEnhanceVal0808/eos_1.0-gate_r2` 共 1,989 条 Val 记录，包含 RTMPose、人工修正、双头 HCF teacher ID；真实 `0809-soar-enhance` 共 281 条 published negative。两者均完成图片解码和 canonical 严格校验，错误为 0；18 条警告均为 HLMF 契约允许的截断 ROI 边界外关键点。合成 selection 还验证了 `source_crop_relpath`/`published_relpath`、源 ROI 删除后独立副本继续可读，以及 MediaPipe TFLite 几何补救字段无损保留。HLMF 54 项、HLML 184 项单元测试全部通过。
 
@@ -34,4 +36,6 @@ warehouse 的 `datasets`、`negative_datasets`、`new_datasets`、`selections` �
 
 2026-08-14，负样本集 `neg-eos_2.0-hcf0813-hp0.5` 已发布：HCF 0.5 预审从 573,786 个输入候选选择 167,760 个供人工复核，最终保留并独立发布 16,910 个真负样本、删除 150,850 个有手或不确定候选。`complex-mid-bright-flat-train-s01-soar` 的 1,136 个候选全部被删除；单来源零保留不会阻止整个数据集发布，最终 manifest 含 91 个非空来源，Registry 状态为 `published`。
 
-同日真实 multitask audit 得到 Train 91,135（positive 74,225、negative 16,910）、Val 6,937、Test 2,342，成员错误为 0。snapshot 的实际采样单元为 `POS_RUNTIME=74,225`、`NEG_LOW_PALM_CANDIDATE=16,855`、`NEG_RUNTIME_CANDIDATE=55`，没有 `POS_LOW_PALM`；multitask profile 因此修正为 90% `POS_RUNTIME` + 10% `NEG_LOW_PALM_CANDIDATE`。RTX 3090 一步 GPU smoke 已从 geometry winner 正确初始化，完成 58 positive + 6 negative 的训练 batch 和 256 条 Val，有限 `val_multitask_score=0.0204787`，checkpoint 与报告链路通过。尚无 published hard-positive selection，multi-finetune 仍需先完成 Train-only mining、人工删除式复核与发布。
+同日真实 multitask audit 得到 Train 91,135（positive 74,225、negative 16,910）、Val 6,937、Test 2,342，成员错误为 0。snapshot 的实际采样单元为 `POS_RUNTIME=74,225`、`NEG_LOW_PALM_CANDIDATE=16,855`、`NEG_RUNTIME_CANDIDATE=55`，没有 `POS_LOW_PALM`；multitask profile 因此修正为 90% `POS_RUNTIME` + 10% `NEG_LOW_PALM_CANDIDATE`。RTX 3090 一步 GPU smoke 已从 geometry winner 正确初始化，完成 58 positive + 6 negative 的训练 batch 和 256 条 Val，有限 `val_multitask_score=0.0204787`，checkpoint 与报告链路通过。
+
+正式 multitask 已完成 27 epoch，winner 为第 14 epoch，`val_multitask_score=0.0241015`。与 geometry winner 在同一 6,937 条固定 ROI Val 上相比：handedness accuracy 从 42.12% 提升到 91.76%；landmark mean pixel error 从 8.839 px 退化到 9.532 px，PCK@0.05/0.10/0.15 从 0.6301/0.8697/0.9408 降到 0.5874/0.8494/0.9313；collapse 均为 0。两阶段在固定 Val 的 30 条 negative 上都得到 TN=0；对已发布 16,910 条真负样本的只读重放中，multitask `P(has_hand)` 中位数约 0.993，阈值 0.1–0.9 均未判出 negative。当前模型因此显著改善 handedness，但 presence 负样本学习未生效且 landmark 略退化；本轮不擅自重训，困难挖掘会同时纳入 landmark、presence 和 handedness 信号。尚无新合同下的 published hard dataset，multi-finetune 需先完成至少一轮 mining + CVAT 精修 + 发布。

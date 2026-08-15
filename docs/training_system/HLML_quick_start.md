@@ -33,7 +33,7 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：一个或多个 HLMF 已发布的 dataset、negative dataset、selection ID。操作：在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant、可选 `capture_source_ids` 白名单和 `weight`。没有白名单时，同一 manifest 中没有发布所选 variant 的历史 source 会被跳过；有白名单时，每个 source 必须存在、属于目标 split 并发布所选 variant。near/mid/far 能力由 HLMF 在发布前限制。当前 Iris-1.1 已冻结三个 HCF0813 Train dataset、五条 Eos-2.0 Val source 与两条 Eos-2.0 Test source；Eos-1.0 只可单独做 legacy/stress 回放。输出：只确定成员关系；negative/selection 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
+输入：一个或多个 HLMF 已发布的 Pretrain/Eval dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset。操作：在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant、可选 `capture_source_ids` 白名单和 `weight`。没有白名单时，同一 manifest 中没有发布所选 variant 的历史 source 会被跳过；有白名单时，每个 source 必须存在、属于目标 split 并发布所选 variant。near/mid/far 能力由 HLMF 在发布前限制。当前 Iris-1.1 已冻结三个 HCF0813 Train dataset、五条 Eos-2.0 Val source 与两条 Eos-2.0 Test source；Eos-1.0 只可单独做 legacy/stress 回放。输出：只确定成员关系；negative/hard 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
 
 ## 2. 配置解析（Config Check）
 
@@ -81,17 +81,18 @@ Export 同时生成 ONNX/A1 报告和配套 conversion `datasets.zip`。
 
 ## 5. Train-only 困难来源挖掘
 
-输入：multitask Train snapshot 和 multitask winner。输出：`mining/<snapshot_id>/source_ranking.json`、`student_predictions.jsonl` 和交给 HLMF 的 `hlmf_review_request.jsonl`。命令拒绝 Val/Test。
+输入：multitask Train snapshot 和 multitask winner。处理：关键点误差排序占 80%，presence 与 handedness 误差各占 10%；unknown handedness 只跳过 handedness 分量；同一 snapshot 的 ledger 自动排除前轮已筛 ROI。输出：`mining/<snapshot_id>/selection_ledger.json` 与 `rounds/<round_id>/` 下的 ranking、prediction 和 HLMF request。命令拒绝 Val/Test。
 
 ```bash
-make mine-hard
+make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
+# 后续轮可改为 r02/1500；同一 snapshot 内不会重复。
 ```
 
-在 HLMF 完成 `hard-review` / `hard-publish` 后，把发布的 `selection_id` 写回 `configs/datasets.yaml`；HLML 会核对 `source_crop_relpath`，并读取独立的 `published_relpath` 图片。
+在 HLMF 完成 `hard-review`、CVAT 1.1 精修、`hard-import` / `hard-publish` 后，把通用 `hard_dataset_id` 写回 `hard_datasets`；HLML 会核对 `source_crop_relpath`，并读取独立的 `published_relpath` 图片。发布 ID 不得包含训练 snapshot/run/round 身份。
 
 ## 6. Multi-finetune 阶段
 
-输入：multitask winner、带独立 published 图片的困难 selection、可选新录制 Train 数据、真负样本和 mandatory pretrain replay。默认 hard/new 55%、replay 45%，replay 不可为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
+输入：multitask winner、带独立 published 图片的 CVAT-reviewed hard dataset、可选新录制并按 Eval 链路人工复核的 recorded Gold positive/negative、真负样本和 mandatory pretrain replay。Recorded Gold 位于 `GoldSource/ReviewedDatasets`，不能复用既有 PretrainSource/EValSource。默认 hard/gold 55%、replay 45%，replay 不可为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
 
 ```bash
 make multi-finetune

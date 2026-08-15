@@ -53,7 +53,8 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertEqual(0.55, stage["hard_fraction"])
         self.assertEqual(0.45, stage["replay_fraction"])
         self.assertGreater(stage["replay_fraction"], 0.0)
-        self.assertIn("selection_id", stage["selections"][0])
+        self.assertIn("hard_dataset_id", stage["hard_datasets"][0])
+        self.assertEqual([], stage["gold_datasets"])
         self.assertIn("negative_dataset_id", config["stages"]["multitask"]["negative_datasets"][0])
 
     def test_dataset_config_freezes_iris_1_1_membership_and_variants(self) -> None:

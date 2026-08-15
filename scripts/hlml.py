@@ -58,6 +58,8 @@ def _parser() -> argparse.ArgumentParser:
     mine.add_argument("--checkpoint", help="Multitask checkpoint when predictions are not provided")
     mine.add_argument("--output-dir")
     mine.add_argument("--batch-size", type=int, default=64)
+    mine.add_argument("--round-id", required=True)
+    mine.add_argument("--max-rois", type=int, required=True)
 
     sub.add_parser("eval-val", help="Evaluate the configured model on fixed reviewed Val ROIs")
     freeze = sub.add_parser("freeze-winner", help="Freeze the single Val-selected winner")
@@ -144,6 +146,9 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         return mine_hard_sources(
             paths["train"],
             output,
+            snapshot_id=args.snapshot_id,
+            round_id=args.round_id,
+            max_rois=args.max_rois,
             predictions_path=Path(args.predictions) if args.predictions else None,
             predictor=predictor,
             batch_size=args.batch_size,

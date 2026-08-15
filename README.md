@@ -8,9 +8,9 @@ HLML 是 Hand Landmarker v2 的训练、固定 ROI 评估和 ONNX/A1 导出系�
 
 ## 边界
 
-- 训练成员由 dataset、negative dataset 和 selection ID 控制，不手工拼 JSONL、不复制 ROI。
-- geometry 只用可靠 positive；multitask 加入审核发布的真负样本；multi-finetune 混合困难 positive 与强制 pretrain replay。
-- 困难样本挖掘只读取 Train。
+- 训练成员由 dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset ID 控制，不手工拼 JSONL、不复制 ROI。
+- geometry 只用可靠 positive；multitask 加入审核发布的真负样本；multi-finetune 混合困难/Gold positive-negative 与强制 pretrain replay。
+- 困难样本挖掘只读取 Train，并按 snapshot ledger 保证多轮不重复。
 - Val/Test 只读取 HLMF 已生成并经 CVAT 复核的固定 Hand ROI，不运行 Palm Detector，也不从原图重建 ROI。
 - 当前不报告 Palm 漏检、部分双手召回率或原图级联性能。
 
@@ -33,7 +33,7 @@ make config-check
 make data-audit HLML_STAGE=geometry
 make geometry
 make multitask
-make mine-hard
+make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
 make multi-finetune
 make val HLML_STAGE=multi_finetune
 make freeze-winner HLML_STAGE=multi_finetune

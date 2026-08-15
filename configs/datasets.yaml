@@ -43,10 +43,10 @@ stages:
       - dataset_id: FullEnhance0810
         proposal_variant: eos_2.0-rtmpose-hcf0813-gate
         weight: 1.0
-    # Optional newly recorded Train datasets join the hard/new 55% side.
-    new_datasets: []
-    selections:
-      - selection_id: "${HLML_SELECTION_ID:-replace-me-selection}"
+    # Optional newly recorded, CVAT-reviewed positive+negative Gold datasets.
+    gold_datasets: []
+    hard_datasets:
+      - hard_dataset_id: "${HLML_HARD_DATASET_ID:-replace-me-hard-dataset}"
         weight: 1.0
     negative_datasets:
       - negative_dataset_id: "${HLML_NEGATIVE_DATASET_ID:-neg-eos_2.0-hcf0813-hp0.5}"

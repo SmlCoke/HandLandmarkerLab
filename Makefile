@@ -34,8 +34,8 @@ help:
 	@echo   make data-audit HLML_STAGE=geometry^|multitask^|multi_finetune
 	@echo   make geometry              Audit and train positive-only geometry
 	@echo   make multitask             Audit and train from geometry plus published true negatives
-	@echo   make mine-hard             Rank Train capture sources and emit an HLMF review request
-	@echo   make multi-finetune        Train hard positives plus mandatory pretrain replay
+	@echo   make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
+	@echo   make multi-finetune        Train CVAT-reviewed hard/Gold data plus mandatory pretrain replay
 	@echo   make val                   Evaluate fixed reviewed Val Hand ROIs only
 	@echo   make freeze-winner         Freeze the only Val-selected winner descriptor
 	@echo   make locked-test           Evaluate that winner once on fixed reviewed Test ROIs

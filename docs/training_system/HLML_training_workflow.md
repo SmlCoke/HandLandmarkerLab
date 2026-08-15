@@ -22,7 +22,7 @@ make environment-check
 
 ## 1. 系统边界与工作目录
 
-HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 使用来源 ROI；GoldSource 负样本和 Selections 困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
+HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 与新录制的 `GoldSource/ReviewedDatasets` 使用各自来源 ROI；GoldSource 负样本和困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
 
 HLMF 内部的 Palm/HCF 版本不属于这条训练数据边界。当前 HLMF 默认 EOS 2.0（Palm 输入 `[1,1,224,384]`，矩形特征层与 Anchor）和 HCF `handedness-handpresence-0813`，但发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 EOS 原始输入、Anchor 张量或连接长度门控阈值；只有独立的 `make infer` 需要实现同一套 EOS 2.0 前处理与解码。EOS 2.0 的 near/mid 能力边界由 HLMF 在标注和发布前执行，HLML 不重复实现距离门控。
 
@@ -42,7 +42,9 @@ HAND_DATASET_ROOT/
   PretrainSource/<dataset_id>/dataset_manifest.json
   EValSource/<dataset_id>/dataset_manifest.json
   GoldSource/NegativeSamples/<negative_dataset_id>/published/{manifest.json,negative_labels.jsonl,images/}
-  Selections/<selection_id>/published/{manifest.json,selection.jsonl,images/}
+  GoldSource/HardSamples/<hard_dataset_id>/published/{manifest.json,hard_labels.jsonl,images/}
+  GoldSource/ReviewedDatasets/<dataset_id>/dataset_manifest.json
+  Selections/<selection_id>/published/{manifest.json,selection.jsonl,images/}  # legacy 已发布只读
   Registry/registry.sqlite3
 ```
 
@@ -63,16 +65,16 @@ HAND_TRAIN_ROOT/
 
 阶段名：Dataset Selection。
 
-操作：编辑 `configs/datasets.yaml`，只填写 HLMF 已发布的 `dataset_id`、`negative_dataset_id`、`selection_id`、`proposal_variant`、可选的 `capture_source_ids` 白名单和权重。不要手工拼接 JSONL，也不要把 ROI 复制到 `HAND_TRAIN_ROOT`。
+操作：编辑 `configs/datasets.yaml`，只填写 HLMF 已发布的 `dataset_id`、`negative_dataset_id`、`hard_dataset_id`、`proposal_variant`、可选的 `capture_source_ids` 白名单和权重。不要手工拼接 JSONL，也不要把 ROI 复制到 `HAND_TRAIN_ROOT`。
 
-`datasets`、`negative_datasets`、`new_datasets`、`selections` 和 `evaluation.val/test` 都是成员列表，可各自配置一个或多个已发布 ID；每个 dataset 类成员独立填写 variant 和 `weight`。省略 `capture_source_ids` 时消费该 split 中所有已发布所选 variant 的 source；提供非空白名单时，每个 ID 必须存在于 dataset manifest、属于目标 split 并发布所选 variant，否则审计失败。该白名单用于冻结正式 Val/Test，也可用于确有需要的 Train 子集。
+`datasets`、`negative_datasets`、`hard_datasets`、`gold_datasets` 和 `evaluation.val/test` 都是成员列表，可各自配置一个或多个已发布 ID；每个 dataset 类成员独立填写 variant 和 `weight`。省略 `capture_source_ids` 时消费该 split 中所有已发布所选 variant 的 source；提供非空白名单时，每个 ID 必须存在于 dataset manifest、属于目标 split 并发布所选 variant，否则审计失败。该白名单用于冻结正式 Val/Test，也可用于确有需要的 Train 子集。`selections` 仅保留对历史已发布资产的兼容读取，不用于新困难复核。
 
 输入位置与选择键：
 
 - `stages.*.datasets` → `PretrainSource/<dataset_id>/dataset_manifest.json`。
 - `stages.multitask.negative_datasets` → `GoldSource/NegativeSamples/<id>/published/manifest.json`；训练图片取每行 `published_relpath`。
-- `stages.multi_finetune.selections` → `Selections/<id>/published/manifest.json`；用 `source_crop_relpath` 核对 registry，用 `published_relpath` 读取独立发布副本。
-- `stages.multi_finetune.new_datasets` → 新录制的 Train dataset manifest。
+- `stages.multi_finetune.hard_datasets` → `GoldSource/HardSamples/<id>/published/manifest.json`；用 `source_crop_relpath` 核对 registry，用 `published_relpath` 读取 CVAT 精修后的独立发布副本。
+- `stages.multi_finetune.gold_datasets` → `GoldSource/ReviewedDatasets/<dataset_id>/dataset_manifest.json`；只能是新录制、按 Eval 同款自动标注 + CVAT 人工复核后发布的 train Gold，允许 positive 与 negative。
 - `evaluation.val/test` → `EValSource/<dataset_id>/dataset_manifest.json` 中相应 split。
 
 当前 Iris-1.1 geometry 成员示例（正式配置已写入 `configs/datasets.yaml`）：
@@ -245,32 +247,35 @@ Val/infer 分别输出 `eval/multitask/val/` 与 `inference/<experiment>/multita
 
 阶段名：Hard Source Mining。
 
-默认使用 multitask winner 推理：
+每轮必须给出独立 `round_id` 和最大 ROI 数量；例如第一轮 1000：
 
 ```bash
-make mine-hard
+make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
 ```
 
 显式 checkpoint 或已有 student prediction 也可以通过 Make 透传：
 
 ```bash
-make mine-hard MINING_ARGS='--checkpoint /abs/path/best.weights.h5 --batch-size 64'
-make mine-hard MINING_ARGS='--predictions /abs/path/student_predictions.jsonl'
+make mine-hard MINING_ARGS='--round-id r02 --max-rois 1500 --checkpoint /abs/path/best.weights.h5 --batch-size 64'
+make mine-hard MINING_ARGS='--round-id r02 --max-rois 1500 --predictions /abs/path/student_predictions.jsonl'
 ```
 
-输入：`snapshots/<snapshot_id>/multitask/train.jsonl`、MediaPipe 标签，以及 multitask checkpoint 或预计算 student prediction。
+输入：`snapshots/<snapshot_id>/multitask/train.jsonl`、HLMF 当前发布的教师标签（通常来自 RTMPose/HCF/TFLite rescue 链路），以及 multitask checkpoint 或预计算 student prediction。
 
-处理：只读取 Train 固定 ROI，对比 student 与 MediaPipe label，按 `capture_source_id` 聚合样本数、mean/median/P90 像素误差、PCK、collapse、距离、亮度和姿态跨度，并生成供 HLMF 删除式复核的 ROI 请求。代码会硬拒绝 Val/Test；Test 结果也不能反向进入采样权重、训练配置、checkpoint 或阈值选择。
+处理：只读取 Train positive 固定 ROI。每行困难度由关键点误差排序 80%、presence 误差 10%、handedness 误差 10% 组成；错误分类和低置信 head 因此可进入候选，但关键点仍是主信号。若人工真值中的 handedness 为 `unknown`，该 ROI 仍参与关键点与 presence 排序，只把 handedness 分量记为 0，并从 handedness 错误率分母排除。报告按 `capture_source_id` 聚合像素误差、PCK、collapse、presence/handedness 错误率、距离、亮度和姿态跨度。请求按综合困难度排序并截断到 `max_rois`。代码会硬拒绝 Val/Test；Test 结果也不能反向进入采样权重、训练配置、checkpoint 或阈值选择。
+
+同一个 `snapshot_id` 代表一次完整的 geometry + multitask + multi-finetune 数据流程。`mining/<snapshot_id>/selection_ledger.json` 记录各轮已经筛选的 ROI；后续轮自动排除这些 ID，只要求在该 snapshot 内不重复，不扫描整个 DatesetFab 或所有历史困难集。`round_id` 只能使用一次。
 
 输出默认不可覆盖：
 
 ```text
-HAND_TRAIN_ROOT/mining/<snapshot_id>/student_predictions.jsonl
-HAND_TRAIN_ROOT/mining/<snapshot_id>/source_ranking.json
-HAND_TRAIN_ROOT/mining/<snapshot_id>/hlmf_review_request.jsonl
+HAND_TRAIN_ROOT/mining/<snapshot_id>/selection_ledger.json
+HAND_TRAIN_ROOT/mining/<snapshot_id>/rounds/<round_id>/student_predictions.jsonl
+HAND_TRAIN_ROOT/mining/<snapshot_id>/rounds/<round_id>/source_ranking.json
+HAND_TRAIN_ROOT/mining/<snapshot_id>/rounds/<round_id>/hlmf_review_request.jsonl
 ```
 
-把 `hlmf_review_request.jsonl` 交给 HLMF 执行 `hard-review` / `hard-publish`。HLMF 发布后，将新的 `selection_id` 写回 `configs/datasets.yaml` 的 `stages.multi_finetune.selections`。
+把当轮 `hlmf_review_request.jsonl` 交给 HLMF 执行 `hard-review`，上传 ROI 与 CVAT 1.1 草标并精修，随后执行 `hard-import` / `hard-publish`。HLMF 的 `hard_dataset_id` 必须是通用数据身份，不得含 snapshot/run/round 语义。发布后，将一个或多个 ID 写回 `stages.multi_finetune.hard_datasets`。
 
 ## 8. 阶段六：Multi-finetune 训练
 
@@ -285,12 +290,12 @@ make multi-finetune
 输入：
 
 - multitask winner：`runs/<experiment_id>/multitask/checkpoints/best.weights.h5`。
-- `selections` 中经 HLMF 删除明显教师错误后发布的困难 positive。
-- 可选 `new_datasets` 新录制 Train positive。
+- `hard_datasets` 中经 HLMF CVAT 1.1 精修后发布的困难 positive/negative。
+- 可选 `gold_datasets`：新录制、自动标注并经人工 CVAT 复核的通用 Gold positive/negative；不能从既有 PretrainSource/EValSource 冒充。
 - `negative_datasets` 中的已发布真负样本。
 - `datasets` 中的 mandatory pretrain replay pool。
 
-处理：困难 selection、新录制数据和真负样本组成 hard/new 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。默认 hard/new 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 dataset/selection/negative dataset 的 `weight` 继续参与侧内采样。
+处理：困难数据集、人工复核 Gold 和真负样本组成 hard/gold 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。默认 hard/gold 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 hard/gold/negative dataset 的 `weight` 继续参与侧内采样。
 
 输出：
 
@@ -471,14 +476,15 @@ make acceptance-smoke
 
 ## 15. `configs/datasets.yaml` 参数说明
 
-- 成员列表：`stages.*.datasets`、`negative_datasets`、`new_datasets`、`selections`、`evaluation.val/test` 均支持多个条目；构建 snapshot 时合并所有成员，并保留每个成员的 ID、variant 和权重。重复 ROI、跨 split 或同一 capture source 混用多个 variant 仍会失败。
+- 成员列表：`stages.*.datasets`、`negative_datasets`、`hard_datasets`、`gold_datasets`、`evaluation.val/test` 均支持多个条目；构建 snapshot 时合并所有成员，并保留每个成员的 ID、variant 和权重。重复 ROI、跨 split 或同一 capture source 混用多个 variant 仍会失败。
 - `dataset_id`：HLMF 发布的数据集逻辑 ID，不是目录绝对路径。
 - `proposal_variant`：选择 dataset 中已发布的哪一版 Palm/ROI 结果。每个列表成员独立选择，因此同一 dataset 可用多个成员在不同 source 上消费不同 variant。HLMF 允许一个 variant 只发布到 dataset 的部分 source；没有 source 白名单时 HLML 会跳过未发布该 variant 的 source，但目标 split 若一个匹配 source 都没有则失败。
 - `capture_source_ids`：dataset 类成员的可选非空、无重复 source ID 白名单。提供后不再宽泛消费该 variant 的其他 source；每个 ID 都必须存在于 manifest、匹配当前 Train/Val/Test split 且发布该成员的 `proposal_variant`。
 - `weight`：正数，写入该来源记录的 `sampling_weight`。它控制相对抽样权重，不复制样本。
 - `negative_dataset_id`：只能引用 HLMF `GoldSource/NegativeSamples/<id>/published/`；HLML 读取其独立 `published_relpath` 图片副本。
-- `selection_id`：只能引用 HLMF `Selections/<id>/published/` 的困难样本集合；来源身份由 `source_crop_relpath` 与 registry 核对，实际输入为独立 `published_relpath` 图片。
-- `new_datasets`：multi-finetune 可选新录制 Train positive，格式与 `datasets` 相同。
+- `hard_dataset_id`：引用 HLMF `GoldSource/HardSamples/<id>/published/` 的 CVAT 精修困难集；来源身份由 `source_crop_relpath` 与 registry 核对，实际输入为独立 `published_relpath` 图片，允许 positive/negative。
+- `gold_datasets`：multi-finetune 可选 `GoldSource/ReviewedDatasets` 中新录制且人工复核的 train Gold，格式与 `datasets` 相同，允许 positive/negative。
+- `selections`：只为既有 `Selections/<id>/published/` 保留兼容读取，不是新流程配置项。
 - `hard_fraction/replay_fraction`：默认 `0.55/0.45`，必须均大于 0 且总和为 1。
 - `evaluation.val/test`：只选择 EValSource 中已复核 fixed ROI；两者按 manifest 的 split 字段过滤。
 - `policies.performer_cross_split`：默认 `warn`，需要严格人员隔离可设为 `fail`。

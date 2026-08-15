@@ -11,7 +11,7 @@ from unittest import mock
 
 import numpy as np
 
-from hand_landmarker.hard_mining import aggregate_sources
+from hand_landmarker.hard_mining import aggregate_sources, mine_hard_sources
 from hand_landmarker.evaluation import evaluate_hand_rois
 from hand_landmarker.io_utils import read_jsonl, write_image, write_json, write_jsonl
 from hand_landmarker.release import freeze_winner, locked_test_config
@@ -47,6 +47,7 @@ class SyntheticWarehouse:
                 CREATE TABLE negative_datasets(negative_dataset_id TEXT PRIMARY KEY,status TEXT);
                 CREATE TABLE published_negatives(roi_id TEXT PRIMARY KEY,negative_dataset_id TEXT,published_relpath TEXT);
                 CREATE TABLE selections(selection_id TEXT PRIMARY KEY,status TEXT);
+                CREATE TABLE hard_datasets(hard_dataset_id TEXT PRIMARY KEY,status TEXT);
                 """
             )
             db.commit()
@@ -66,6 +67,8 @@ class SyntheticWarehouse:
         )
         self._publish_negative()
         self._publish_selection()
+        self._publish_hard()
+        self._publish_gold()
 
     def _source_row(
         self,
@@ -116,14 +119,21 @@ class SyntheticWarehouse:
         return row
 
     def _publish_dataset(self, scope, dataset_id, sources, proposal_variant=None):
-        bucket = "PretrainSource" if scope == "pretrain" else "EValSource"
+        bucket = {
+            "pretrain": "PretrainSource",
+            "eval": "EValSource",
+            "gold": "GoldSource/ReviewedDatasets",
+        }[scope]
         root = self.root / bucket / dataset_id
         proposal_variant = proposal_variant or self.variant
         descriptors = []
         for capture, rows in sources:
-            labels = root / capture / "05_labels" / proposal_variant / (
-                "hand_training_labels.jsonl" if scope == "pretrain" else "hand_evaluation_labels.jsonl"
-            )
+            labels_name = {
+                "pretrain": "hand_training_labels.jsonl",
+                "eval": "hand_evaluation_labels.jsonl",
+                "gold": "hand_gold_labels.jsonl",
+            }[scope]
+            labels = root / capture / "05_labels" / proposal_variant / labels_name
             write_jsonl(labels, rows)
             descriptors.append(
                 {
@@ -220,6 +230,53 @@ class SyntheticWarehouse:
         with closing(sqlite3.connect(str(self.registry))) as db:
             db.execute("INSERT INTO selections VALUES('hard-set','published')")
             db.commit()
+
+    def _publish_hard(self):
+        root = self.root / "GoldSource" / "HardSamples" / "hard-gold-set" / "published"
+        row = dict(self.train_rows[1])
+        row["hard_dataset_id"] = "hard-gold-set"
+        row["human_reviewed"] = True
+        row["source_crop_relpath"] = row["crop_relpath"]
+        row["published_relpath"] = (
+            "GoldSource/HardSamples/hard-gold-set/published/images/"
+            f"{self.train_capture}/train-roi-2.png"
+        )
+        write_image(
+            self.root / row["published_relpath"], np.full((256, 256), 90, dtype=np.uint8)
+        )
+        write_jsonl(root / "hard_labels.jsonl", [row])
+        write_json(
+            root / "manifest.json",
+            {
+                "schema_version": "hlmf_dataset_v1",
+                "hard_dataset_id": "hard-gold-set",
+                "records": 1,
+                "labels": "hard_labels.jsonl",
+                "review_contract": "cvat_xml_1.1_precise_hand_roi_review",
+                "image_policy": "copied_review_and_published_images",
+            },
+        )
+        with closing(sqlite3.connect(str(self.registry))) as db:
+            db.execute("INSERT INTO hard_datasets VALUES('hard-gold-set','published')")
+            db.commit()
+
+    def _publish_gold(self):
+        capture = "room-near-daylight-normal-train-s02-dave"
+        parent = "GoldSource/ReviewedDatasets/gold-set"
+        positive = self._source_row(
+            "gold-roi-pos", "gold-raw-pos", capture, parent, 160, dataset_id="gold-set"
+        )
+        negative = self._source_row(
+            "gold-roi-neg", "gold-raw-neg", capture, parent, 20, dataset_id="gold-set"
+        )
+        negative.update(
+            {
+                "hand_presence": {"present": False},
+                "handedness": {"label": "unknown", "score": None},
+                "landmarks_crop_norm": [],
+            }
+        )
+        self._publish_dataset("gold", "gold-set", [(capture, [positive, negative])])
 
     def config(self):
         dataset = {"dataset_id": "train-set", "proposal_variant": self.variant, "weight": 1.0}
@@ -331,6 +388,115 @@ class WarehouseV4Tests(unittest.TestCase):
             second = next(row for row in rows if row["dataset_id"] == "train-set-2")
             self.assertEqual("palm-v2", second["proposal_variant"])
             self.assertEqual(3.0, second["sampling_weight"])
+
+    def test_multi_finetune_reads_cvat_hard_and_reviewed_gold_positive_negative(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            warehouse = SyntheticWarehouse(root / "dataset")
+            config = warehouse.config()
+            stage = config["stages"]["multi_finetune"]
+            stage.pop("selections")
+            stage["hard_datasets"] = [
+                {"hard_dataset_id": "hard-gold-set", "weight": 1.0}
+            ]
+            stage["gold_datasets"] = [
+                {
+                    "dataset_id": "gold-set",
+                    "proposal_variant": warehouse.variant,
+                    "weight": 1.0,
+                }
+            ]
+            report = build_snapshot(
+                config, warehouse.root, root / "train", "gold-flow", "multi_finetune"
+            )
+            self.assertEqual(1, report["mix"]["hard_dataset"])
+            self.assertEqual(2, report["mix"]["reviewed_gold"])
+            rows = read_jsonl(
+                root / "train" / "snapshots" / "gold-flow" / "multi_finetune" / "train.jsonl"
+            )
+            gold_rows = [row for row in rows if row.get("dataset_id") == "gold-set"]
+            self.assertEqual(2, len(gold_rows))
+            self.assertEqual(
+                {"POS_RUNTIME", "NEG_RUNTIME_CANDIDATE"},
+                {row["sample_type"] for row in gold_rows},
+            )
+
+    def test_mining_rounds_limit_and_dedupe_within_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            labels = []
+            predictions = []
+            for index, offset in enumerate((0.01, 0.03, 0.06), start=1):
+                image = root / f"roi-{index}.png"
+                write_image(image, np.full((256, 256), 40 * index, dtype=np.uint8))
+                labels.append(
+                    {
+                        "roi_id": f"roi-{index}",
+                        "capture_source_id": "room-near-daylight-normal-train-s01-alice",
+                        "split": "train",
+                        "crop_path": str(image),
+                        "warehouse_crop_relpath": f"PretrainSource/demo/roi-{index}.png",
+                        "hand_presence": {"present": True},
+                        "handedness": {"label": "Left", "score": 0.9},
+                        "landmarks_crop_norm": _points(),
+                    }
+                )
+                predictions.append(
+                    {
+                        "roi_id": f"roi-{index}",
+                        "student_landmarks_crop_norm": _points(offset),
+                        "student_hand_flag": 0.9,
+                        "student_handedness": 0.1,
+                    }
+                )
+            labels_path = root / "train.jsonl"
+            predictions_path = root / "predictions.jsonl"
+            write_jsonl(predictions_path, predictions)
+            labels.append(
+                {
+                    "roi_id": "negative-roi",
+                    "capture_source_id": "room-near-daylight-normal-train-s01-alice",
+                    "split": "train",
+                    "hand_presence": {"present": False},
+                    "handedness": {"label": "unknown", "score": None},
+                }
+            )
+            write_jsonl(labels_path, labels)
+            mining_root = root / "mining" / "snapshot-a"
+            first = mine_hard_sources(
+                labels_path,
+                mining_root,
+                snapshot_id="snapshot-a",
+                round_id="round-1",
+                max_rois=1,
+                predictions_path=predictions_path,
+            )
+            second = mine_hard_sources(
+                labels_path,
+                mining_root,
+                snapshot_id="snapshot-a",
+                round_id="round-2",
+                max_rois=2,
+                predictions_path=predictions_path,
+            )
+            self.assertEqual(1, first["selected_count"])
+            self.assertEqual(2, second["selected_count"])
+            self.assertEqual(3, first["positive_candidate_count"])
+            first_ids = {
+                row["roi_id"]
+                for row in read_jsonl(
+                    mining_root / "rounds" / "round-1" / "hlmf_review_request.jsonl"
+                )
+            }
+            second_ids = {
+                row["roi_id"]
+                for row in read_jsonl(
+                    mining_root / "rounds" / "round-2" / "hlmf_review_request.jsonl"
+                )
+            }
+            self.assertFalse(first_ids & second_ids)
+            ledger = json.loads((mining_root / "selection_ledger.json").read_text())
+            self.assertEqual(3, len(ledger["selected_roi_ids"]))
 
     def test_partial_variant_skips_unpublished_sources_but_requires_split_rows(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -612,14 +778,43 @@ class WarehouseV4Tests(unittest.TestCase):
                 "roi_id": label["roi_id"],
                 "student_landmarks_crop_norm": _points(0.02),
                 "student_hand_flag": 0.9,
+                "student_handedness": 0.1,
             }
             reports, request = aggregate_sources([label], [prediction])
             self.assertEqual(1, reports[0]["sample_count"])
             self.assertIn("p90_error_px", reports[0])
             self.assertEqual(label["crop_relpath"], request[0]["crop_path"])
+            label["handedness"] = {"label": "unknown", "score": None}
+            reports, request = aggregate_sources([label], [prediction])
+            self.assertEqual(0, reports[0]["handedness_eligible_count"])
+            self.assertFalse(request[0]["mining"]["handedness_eligible"])
             label["split"] = "test"
             with self.assertRaisesRegex(ValueError, "never read Val/Test"):
                 aggregate_sources([label], [prediction])
+
+    def test_mining_difficulty_includes_presence_and_handedness_errors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            warehouse = SyntheticWarehouse(Path(temp) / "dataset")
+            labels = []
+            predictions = []
+            for index, row in enumerate(warehouse.train_rows):
+                label = dict(row)
+                label["crop_path"] = str(warehouse.root / label["crop_relpath"])
+                labels.append(label)
+                predictions.append(
+                    {
+                        "roi_id": label["roi_id"],
+                        "student_landmarks_crop_norm": _points(0.02),
+                        "student_hand_flag": 0.95 if index == 0 else 0.05,
+                        "student_handedness": 0.05 if index == 0 else 0.95,
+                    }
+                )
+            _, request = aggregate_sources(labels, predictions)
+            self.assertEqual(labels[1]["roi_id"], request[0]["roi_id"])
+            hard = request[0]["mining"]
+            self.assertTrue(hard["presence_incorrect"])
+            self.assertTrue(hard["handedness_incorrect"])
+            self.assertGreater(hard["difficulty_score"], request[1]["mining"]["difficulty_score"])
 
     def test_winner_and_locked_test_are_immutable(self):
         with tempfile.TemporaryDirectory() as temp:

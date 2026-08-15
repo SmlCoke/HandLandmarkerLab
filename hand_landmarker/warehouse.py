@@ -204,7 +204,13 @@ class WarehouseReader:
         weight: float = 1.0,
         capture_source_ids: Sequence[str] | None = None,
     ) -> List[Dict[str, Any]]:
-        bucket = "PretrainSource" if scope == "pretrain" else "EValSource"
+        if scope not in {"pretrain", "eval", "gold"}:
+            raise WarehouseContractError("source scope must be pretrain, eval or gold")
+        bucket = {
+            "pretrain": "PretrainSource",
+            "eval": "EValSource",
+            "gold": "GoldSource/ReviewedDatasets",
+        }[scope]
         manifest_path = self.root / bucket / dataset_id / "dataset_manifest.json"
         manifest = _read_json(manifest_path)
         if str(manifest.get("schema_version")) != HLMF_SCHEMA:
@@ -396,6 +402,66 @@ class WarehouseReader:
                 )
             self._check_registry_roi(row)
             row["selection_id"] = selection_id
+            row["dataset_weight"] = float(weight)
+            row["crop_relpath"] = published_relative
+            row["crop_path"] = published_relative
+            row["_absolute_crop_path"] = str(self._check_image(published_relative))
+        return rows
+
+    def hard_rows(self, hard_dataset_id: str, weight: float = 1.0) -> List[Dict[str, Any]]:
+        root = (
+            self.root
+            / "GoldSource"
+            / "HardSamples"
+            / hard_dataset_id
+            / "published"
+        )
+        manifest = _read_json(root / "manifest.json")
+        if str(manifest.get("schema_version")) != HLMF_SCHEMA:
+            raise WarehouseContractError("unsupported HLMF hard dataset manifest schema")
+        if str(manifest.get("hard_dataset_id")) != hard_dataset_id:
+            raise WarehouseContractError("hard dataset manifest identity mismatch")
+        if str(manifest.get("image_policy")) != "copied_review_and_published_images":
+            raise WarehouseContractError(
+                "hard dataset must use independent HLMF published images"
+            )
+        if str(manifest.get("review_contract")) != "cvat_xml_1.1_precise_hand_roi_review":
+            raise WarehouseContractError("hard dataset lacks the required CVAT review contract")
+        rows = _clean_rows(root / str(manifest.get("labels", "hard_labels.jsonl")))
+        if len(rows) != int(manifest.get("records", -1)):
+            raise WarehouseContractError("hard dataset record count mismatch")
+        with self._registry() as db:
+            try:
+                status = db.execute(
+                    "SELECT status FROM hard_datasets WHERE hard_dataset_id=?",
+                    (hard_dataset_id,),
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                raise WarehouseContractError(
+                    "HLMF registry does not support published hard datasets"
+                ) from exc
+        if status is None or status["status"] != "published":
+            raise WarehouseContractError("hard dataset is not published in registry")
+        for row in rows:
+            if str(row.get("split")) != "train":
+                raise WarehouseContractError("hard datasets accept Train ROIs only")
+            source_relative = str(row.get("source_crop_relpath") or "")
+            published_relative = str(row.get("published_relpath") or "")
+            original_relative = str(row.get("crop_relpath") or row.get("crop_path") or "")
+            if not source_relative or not published_relative:
+                raise WarehouseContractError(
+                    "hard dataset row requires source_crop_relpath and published_relpath"
+                )
+            if original_relative != source_relative:
+                raise WarehouseContractError(
+                    "hard dataset source_crop_relpath disagrees with its source ROI path"
+                )
+            if published_relative == source_relative:
+                raise WarehouseContractError(
+                    "hard published image must be independent from its source ROI"
+                )
+            self._check_registry_roi(row)
+            row["hard_dataset_id"] = hard_dataset_id
             row["dataset_weight"] = float(weight)
             row["crop_relpath"] = published_relative
             row["crop_path"] = published_relative
@@ -639,11 +705,11 @@ def _load_stage_rows(
         return rows, {"mix": {"positive": len(base_rows), "negative": len(negatives)}}
     if stage != "multi_finetune":
         raise WarehouseContractError("unsupported stage: {}".format(stage))
-    new_recorded: List[Dict[str, Any]] = []
-    for entry in _dataset_entries(stage_cfg, "new_datasets"):
-        new_recorded.extend(
+    reviewed_gold: List[Dict[str, Any]] = []
+    for entry in _dataset_entries(stage_cfg, "gold_datasets"):
+        reviewed_gold.extend(
             reader.source_rows(
-                "pretrain",
+                "gold",
                 str(entry["dataset_id"]),
                 str(entry["proposal_variant"]),
                 expected_split="train",
@@ -651,16 +717,26 @@ def _load_stage_rows(
                 capture_source_ids=entry.get("capture_source_ids"),
             )
         )
-    if any(not _positive(row) for row in new_recorded):
-        raise WarehouseContractError("multi_finetune new datasets must publish positives only")
-    selections: List[Dict[str, Any]] = []
+    hard_datasets: List[Dict[str, Any]] = []
+    for entry in _selected_ids(stage_cfg, "hard_datasets"):
+        hard_dataset_id = str(entry.get("hard_dataset_id") or "")
+        if not hard_dataset_id:
+            raise WarehouseContractError("hard_datasets entry requires hard_dataset_id")
+        hard_datasets.extend(
+            reader.hard_rows(hard_dataset_id, float(entry["weight"]))
+        )
+    # Existing published Selections remain readable, but all new reviews use
+    # GoldSource/HardSamples and the CVAT contract above.
+    legacy_selections: List[Dict[str, Any]] = []
     for entry in _selected_ids(stage_cfg, "selections"):
         selection_id = str(entry.get("selection_id") or "")
         if not selection_id:
             raise WarehouseContractError("selections entry requires selection_id")
-        selections.extend(reader.selection_rows(selection_id, float(entry["weight"])))
-    if not selections:
-        raise WarehouseContractError("multi_finetune requires a published hard-positive selection")
+        legacy_selections.extend(
+            reader.selection_rows(selection_id, float(entry["weight"]))
+        )
+    if not hard_datasets and not legacy_selections:
+        raise WarehouseContractError("multi_finetune requires a published hard dataset")
     finetune_negatives: List[Dict[str, Any]] = []
     for entry in _selected_ids(stage_cfg, "negative_datasets"):
         negative_id = str(entry.get("negative_dataset_id") or "")
@@ -675,7 +751,7 @@ def _load_stage_rows(
         replay_fraction + hard_fraction, 1.0, abs_tol=1e-9
     ):
         raise WarehouseContractError("multi_finetune hard/replay fractions must be positive and sum to 1")
-    hard_source = selections + new_recorded + finetune_negatives
+    hard_source = hard_datasets + legacy_selections + reviewed_gold + finetune_negatives
     selected_roi_ids = {
         str(row.get("roi_id") or row.get("crop_id")) for row in hard_source
     }
@@ -698,8 +774,9 @@ def _load_stage_rows(
     return hard_rows + replay_rows, {
         "mix": {
             "hard": len(hard_rows),
-            "hard_selection": len(selections),
-            "new_recorded": len(new_recorded),
+            "hard_dataset": len(hard_datasets),
+            "legacy_selection": len(legacy_selections),
+            "reviewed_gold": len(reviewed_gold),
             "true_negative": len(finetune_negatives),
             "replay": len(replay_rows),
             "hard_fraction": hard_fraction,
