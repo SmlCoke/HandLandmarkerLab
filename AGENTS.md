@@ -39,12 +39,12 @@ safely, stop before modifying files and explain the conflict.
 
 ### 3.1 Project purpose
 
-We are developing a real-time sign language recognition system designed for low-compute (0.8 TOPS) edge devices. The system comprises a pipeline of three models connected in series:
-1. Palm Detector: Processes images captured by the camera and outputs palm bounding box coordinates along with the coordinates of two auxiliary points.
-2. Hand Landmarker: Performs inference on the Hand ROI defined by the palm bounding box to obtain the coordinates of 21 skeletal keypoints, as well as confidence scores for hand presence and handedness (left/right).
-3. Gloss Translator: An isolated sign classification model that utilizes the outputs from the Palm Detector and Hand Landmarker; it maintains a temporal window of a specific length, performs temporal modeling, and outputs the isolated sign corresponding to the movements within that timeframe.
+We are developing a real-time sign language recognition system designed for low-compute (0.8 TOPS) edge devices. The system comprises a pipeline of three models operating in series:
+1. Palm Detector: Processes images captured by the camera and outputs palm bounding box coordinates along with the coordinates of two auxiliary points. Model product code: Eos.
+2. Hand Landmarker: Performs inference on the Hand ROI defined by the palm bounding box to determine the coordinates of 21 skeletal keypoints, as well as hand presence and handedness (left/right) confidence scores. Model product code: Iris.
+3. Gloss Translator: An isolated sign classification model that utilizes the outputs from the Palm Detector and Hand Landmarker; it maintains a temporal window of a specific duration and performs temporal modeling to output the sign language gloss corresponding to the action performed during that interval. Model product code: Muse.
 
-This repository contains the training system for the Hand Landmarker model.
+This repository contains the training system for the Hand Landmarker model (Iris).
 
 ### 3.2 Entry-point documents
 

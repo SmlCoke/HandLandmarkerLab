@@ -28,6 +28,7 @@ analysis/
 *.zip
 *.7z
 *.log
+assets/
 
 # temp
 tmp/

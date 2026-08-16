@@ -1,554 +1,373 @@
-# HLML 4.0 训练工作流
-
-## 0. 环境依赖
-
-HLML 4.0 继续使用 Conda 环境 `hand-landmarker-tf29`，其依赖由仓库根目录的 `environment.yml` 和 `requirements.txt` 共同定义。目标服务器环境为 Ubuntu 20.04、Python 3.8、TensorFlow/Keras 2.9.0、CUDA 11.2 和 cuDNN 8；CUDA/cuDNN 使用 AutoDL 系统提供的动态库，不在 Conda 环境中重复安装。训练器默认启用 `tqdm` 的 epoch/batch 进度条，因此更新本仓库后需确保环境已安装 requirements 中固定版本的 `tqdm`。
-
-首次创建环境：
-
-```bash
-cd /path/to/HandLandmarkerLab
-conda env create -f environment.yml
-conda activate hand-landmarker-tf29
-python -m pip check
-make environment-check
-```
 
-输入：仓库根目录的 `environment.yml` 与 `requirements.txt`。
+# 🚀 【集创赛·思特威杯】项目背景与系统架构全景指南 V6
 
-处理：Conda 创建 Python 3.8 环境，随后由 `environment.yml` 中的 pip 条目安装 TensorFlow 2.9、Keras 2.9、ONNX、ONNX Runtime、OpenCV、Pillow 和 YAML 等固定版本依赖。
+> Last Updated: 2026-07-31
 
-输出：名为 `hand-landmarker-tf29` 的 Conda 环境；`pip check` 应无依赖冲突，`make environment-check` 应输出环境、TensorFlow build metadata 和 GPU 可见性检查结果。已经创建该环境时只需执行 `conda activate hand-landmarker-tf29`，不要重复创建。
+## 一、 赛事背景与赛题约束
 
-## 1. 系统边界与工作目录
+*   **赛事名称：** 2026年全国大学生集成电路创新创业大赛（集创赛） - “思特威”企业命题
+*   **赛道方向：** AI 芯片应用开发（端侧AI视觉应用系统）
+*   **选择场景：** 赛题任务二：机器人场景（高动态场景）
+*   **核心评分指标：** 极速的端到端延迟（要求应用处理帧率尽可能贴近传感器原生 90fps）、极端光照鲁棒性（亮光/纯黑）、三类系统异常（摄像头/推理/资源）的检测与恢复能力、0.8 TOPS 极低算力下的工程落地能力。
 
-HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 与新录制的 `GoldSource/ReviewedDatasets` 使用各自来源 ROI；GoldSource 负样本和困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
+## 二、 硬件板卡资源
+### 2.1 图像传感器：思特威 SC132GS
 
-HLMF 内部的 Palm/HCF 版本不属于这条训练数据边界。当前 HLMF 默认 EOS 2.0（Palm 输入 `[1,1,224,384]`，矩形特征层与 Anchor）和 HCF `handedness-handpresence-0813`，但发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 EOS 原始输入、Anchor 张量或连接长度门控阈值；只有独立的 `make infer` 需要实现同一套 EOS 2.0 前处理与解码。EOS 2.0 的 near/mid 能力边界由 HLMF 在标注和发布前执行，HLML 不重复实现距离门控。
+核心特性：Global Shutter（全局快门，极其适合高速运动无拖影）、单通道黑白图像（非RGB彩色）、**对红外光（IR）高度敏感**。
+摄像头和开发板组合可以实现最高1280×720@90fps的采集和输出帧率，摄像头最高支持1080H×1280V@120fps的传输速率；
 
-```bash
-export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
-export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
-export HLML_SNAPSHOT_ID=v4-r1
-export HLML_EXPERIMENT_ID=v4-r1
-export HLML_RELEASE_ID=v4-r1
-cd /path/to/HandLandmarkerLab
-```
+### 2.2 主控开发套件：飞凌微 A1 Vision 开发板
 
-长期输入目录：
+**处理器**：ARM Cortex-A7 CPU + 飞凌微自研 NPU。
+**算力限制**：飞凌自研 NPU，仅有 **0.8 TOPS @ INT8** 的极轻量级算力。
+**ISP算法**：片上搭载了先进的ISP算法，包括高性能暗光降噪和图像增强算法、高分辨率RGB-IR图像处理、多帧HDR合成、双路Sensor输入和图像同步处理。持双路3MP 30fps@HDR和单路3MP 60fps@HDR 支持单路5MP 60fps@RGB-IR 支持单路8MP 30fps@HDR 支持多种色彩滤波阵列(CFA)：RGGB/RGBIR/MONO
+**内存带宽**：DDR3L 16bit 1Gb(Stacked)
+**存储**：256Mb Nor Flash
+**外设接口**：SPI、I2C、UART、GPIO等
+**视频接口**：2 x 4-lane MIPI CSI RX、1 x 4-lane MIPI CSI TX，高达2.5Gbps/lane
 
-```text
-HAND_DATASET_ROOT/
-  PretrainSource/<dataset_id>/dataset_manifest.json
-  EValSource/<dataset_id>/dataset_manifest.json
-  GoldSource/NegativeSamples/<negative_dataset_id>/published/{manifest.json,negative_labels.jsonl,images/}
-  GoldSource/HardSamples/<hard_dataset_id>/published/{manifest.json,hard_labels.jsonl,images/}
-  GoldSource/ReviewedDatasets/<dataset_id>/dataset_manifest.json
-  Selections/<selection_id>/published/{manifest.json,selection.jsonl,images/}  # legacy 已发布只读
-  Registry/registry.sqlite3
-```
+### 2.3 NPU 算子适配性分析
+A1 NPU 支持的 ONNX 算子及其限制如下：
 
-运行产物目录：
+| ONNX算子 | 限制说明 |
+| --- | --- |
+| Conv | Kw,Kh,Sw,Sh,Pw,Ph 均不能超过 16；单个卷积核（Kw × Kh × Cin）不能超过 2048 |
+| AveragePool | 无特殊限制 |
+| GlobalAveragePool | 无特殊限制 |
+| MaxPool | 最大支持 8×8 |
+| BatchNormalization | 无特殊限制 |
+| Add | 无特殊限制 |
+| Mul | 无特殊限制 |
+| Concat | 支持 C通道拼接 |
+| Split | 支持 C通道拆分 |
+| Relu | 无特殊限制 |
+| LeakyRelu | 历史白名单曾声明仅支持 alpha = 0.1 或 0.01；当前官方转换工具链实测已不接受，本项目m目前禁用 |
+| Transpose | 支持4维tensor维度重排， perm = [0,2,3,1] |
+| resize	  | 支持nearest |
+| convtranspose2d	| 无特殊限制 |
+| Upsample	| 无特殊限制 |
+| Reshape    | 无特殊限制 |
+   
+缩写说明：K=卷积核(Kernel)、S=步长(Stride)、P=补边(Pad)、C=通道(Channel)、w/h=宽/高(Width/Height)
 
-```text
-HAND_TRAIN_ROOT/
-  snapshots/<snapshot_id>/<stage>/
-  runs/<experiment_id>/<stage>/
-  mining/<snapshot_id>/
-  releases/<release_id>/
-  inference/<experiment_id>/<stage>/
-```
+A1 NPU 不支持或者效率极低的，但是很常见/使用频率高的算子有：Sub, Div, Transpose, Softmax，这些算子如需使用，只能在 ARM CPU 上实现。
 
-评估严格限制在 HLMF 已生成并经 CVAT 复核的固定 Hand ROI：Val/Test 不运行 Palm Detector、不从原图重建 ROI、不统计 Palm 漏检，也不报告原图级联准确率。`make infer` 是独立的文件夹级联推理工具，不属于 Val/Test 协议。
+### 2.4 图像调试软件
 
-## 2. 阶段零：通过 ID 选择数据
+思特威官方提供图像调试软件 Aurora，将 A1 开发板通过 USB-Type C 连线连接笔记本电脑后，可以在 Aurora 上实时查看摄像头采集的图像效果（灰度图，90fps），并且可以显示 bounding box。
 
-阶段名：Dataset Selection。
+此外，该 Aurora 软件支持串口通信，可以在 Aurora 上查看开发板程序打印的信息，以及进入 Linux Shell 进行调试。
 
-操作：编辑 `configs/datasets.yaml`，只填写 HLMF 已发布的 `dataset_id`、`negative_dataset_id`、`hard_dataset_id`、`proposal_variant`、可选的 `capture_source_ids` 白名单和权重。不要手工拼接 JSONL，也不要把 ROI 复制到 `HAND_TRAIN_ROOT`。
+## 三、 项目定义：我们在做什么？
 
-`datasets`、`negative_datasets`、`hard_datasets`、`gold_datasets` 和 `evaluation.val/test` 都是成员列表，可各自配置一个或多个已发布 ID；每个 dataset 类成员独立填写 variant 和 `weight`。省略 `capture_source_ids` 时消费该 split 中所有已发布所选 variant 的 source；提供非空白名单时，每个 ID 必须存在于 dataset manifest、属于目标 split 并发布所选 variant，否则审计失败。该白名单用于冻结正式 Val/Test，也可用于确有需要的 Train 子集。`selections` 仅保留对历史已发布资产的兼容读取，不用于新困难复核。
+*   **项目名称：** 基于 SC132GS 的高帧率、抗光照干扰的、机器人场景下的高动态中文手语极速分类/识别系统。
+*   **核心目标：** 在 0.8 TOPS 算力下，压榨 SC132GS 全局快门 90fps 的高频采样优势，实现**低延迟（<15ms）、零拖影**的高速连贯手语的孤立手语词分类与手语识别(Sign Language Recognition, SLR)。结合物理红外照明，实现从白昼到黑暗环境的 **免疫光照变化** 的工业级鲁棒性。
+*   **注意：** 实现的应用为实时中文手语(Chinese Sign Language, CSL)分类以及识别，项目优先确保手语分类可做.
+*   **最终现场展示效果：** 人站在摄像头前做出连续手语动作，模拟聋哑人与机器人交互。摄像头捕捉动作，Aurora 调试软件上实时（接近原生90fps）将骨骼关键点显示在屏幕上。随着手语动作的进行，屏幕下侧不断输出预测出的 Gloss 序列。
 
-输入位置与选择键：
+## 四、项目技术路线详细拆解
 
-- `stages.*.datasets` → `PretrainSource/<dataset_id>/dataset_manifest.json`。
-- `stages.multitask.negative_datasets` → `GoldSource/NegativeSamples/<id>/published/manifest.json`；训练图片取每行 `published_relpath`。
-- `stages.multi_finetune.hard_datasets` → `GoldSource/HardSamples/<id>/published/manifest.json`；用 `source_crop_relpath` 核对 registry，用 `published_relpath` 读取 CVAT 精修后的独立发布副本。
-- `stages.multi_finetune.gold_datasets` → `GoldSource/ReviewedDatasets/<dataset_id>/dataset_manifest.json`；只能是新录制、按 Eval 同款自动标注 + CVAT 人工复核后发布的 train Gold，允许 positive 与 negative。
-- `evaluation.val/test` → `EValSource/<dataset_id>/dataset_manifest.json` 中相应 split。
+**暂定**的技术路线为：Sign2Skeletion2Gloss：
 
-当前 Iris-1.1 geometry 成员示例（正式配置已写入 `configs/datasets.yaml`）：
+1. 先完成手语动作视频 -> 骨骼关键点动作序列的转化，即Sign2Skeletion；
+2. 在上一步基础上再将骨骼关键点动作序列转化为Gloss序列，即 Skeletion2Gloss；
+3. 如果项目进展顺利的话，后续还可以接入其他外设，例如实现文字转语音播报。
 
-```yaml
-stages:
-  geometry:
-    datasets:
-      - {dataset_id: FullEnhance0801, proposal_variant: eos_2.0-rtmpose-hcf0813-gate, weight: 1.0}
-      - {dataset_id: FullEnhance0803, proposal_variant: eos_2.0-rtmpose-hcf0813-gate, weight: 1.0}
-      - {dataset_id: FullEnhance0810, proposal_variant: eos_2.0-rtmpose-hcf0813-gate, weight: 1.0}
-evaluation:
-  val:
-    - dataset_id: FullEnhanceVal0801
-      proposal_variant: eos_2.0-rtmpose-hcf0813-gate
-      capture_source_ids: [complex-mid-bright-random-val-s01-peak,
-                           complex-mid-bright-random-val-s01-soar,
-                           complex-near-bright-random-val-s01-peak]
-    - dataset_id: FullEnhanceVal0801
-      proposal_variant: eos_2.0-rtmpose-gate
-      capture_source_ids: [complex-mid-dark-random-val-s01-peak,
-                           white-mid-bright-random-val-s01-soar]
-  test:
-    - dataset_id: FullEnhanceVal0801
-      proposal_variant: eos_2.0-rtmpose-gate
-      capture_source_ids: [complex-mid-bright-random-test-s01-peak,
-                           complex-near-bright-random-test-s01-peak]
-```
+### 4.1 第一步：特征提取
 
-Eos-1.0 ROI 来自只覆盖手掌的旧 Palm 几何，只能作为独立 legacy/stress 回放；它不能与完整手掌和手指 Anchor 产生的 Eos-2.0 ROI 合并成主 Val/Test headline 指标。同一原图已进入 Eos-2.0 主集时，也不得再以旧 variant 重复进入 legacy 集。`FullEnhanceVal0803`、`RTMPose-Finetune-Test-0812` 不属于本轮成员。
+这是整条链路中最关键的“视觉压缩”步骤。目标不是在端侧保留完整视频，而是**尽快**把图像压缩成**低维可解释特征。**
 
-输出：本阶段只确定成员关系，不写新数据。
+**物理动作：** 从摄像头的连续视频流中，逐帧提取人体和手部的关键点。
+**方法**：抛弃容易受光照干扰且极其耗费算力的 RGB 全图，仅提取**双手及上半身骨骼点坐标**，实现极度降维。
 
-## 3. 阶段一：公共配置解析检查
+如下是成熟可用并且适合我们端侧部署的工业算法：
+（Google MediaPipe也是我们最终选择并且部署的算法）
 
-阶段名：Config Check。
+#### Google MediaPipe
 
-命令：
+- 获取：https://ai.google.dev/edge/mediapipe/solutions/guide
+- 包含 **Palm Detector**、**Hand Landmarker** 和 **Pose Landmarker**
+    - **Palm Detector** 负责检测手掌位置，每只手输出一个 bounding box 以及辅助定位的关键点。
+    - **Hand Landmarker** 同时包含手部位置检测和手部21个关键点坐标检测。在设备 Pixel 6 上的速度为 CPU 17.12 ms。官方目前只支持 CPU 和 GPU吗，需要调整以适配 A1 NPU
+    - **Pose Landmarker** 输出肩、肘、腕和躯干的33个关键点坐标。类似 MobileNetV2 的 CNN
+    - 此外，还有 **Face Landmarker** 检测 468 个面部关键点，可以选择使用。
+- 目前选定的模型 Palm Detector + Hand Landmarker 。
 
-```bash
-make config-check
-```
 
-输入：`configs/datasets.yaml`、`configs/training.yaml`、`configs/evaluation.yaml`、`configs/inference.yaml`、`configs/deploy.yaml` 及当前环境变量。
+#### 注意
 
-处理：解析 datasets contract、三个训练 profile（geometry、multitask、multi_finetune）、两个固定 ROI 评估 profile（val、test）、独立文件夹推理配置和独立 ONNX/A1 导出配置，检查 YAML 结构和变量展开。
+1. **关键区域划分**：可以参考各种学术论文的做法，骨骼关键点划分为不同的关键区域，独立建模（或者先独立建模，后融合特征）。例如如下划分方式：
+   - 左手、右手、上肢、面部
+   - 左手、右手、面部、全帧
+2. **部署**：上述算法模型都应该部署在 NPU 上，当然还需要做好量化和算子删减适配。
 
-输出：终端 JSON，`status=ok` 表示全部 profile 可解析。该命令不读取图片、不生成 snapshot，也不训练。
+### 4.2 第二步：时空建模
 
-## 4. 阶段二：零拷贝数据审计
+**物理动作：** 观察**过去一小段时间**内骨骼点的运动轨迹，预测**每一帧**对应什么“**手语词（Gloss）**”。
+**方法：**  收集连续$N$帧的骨骼点轨迹，预测对应的手语词（Gloss），如“前进”、“我”、“抓取”。由于我们做的是**实时处理并且算力有限**，所以要采取**滑动窗口**的方法，维护一个$N$帧的滑动窗口而不是连续整段视频，每隔若干帧触发一次增量推理；
 
-阶段名：Data Audit。
+如下是成熟可用并且适合我们端侧部署的工业算法：
 
-单独审计某个阶段：
+#### 时域卷积网络 TCN
 
-```bash
-make data-audit HLML_STAGE=geometry
-make data-audit HLML_STAGE=multitask
-make data-audit HLML_STAGE=multi_finetune
-```
+- Method1: MS-TCN，获取：https://github.com/yabufarha/ms-tcn
+- Method2: Causal TCN，获取：https://github.com/philipperemy/keras-tcn
+- Method3: SSTCN, 获取: https://github.com/jackyjsy/CVPR21Chal-SLR(孤立词分类)
 
-输入：`datasets.yaml` 选择的 HLMF manifest、`Registry/registry.sqlite3` 以及 manifest 引用的 ROI 图片。
+这个阶段的网络结构比较简单，算力要求和延迟低。但是必须自己训练，这些网络不是专用的 **坐标->手语词汇表概率矩阵** 逻辑。
 
-处理：
+这些模型可以用于处理：
 
-1. 解析新来源名 `<background>-<distance>-<lighting>-<condition>-<split>-<session>-<performer>`。
-2. 检查 capture source 和 raw image 不跨 Train/Val/Test。
-3. 对每个 dataset 只读取包含所选 `proposal_variant` 的 capture source；同一 manifest 中仅发布其他历史 variant 的 source 会被跳过。配置 `capture_source_ids` 后则要求白名单逐项精确命中，不允许缺失 source、错误 split 或未发布目标 variant。目标 split 至少要有一个所选 variant，且同一 source 不得重复发布同名 variant。
-4. 要求 dataset、negative dataset 与 selection manifest 使用当前 HLMF `hlmf_dataset_v1` schema，并核对 `roi_id`、registry 记录、相对路径和 dataset/source/split 字段。
-5. negative dataset 与 selection 必须声明 `image_policy=copied_review_and_published_images`；negative 直接读取 `published_relpath`，selection 先用 `source_crop_relpath` 验证原 ROI 身份，再从 `published_relpath` 读取独立副本。源 ROI 图片被删除或源 variant 退役后，已发布 selection 仍可单独读取。
-6. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
-7. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
+1. 连续手语识别
+2. 孤立词分类
 
-HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`。新发布行的两个 HCF 字段可记录 `hand-classifier-handedness-handpresence-0813`；历史 Gold 中的 0809 ID 仍按原值保留。读取器不硬编码某个 HCF 版本，因此版本更新不会在 HLML 入库时丢失 provenance。
+#### 注意
 
-HLMF 当前有两种等价的辅助 crop-pixel 表示：常规 MediaPipe/RTMPose 行满足 `crop_px = crop_norm × 255`，`mediapipe_tflite_rescue_v1` 行满足连续 crop extent 约定 `crop_px = crop_norm × 256`。两者的实际训练目标都是同一 `landmarks_crop_norm`。HLML warehouse 审计要求整行严格匹配其中一种约定，不匹配任一种即失败；随后记录 `warehouse_crop_pixel_convention`，并把内部 snapshot 的辅助 `landmarks_crop_px` 统一规范化为 `crop_norm × 255`。这不会改写 HLMF 发布物，也不会改变归一化训练目标或 image-space 坐标。
+1. **部署：** 可以部署在 NPU/CPU 上，但是 TCN 的算子适配性很好，并且 ARM Cortex-A7 算力有限，所以建议部署在 NPU 上。
 
-完整性检查使用稳定 ID、SQLite、文件路径、尺寸与解码，不对数据集图片反复计算 SHA-256。
+### 4.3 第三步：Gloss 解码 / CTC 
 
-输出：
+在 Sign2Gloss 阶段，模型输出的通常不是直接文本，而是每帧 / 每时间步的 gloss logits。
 
-```text
-HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/train.jsonl
-HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/val.jsonl
-HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/test.jsonl
-HAND_TRAIN_ROOT/snapshots/<snapshot_id>/<stage>/snapshot.json
-```
+**物理动作：** 把概率矩阵变成人类能看懂的句子。
+**方法：** **CTC, Connectionist Temporal Classification**，一种**损失函数（Loss Function）和解码算法**。
 
-JSONL 中 `crop_path` 指向 `HAND_DATASET_ROOT` 原图，没有图片副本。默认拒绝覆盖已有 snapshot；确实需要重建同一 ID 时使用 `DATA_ARGS=--overwrite`，但正式运行更推荐换新的 `HLML_SNAPSHOT_ID` 保留可追溯性。
+如下是成熟可用并且适合我们端侧部署的工业算法：
 
-## 5. 阶段三：Geometry 训练
+#### (1) CTC
 
-阶段名：Geometry。
+它引入了一个叫 **“Blank（空白/无意义）”** 的类别。模型在每一帧都会输出一个预测（比如："我, 我, Blank, Blank, 爱, 爱, 爱, Blank, 你"）。CTC 算法会自动把相邻重复的词合并，并删掉 Blank，最终输出干净的："我、爱、你"。它允许我们"**只提供最终的句子标签，不提供每一帧的边界**"就能完成端到端训练！
 
-命令：
+- 获取：PyTorch
+- 在训练阶段，把 TCN 输出的未对齐的预测概率，和正确的手语词序列扔给它，它负责算误差并更新 MS-TCN 的权重。
+- 在板上运行阶段，CTC Greedy Decoder 完成去重和消除空白的操作，生成Gloss序列。
 
-```bash
-make geometry
-```
 
-输入：
+#### 注意
 
-- `configs/datasets.yaml` 的 `stages.geometry.datasets`。
-- HLMF 发布的可靠 Train positive。
-- `configs/training.yaml` 的 geometry profile。
-- 自动审计得到的 `snapshots/<snapshot_id>/geometry/{train,val}.jsonl`。
+1. **部署：** CTC 建议部署在 CPU 上
+2. 至此，CSLR（连续手语识别）阶段完成。如果还要做 SLT（手语翻译），就继续下面的步骤。
 
-处理：命令先运行 geometry data audit，再调用现有 v2 训练器。Geometry 只学习关键点几何，配置任何 `negative_datasets` 都会被硬拒绝；本阶段不使用真负样本或 candidate negative。
+## 五、数据集资源
 
-输出：
+### 5.1 中文数据集
+#### (1) 中文孤立词数据集
 
-```text
-HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/checkpoints/best.weights.h5
-HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/checkpoints/last.weights.h5
-HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/checkpoints/final.weights.h5
-HAND_TRAIN_ROOT/runs/<experiment_id>/geometry/history.json
-```
+- SLR500(**重要**)：大规模数据集，500词，125, 000视频，包含 RGB、深度图 (Depth) 以及骨架
+(Skeleton) 3种模态，获取途径： https://ustc-slr.github.io/datasets/2015_csl/ ，需要签署协议，
+向USTC申请。该协议必须由全职员工签署（学生签署不予接受）。**于0419获得该数据集**
 
-训练器还会按配置保存周期 checkpoint。后续 multitask 默认从 geometry 的 `best.weights.h5` 初始化。
+#### (2) 中文连续手语数据集
 
-Geometry 训练结束后必须立即运行固定 ROI Val 与文件夹级联 infer：
+- CSL-Daily(**重要**)：大规模数据集，能够用于手语翻译，2000词，20, 654个视频，30fps。获取途径：
+ https://ustc-slr.github.io/datasets/2021_csl_daily/ ，申请方法同上。**于0419获得该数据集**
+- CE-CSL：大规模数据集，4973个训练集视频、500个test集视频（PDF中显示为513个）、516个dev集视频。训练集一共3840个词（PDF中显示为3800词）、dev集一共821个词、test集一共757个词。标注含有自然语言标注和Gloss标注，输入模态为RGB视频，没有提供关键点序列，但是已经通过Mediapipe提取好了每个视频的关键点序列。获取途径：https://github.com/woshisad159/TFNet.git . **目前主要使用该数据集（目前最高价值），优点是标注清晰且视频分辨率较高。已经保存到 Peak 本地、Quark 网盘以及 AutoDL 服务器**。该数据集的关键点个数为65，分别是pos的23个关键点，以及左右手各21各关键点，因此特征向量维度：130。
 
-```bash
-make val HLML_STAGE=geometry
-export HLML_INFER_INPUT=/path/to/representative/images
-make infer HLML_STAGE=geometry
-```
+## 六、 鲁棒性与三类异常处理机制
 
-`make val` 输入 geometry snapshot 的 `val.jsonl` 与 geometry winner，输出 `runs/<experiment>/eval/geometry/val/`；`make infer` 输入代表性原图、所选 Eos 和同一 winner，输出 `inference/<experiment>/geometry/`。前者用于可比较的固定 ROI 指标，后者用于发现 Palm→ROI→Hand 级联的可视化异常；两种结果不能混为同一指标。
+赛题要求必须有异常检测与恢复。我们的状态机监控（Watchdog）策略如下：
 
-## 6. 阶段四：Multitask 训练
+### 6.1 极端光照与摄像头数据异常（Data Anomaly）
 
-阶段名：Multitask。
+**可能遇到的异常情况**：图像断流 / 遮挡 / 方差接近 0；IR 过曝；环境变暗；
+解决办法待定。 
 
-命令：
+### 6.2 AI 推理异常（Inference Anomaly）
 
-```bash
-make multitask
-```
+**可能遇到的异常情况**：模型输出全0或全随机值；TCN输出的Gloss序列过长过短（例如超过合理范围的10个词）；翻译结果不合理（例如过长或者过短，或者包含敏感词等）。
+解决办法待定。 
 
-输入：
+### 6.3 资源异常
 
-- geometry winner：`runs/<experiment_id>/geometry/checkpoints/best.weights.h5`。
-- `stages.multitask.datasets` 选择的 Train positive。
-- `stages.multitask.negative_datasets` 选择的 HLMF 已发布真负样本。
-- multitask profile 和审计生成的 snapshot。
+**可能遇到的异常情况**：温度过高；CPU/NPU 长时间高占用；帧率抖动。
+解决办法待定。 
 
-处理：从 geometry winner 初始化，保留 v2 的 landmarks、presence 和 handedness 输出与现有损失；真负样本的 `negative_dataset_id` 权重进入 `sampling_weight`，用于 presence 多任务训练。未经过 HLMF 删除式复核的 candidate negative 不可使用。当前 Iris-1.1 multitask 使用 `neg-eos_2.0-hcf0813-hp0.5`；正式 snapshot 中有 74,225 条 `pseudo/POS_RUNTIME`、16,855 条 `pseudo/NEG_LOW_PALM_CANDIDATE` 和 55 条 `pseudo/NEG_RUNTIME_CANDIDATE`。本轮采样按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`，其余两类为 0；这与实际不存在 `POS_LOW_PALM` 的冻结数据一致，同时沿用不抽取 runtime candidate 的既定策略。
+## 七、目前进展、未来规划与成员分工
 
-输出：
+### 7.1 项目进展
 
-```text
-HAND_TRAIN_ROOT/snapshots/<snapshot_id>/multitask/*
-HAND_TRAIN_ROOT/runs/<experiment_id>/multitask/checkpoints/best.weights.h5
-HAND_TRAIN_ROOT/runs/<experiment_id>/multitask/history.json
-```
+#### 7.1.1 初赛
 
-Multitask 训练结束后必须执行 Val、infer 和 export：
+所有模型均已完成算子适配以及工具链转化，已完成部署测试。
 
-```bash
-make val HLML_STAGE=multitask
-export HLML_INFER_INPUT=/path/to/representative/images
-make infer HLML_STAGE=multitask
-make export HLML_STAGE=multitask
-```
+现有可正常在板上工作的模型情况以及精度
 
-Val/infer 分别输出 `eval/multitask/val/` 与 `inference/<experiment>/multitask/`。Export 同时输出 ONNX/A1 审计文件和 `model_conversion/datasets.zip`；转换数据包只读抽样当前 multitask snapshot 的 Train/Val/Test ROI。
+| 模型 | 量化后大小 |状态 | 端侧精度 | PC 精度 |
+|---|---|---|---|---|
+| Palm Detector | 2.02MB | ✅ 已部署 | 90%+ | 未测量 |
+| Hand Landmarker | 3.3MB |✅ 已部署 | 60%+ | 未测量 |
+| Pose Landmarker | 4.2MB | 🔲 未部署 | 未部署 | 未测量 |
+| SSTCN | 1.7MB | 🔲 未部署 | 未测量 | 99.74% |
+| TCN(连续手语识别) | 1.7MB | 🔲 未部署 | 未测量 | 35%（WER=65%） |
 
-## 7. 阶段五：Train-only 困难来源挖掘
+初赛提交的作品就以如下两种为主：
+1. Palm Detector: 每帧推理一次，总延迟 17 ms 左右
+2. Palm Detector + Hand Landmarker: 每3帧推理一次，总延迟 65 ms 左右
 
-阶段名：Hard Source Mining。
+**最终结果**：初赛通过，成功晋级分赛区决赛，将前往线下参赛
 
-每轮必须给出独立 `round_id` 和最大 ROI 数量；例如第一轮 1000：
+#### 7.1.2 华东分赛区决赛
 
-```bash
-make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
-```
+现有可正常在板上工作的模型情况以及精度
 
-显式 checkpoint 或已有 student prediction 也可以通过 Make 透传：
+<table>
+  <tr>
+    <th>模型</th>
+    <th>量化后大小</th>
+    <th>状态</th>
+    <th>PC 精度</th>
+    <th>端侧表现</th>
+  </tr>
+  <tr>
+    <td>Palm Detector</td>
+    <td>2.0MB</td>
+    <td>✅ 已部署</td>
+    <td colspan="2">存在漏检情况，但优于 Google MediaPipe 官方</td>
+  </tr>
+  <tr>
+    <td>Hand Landmarker</td>
+    <td>2.2MB</td>
+    <td>✅ 已部署</td>
+    <td>像素误差约 20 px</td>
+    <td>未测量</td>
+  </tr>
+  <tr>
+    <td>Gloss Translator</td>
+    <td>49KB</td>
+    <td>✅ 已部署</td>
+    <td>较好</td>
+    <td>差</td>
+  </tr>
+</table>
 
-```bash
-make mine-hard MINING_ARGS='--round-id r02 --max-rois 1500 --checkpoint /abs/path/best.weights.h5 --batch-size 64'
-make mine-hard MINING_ARGS='--round-id r02 --max-rois 1500 --predictions /abs/path/student_predictions.jsonl'
-```
+板端部署后能够支持三种功能：
 
-输入：`snapshots/<snapshot_id>/multitask/train.jsonl`、HLMF 当前发布的教师标签（通常来自 RTMPose/HCF/TFLite rescue 链路），以及 multitask checkpoint 或预计算 student prediction。
+1. **palm mode**: 只运行 Palm Detector，OSD 绘制手掌检测框
+2. **palm_hand mode**: 运行 Palm Detector + Hand Landmarker 级联，OSD 额外绘制手指关键点
+3. **fullcascade mode**: 运行 Palm Detector + Hand Landmarker + Gloss Translator，额外输出孤立词预测结果
 
-处理：只读取 Train positive 固定 ROI。每行困难度由关键点误差排序 80%、presence 误差 10%、handedness 误差 10% 组成；错误分类和低置信 head 因此可进入候选，但关键点仍是主信号。若人工真值中的 handedness 为 `unknown`，该 ROI 仍参与关键点与 presence 排序，只把 handedness 分量记为 0，并从 handedness 错误率分母排除。报告按 `capture_source_id` 聚合像素误差、PCK、collapse、presence/handedness 错误率、距离、亮度和姿态跨度。请求按综合困难度排序并截断到 `max_rois`。代码会硬拒绝 Val/Test；Test 结果也不能反向进入采样权重、训练配置、checkpoint 或阈值选择。
 
-同一个 `snapshot_id` 代表一次完整的 geometry + multitask + multi-finetune 数据流程。`mining/<snapshot_id>/selection_ledger.json` 记录各轮已经筛选的 ROI；后续轮自动排除这些 ID，只要求在该 snapshot 内不重复，不扫描整个 DatesetFab 或所有历史困难集。`round_id` 只能使用一次。
+实际板端工作时的端到端延迟（**按 P95 记**）：
 
-输出默认不可覆盖：
+- **palm mode**: 约 17.7 ms
+- **palm_hand mode**: 约 60 ms 
+- **fullcascade mode**: 约 62 ms
 
-```text
-HAND_TRAIN_ROOT/mining/<snapshot_id>/selection_ledger.json
-HAND_TRAIN_ROOT/mining/<snapshot_id>/rounds/<round_id>/student_predictions.jsonl
-HAND_TRAIN_ROOT/mining/<snapshot_id>/rounds/<round_id>/source_ranking.json
-HAND_TRAIN_ROOT/mining/<snapshot_id>/rounds/<round_id>/hlmf_review_request.jsonl
-```
+#### 7.1.3 全国总决赛（Current）
 
-把当轮 `hlmf_review_request.jsonl` 交给 HLMF 执行 `hard-review`，上传 ROI 与 CVAT 1.1 草标并精修，随后执行 `hard-import` / `hard-publish`。HLMF 的 `hard_dataset_id` 必须是通用数据身份，不得含 snapshot/run/round 语义。发布后，将一个或多个 ID 写回 `stages.multi_finetune.hard_datasets`。
+目前正在进行全国总决赛的工作，主要包括：
 
-## 8. 阶段六：Multi-finetune 训练
+- 重训 Palm Detector
+- 重训 Hand Landmarker
+- 重训 Gloss Translator，以及增加分类头数量
 
-阶段名：Multi-finetune。
+成员分工
 
-命令：
+| 成员 | 分工 |
+| --- | --- |
+| draong | 重训 Palm Detector |
+| peak | 重训 Hand Landmarker |
+| soar | 重训 Gloss Translator |
 
-```bash
-make multi-finetune
-```
+> 我们还为这三种模型分别取了适合发布的产品系列名字：Palm Detector -> AetherSign Eos 系列模型，或者简称 Eos; Hand Landmarker -> AetherSign Iris 系列模型，或者简称 Iris; Gloss Translator -> AetherSign Muse 系列模型，或者简称 Muse。
 
-输入：
+### 7.2 困难及解决办法
 
-- multitask winner：`runs/<experiment_id>/multitask/checkpoints/best.weights.h5`。
-- `hard_datasets` 中经 HLMF CVAT 1.1 精修后发布的困难 positive/negative。
-- 可选 `gold_datasets`：新录制、自动标注并经人工 CVAT 复核的通用 Gold positive/negative；不能从既有 PretrainSource/EValSource 冒充。
-- `negative_datasets` 中的已发布真负样本。
-- `datasets` 中的 mandatory pretrain replay pool。
+#### 7.2.1 初赛阶段
 
-处理：困难数据集、人工复核 Gold 和真负样本组成 hard/gold 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。默认 hard/gold 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 hard/gold/negative dataset 的 `weight` 继续参与侧内采样。
+初赛阶段，遇到的困难大致如下：
 
-输出：
+1. **连续手语数据集匮乏，缺乏同一 Gloss 重复次数较多的数据集。**（✅解决：申请到 CSL-Daily 以及 SLR500 数据集，后续可考虑利用孤立词分类+滑动窗口实现连续手语）
+2. **MediaPipe 模型适配 A1 NPU 的过程中遇到算子不支持的问题。**（✅解决：通过删减模型结构、调整模型参数等方式，成功适配了全部模型）
+3. **板上部署耗费较多时间**：见 PALM_DEBUGGING_NOTES.md（✅解决：反复询问 Codex）
+4. **实时性较差** 摄像头 90fps，要做到实时处理需要每帧模型处理以及预处理、OSD渲染时间小于 11.1ms，但是现在数据预处理时间耗费 9ms，Palm Detector 模型推理时间耗费 7 ms 左右，Hand Landmarker 模型单次 P95 约 36~45 ms。单次完整流程延迟约 65 ms，远高于 11.1ms 的要求。（🔲暂未解决）
 
-```text
-HAND_TRAIN_ROOT/snapshots/<snapshot_id>/multi_finetune/*
-HAND_TRAIN_ROOT/runs/<experiment_id>/multi_finetune/checkpoints/best.weights.h5
-HAND_TRAIN_ROOT/runs/<experiment_id>/multi_finetune/history.json
-```
+#### 7.2.2 华东分赛区决赛
 
-Multi-finetune 训练结束后同样必须执行 Val、infer 和 export：
+华东分赛区决赛阶段，遇到的困难大致如下：
 
-```bash
-make val HLML_STAGE=multi_finetune
-export HLML_INFER_INPUT=/path/to/representative/images
-make infer HLML_STAGE=multi_finetune
-make export HLML_STAGE=multi_finetune
-```
+1. **模型精度**：
+    1. 板端运行时，Hand Landmarker 模型相比初赛已经有很大提升，但是部分手势仍然**偏差较大/塌缩严重**；
+    2. Palm Detector 模型依旧是初赛的版本，没有重训，**存在一定漏检情况（但优于 Google MediaPipe）**，且**高度依赖于特定的摄像头距离**，否则检测成功率大幅下降。
+    3. 根据以上亮点，Gloss Translator 模型的分类准确率也不理想，板端运行时状态糟糕。
+2. 目前**最严重的瓶颈是 Hand Landmarker 的精度提升**，目前已经尝试了多重手段：
+    1. pretrain (geometry+multitask) -> multi-finetune 多阶段训练策略
+    2. Google MediaPipe 自动标注 pesudo 标签，扩充 pretrain 数据集
+    3. 增加骨骼结构约束
+    4. 各种训练调参策略等
 
-三条命令必须使用同一 snapshot、experiment 和 stage；输出分别位于 `eval/multi_finetune/val/`、`inference/<experiment>/multi_finetune/` 与 `export/multi_finetune/`。完成 Val 后再冻结 winner，locked Test 仍只运行一次冻结结果。
+目前总结出的**结论经验**有：
 
-## 9. 阶段七：固定 Hand ROI Val
+1. 分赛区决赛阶段，Hand Landmarker 模型在板端阶段展现出来的、远比初赛阶段良好的泛化特性，表明了 pretrain(geometry+multitask) -> multi-finetune **多阶段训练策略是可行的**，尤其是 geometry 阶段进行的大规模预训练，学习21 手指关键点骨骼几何结构。
+2. 分赛区决赛阶段最后做与训练时，比较仓促，因此当时的数据集仅包含了几种困难姿态，以及一些手语词，缺乏多样性、明暗、距离远近等丰富的场景姿态变化。因此，**现阶段第一个任务是重新录制包含各种姿态的数据集**。
+3. Palm Detector 模型存在比较严重的漏检情况，并且只要在任务距离摄像头合适距离时才能有很好的检测能力（距离一旦变近或者变远，检测成功率骤降）。因此，**Palm Detector 模型也不得不重新训练**。
+4. Google MediaPipe 作为 Hand Landmarker 的教师模型时，其检测准确度是相当高的，大部分图片，只要能够检测出手，那么该手的 21 个关键点预测几乎一定是正确的。因此，**我们之前认为的 pesudo-label ，其实基本就是 gold-label**。
+    1. 但是 Google MediaPipe 模型的漏检情况很严重，显著高于我们自己训练的 Palm Detector 模型。
+    2. 所幸，我们在之前制造 Hand Landmarker 的数据集时，策略是：我们自训练的 AetherSign Palm Detector 处理原始图片，给出 anchor 和 Hand ROI；然后 Google MediaPipe 直接处理 Hand ROI，给出 21 个关键点的预测结果。这种情况下，**许多 Google MediaPipe 模型可能本身会忽略的图片，经过我们的策略后仍然能够给出准确的 21 个关键点预测结果（已经通过实验验证过）**。
+    3. 当然，不排除部分困难姿态依旧没有充分进入训练集，可能也是我们的 Hand Landmarker 模型误差始终维持在 20 px 左右（验证集）无法下降的原因之一。比如说 Palm Detector 漏检的图片，Google MediaPipe 也无法给出 label，这些图片就无法进入训练集，我们的 Hand Landmarker 模型就无法学习到这些困难姿态的骨骼关键点预测。
+5. 分赛区阶段，验证(Val)集和测试(Test)集中有大量人工标注的 Hand ROI，而预训练的训练集全部来自于 Google MediaPipe，这**两者的标注风格不一致**，**很有可能就是我们当时在训练时，“训练 Loss 一直下降、而验证 Loss 变化无常甚至上升”的原因之一**。
+    1. 但是经过实验，Google MediaPipe 在 Val 集上的平均像素误差约为 6px，而我们训练的 Hand Landmarker 在 Val 集上的平均像素误差约为 21px，说明 Google MediaPipe 的标注风格和我们人工标注的风格**不是主要原因**。
 
-阶段名：Fixed-ROI Val。
+对于 Hand Landamrker 的精度提升，全国总决赛阶段，打算尝试的解决策略有：
 
-命令：
+1. 延续 pretrain (geometry+multitask) -> multi-finetune 多阶段训练策略
+2. 继续扩充 pretrain 数据集，并且依旧是 Google MediaPipe 自动标注标签（经过实测，**Google MediaPipe 只要能够成功检出手掌，则关键点检测一定准确**）。这一次重点在于**数据集的多样性**。
 
-```bash
-make val HLML_STAGE=multi_finetune
-```
 
-输入：
+### 7.3 未来规划
 
-- `snapshots/<snapshot_id>/<stage>/val.jsonl`。
-- `runs/<experiment_id>/<stage>/checkpoints/best.weights.h5`。
-- `configs/evaluation.yaml` 的 val profile。
+03-29 与指导老师讨论后，确定就沿着：Sign2Gloss2Text 这条路线来做，风险最小并且立刻就可以开始做（初赛时间逼近）。
+优先确保 Sign2Gloss 能够做好，甚至优先确保骨骼关键点提取这一步能做好，能够部署在开发板上实现实时关键点定位。
 
-处理：直接读取 HLMF 已生成、已复核的 `crop_path`，只运行 Hand Landmarker。Val 可以执行 `threshold_sweep` 来选择 presence threshold。不会读取原图或运行 Palm。
+04-04 与指导老师讨论后，觉得当前场景下的手语太复杂，可以先从简单指令做起，比如就做100~200的词表，每个手语句子久1~3个Gloss。
 
-输出：
+04-13 与指导老师讨论后，决定去做一下 CE-CSL 数据集上的全词表训练，看看能不能提升点精度。
 
-```text
-HAND_TRAIN_ROOT/runs/<experiment_id>/eval/<stage>/val/predictions.jsonl
-HAND_TRAIN_ROOT/runs/<experiment_id>/eval/<stage>/val/metrics.json
-```
+04-19 与指导老师讨论后，Mediapipe 端先不考虑泛化，先提升特定场景下的精度；关键点序列转换端先去搜索 CSL-Daily 数据集上的经典模型，我们可以用的，看看能不能复现。Soar 去尝试做更简单的孤立词分类任务（利用 SSTCN ）
 
-指标包括 mean/median/P90/P95 像素误差、PCK、landmark collapse、presence 和 handedness，并按 dataset、capture source、label origin、annotation style、distance 和 lighting 分组。
+04-25 SSTCN 模型下的孤立词分类任务做得很棒，正确率有99.74%，并且因为初赛截至时间（0507）快到了，我们准备暂时放弃复杂的连续手语识别任务，确保 MediaPipe 三个模型以及 SSTCN 共四个模型能够上板运行。
 
-## 10. 阶段八：冻结唯一 winner
+07-02 目前情况：重新训练 Palm Detector 以及 Hand Landmarker，这一次输入尺寸调整为 720x1080，避免旋转（即前面提到的数据预处理）带来的时间开销。目前正在制作数据集、重新训练模型以及尝试上板部署。
 
-阶段名：Winner Freeze。
+07-08 目前情况：目前已经到了生死存亡的危难之际，720x1280 输入的 Palm Detector 训练后，在 PC 上不错，但是在 A1 上效果奇差无比，暂时未能得出原因；时间有限，我们准备重新切换回 1280x720 输入，保留端侧调度程序的旋转操作，承受 9ms 的预处理时间开销，确保 Palm Detector 在 A1 上的精度。
 
-命令：
+07-13 目前情况：按照 07-08 的计划，由于时间有限，我们不打算再训练 Palm Detector 以追求更高精度，而是在 1280x720 输入下，录制了大量的 Hand Landmarker 的训练数据集，准备重新训练 Hand Landmarker 模型，确保在 A1 上的精度。现在，标注工作已经完成（训练集为 Google MediaPipe 自动标注，共约两万个样本；验证/测试集均为人工精标，各约一千个样本。）
 
-```bash
-make freeze-winner HLML_STAGE=multi_finetune HLML_RELEASE_ID=v4-r1
-```
+07-19 目前情况：我们已经录制好了 Hand Landmarker 数据集，包含 Google MediaPipe 自动标注的 pesudo 标签以及人工精标的标签，完成了 pretrain(geometry+multitask)-finetune 多阶段训练流程。Hand Landmarker 模型精度由于时间压力已经无法更新，目前准备 SSTCN 孤立词分类模型的训练，以及整理分赛区决赛材料。
 
-输入默认是：
+07-31 目前情况：我们已经完成了 Hand Landmarker 模型的的训练，并且成功将 Palm Detector + Hand Landmarker + Gloss Translator(改版后的 SSTCN) 三个模型部署在 A1 上，端侧手语识别的完整链路打通。目前团队已于 0724 成功获得华东赛区分赛区一等奖并晋级全国总决赛，接下来将继续优化模型精度以及端侧延迟。全国总决赛要求 08-21 提交作品，因此目前还剩下约 20 天的时间。
 
-```text
-runs/<experiment_id>/eval/multi_finetune/val/metrics.json
-runs/<experiment_id>/multi_finetune/checkpoints/best.weights.h5
-```
+08-05 目前情况：我们已经录制了大批量数据集，准备开始重新训练三个模型，具体来说：
 
-如需指定其他已完成的 Val 结果和 checkpoint，可使用：
+1. 对于 Eos 系列模型，我们找到了比 Google MediaPipe 在 SC132GS 域上表现更好的模型，用作自动化数据标注，做教师模型
+2. 对于 Iris 系列模型，我们也找到了比 Google MediaPipe 在 SC132GS 域上表现更好的模型（RTMPose），用作自动化数据标注，做教师模型。RTMPose 直接运行在 Hand ROI，强制为每张 ROI 输出关键点，但是 RTMPose 无法给出 handedness 标注，需要我们训练一个新的小模型用作教师模型（不参与最终部署），为每个 Hand ROI 输出 handedness 标注。
 
-```bash
-make freeze-winner HLML_STAGE=multi_finetune FREEZE_ARGS='--metrics /abs/metrics.json --checkpoint /abs/best.weights.h5'
-```
+08-08 目前情况：
 
-处理：确认 metrics 的 split 为 Val、scope 为 fixed Hand ROI，冻结模型版本、stage、checkpoint、snapshot 和 Val 选定的 presence threshold。一个 release ID 只能创建一次。
+1. 对于 Iris 模型的训练，我们训练了了辅助模型 Hand Classifier 进行手存在性和手性的判断，辅助配合 RTMPose 手指关键点检测模型进行数据标注。目前 Iris-1.1 已经完成 geometry 阶段的训练，平均像素误差降低到了 10px 左右（对比，分赛区决赛最终版本 geometry 阶段的像素误差是 19px）。目前暂时停止 multitask 阶段的训练，而是从以下方面进行优化：
+    - [x] 补充 Hand Classifier 模型的训练数据集，增强泛化能力，优先保证数据标注链路能够提供高质量标签，尤其是提高 handedness 分类头的准确率
+    - [x] 数据自动化标注系统 HLML 继续增强 RTMPose 的门控能力，引入骨骼结构约束：每“一段手指”的在全部投影方向下有一个最大值，该最大值与拍摄时演示者距离摄像头的距离有关。
+    - [x] 在 HLMF 系统中引入 MediaPipe 独立 Hand Landmark TFLite，开启第三个手指关键点检测后端。这个 Hand Landmarker TFLite 直接输入 Hand ROI，输出 21 个关键点坐标以及 handedness, hand presence 分类结果。与当前链路的普通 MediaPipe 不一致的是，该模型没有 Palm Detector 前端，只有 Hand Landmarker 后端；并且区别于 RTMPose-m，该模型可以直接输出 handedness 和 hand presence 置信度。除了作为独立的手指关键点检测后端外，它可以配合 Hand Classifier 模型，共同对 RTMPose 的输出结果给出 handedness 和 hand presence 的置信度。
+    - [x] 当前 HLMF 系统模型推理负载较大：Palm Detector (Eos), RTMPose-m, Hand Classifier, 预计总耗时较长，计划采用 GPU 加速推理。
+    - [ ] 模型本身也引入骨骼结构约束：RTMPose 在进行预测时，似乎每个关键点是独立进行预测的，导致整体形状不一定符合手部 21 关键点的骨骼结构；目前的模型也是直接在一个回归头输出了 42 个数值，21 个坐标之间可以认为是“独立”预测的。而 MediaPipe 的 hand landmarker 模型在进行预测时，其输出时钟保持一个正常的手部骨骼结构形状。我们也可以尝试在模型中引入骨骼结构约束，确保输出的 21 个关键点符合手部骨骼结构。
+2. 孤立词分类的 OSD 显示已经在端侧调度程序中实现。
 
-输出：
+08-13 目前情况：Eos-2.0 模型介入，Iris geometry 预训练已经开始
+08-16 目前情况：Iris-1.1 模型 geometry 和 multitask 训练阶段已经完成，multitask 阶段的关键点平均像素误差约 9px，handedness 分类头准确率约 90%，hand presence 训练失败，目前倾向于全部输出“有手”。
 
-```text
-HAND_TRAIN_ROOT/releases/<release_id>/winner.json
-```
+**当前需要完成的工作**：
 
-## 11. 阶段九：Locked Test
+- [x] 寻找学术界/工业界**孤立词分类模型/应用的实际准确率，用作 baseline**；
+- [] 挖掘赛题的要求（例如帧率、抖动等），**以赛题要求指标为目标**，继续优化系统。关注 **“什么是加分项”** 并且按照优先级划分进行实现，例如可展示性：**OSD 绘制、增加分类头数量、降低延迟或者重定义延迟说法**
+- [] 除了优化系统外，还需要兼顾文档撰写、PPT 制作、分享论文撰写等工作。**尤其是 PPT 制作**，需要较好地展示我们的工作，呈现: **“我们解决了什么实际问题”“亮点是什么”“与 Baseline 的量化对比”**
 
-阶段名：Locked Fixed-ROI Test。
+**工作优先级**：
 
-命令：
+1. 重新录制大规模数据集
+2. 重训三个模型，并且尽量并行开始，期间开始准备文档和 PPT 制作。
+3. 关注项目可展示性：支架、OSD 绘制、OLED 显示、孤立词数量
 
-```bash
-make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID=v4-r1
-```
-
-输入：`releases/<release_id>/winner.json`、其中锁定的 checkpoint、`snapshots/<snapshot_id>/<stage>/test.jsonl` 和 deploy test profile。
-
-处理：只允许 winner descriptor 指定的 checkpoint 和 Val 冻结的 presence threshold；禁止 threshold sweep、checkpoint 切换和覆盖已有结果。Test 不运行 Palm，也不能被 mining 或训练代码读取。
-
-输出一次且不可覆盖：
-
-```text
-HAND_TRAIN_ROOT/releases/<release_id>/test/predictions.jsonl
-HAND_TRAIN_ROOT/releases/<release_id>/test/metrics.json
-```
-
-## 12. 阶段十：文件夹级联推理
-
-阶段名：Folder Inference，和固定 ROI 评估分离。
-
-命令：
-
-```bash
-export HLML_INFER_INPUT=/path/to/images
-make infer HLML_STAGE=multi_finetune
-```
-
-输入：`configs/inference.yaml` 指定的任意支持格式原图文件夹、`palm_detector/eos-2.0/model_opt.onnx` 和 Hand checkpoint。EOS 2.0 文件来自 HLMF 的 `models/palm_detector/eos-2.0/model_384x224_opt.onnx`，部署到 HLML 时按本仓目录约定改名为 `model_opt.onnx`；ONNX 文件由执行环境单独部署，不提交 Git。
-
-处理：EOS 2.0 将灰度原图以 `INTER_AREA` 缩放为 `384×224`，形成 float32 NCHW `[1,1,224,384]`；按 `14×24`、`7×12` 两个矩形特征层及各自两组 Anchor 解码共 840 个 Anchor，合并后执行一次全局 NMS（score `0.25`、IoU `0.10`、最多 2 手），再沿用 scale `1.8/1.8`、shift `0/-0.1` 构造 `256×256` canonical Hand ROI 并运行 v2 Hand Landmarker。EOS 1.0 的方形 `input_size`、旧 Anchor 和 `cross_head_suppress_iou` 已不再支持。这是部署前人工检查工具，不能把结果当 Val/Test fixed-ROI 指标。
-
-输出：
-
-```text
-HAND_TRAIN_ROOT/inference/<experiment_id>/<stage>/
-```
-
-其中包含 JSONL、summary 和按配置生成的标注图；默认拒绝覆盖。
-
-## 13. 阶段十一：ONNX/A1 导出
-
-阶段名：Export。
-
-命令：
-
-```bash
-make export HLML_STAGE=multi_finetune
-```
-
-输入：所选 stage 的 v2 checkpoint、同一 stage 的 Train/Val/Test snapshot，以及负责部署交付导出的 `configs/deploy.yaml`。
-
-处理：导出静态 NCHW `[1,1,256,256]`、opset 11 ONNX，保持输出顺序 `[landmarks, hand_flag, handedness]`，审计 A1 允许算子、模型大小、depthwise group 和 Keras/ONNXRuntime 数值一致性。ONNX 验证通过后，只读当前 stage snapshot：从 Train 分层稳定抽取 100 个 calibration ROI，从 Val/Test 各抽取 25 个 evaluation ROI，保存为 `np.save` 生成的 `float32 (1,1,256,256)` NCHW 数组，像素为灰度 `uint8/255`。
-
-输出默认位于：
-
-```text
-HAND_TRAIN_ROOT/runs/<experiment_id>/export/<stage>/
-  hand_landmarker_v2.onnx
-  hand_landmarker_v2.contract.json
-  model_conversion/
-    datasets/calibrate_datasets/*.npy
-    datasets/evaluate_datasets/*.npy
-    datasets.zip
-    datasets_manifest.json
-    datasets_report.json
-```
-
-`datasets.zip` 内只含 `datasets/` 及两类 `.npy`；calibration 不读取 Val/Test，评测集必须同时包含 Val 与 Test。模型、contract 和数据包均默认拒绝覆盖。
-
-## 14. 阶段十二：环境、测试和双仓验收
-
-检查服务器 TensorFlow/CUDA/GPU 环境：
-
-```bash
-make environment-check
-```
-
-输入为 training environment contract，输出为终端环境报告。
-
-语法、完整单元测试和公共命令检查：
-
-```bash
-make compile
-make test
-make help
-```
-
-双仓库合成验收：
-
-```bash
-make acceptance-smoke
-```
-
-该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；合成接口覆盖部分发布的 EOS 2.0 proposal variant、同一 dataset 按 source 白名单跨 variant 组集、HCF 0813 双头 teacher ID、TFLite rescue 的 `norm×256` 上游 crop-pixel 约定及 canonical 规范化、HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath` 与可选几何补救字段，不使用真实 Test 选择模型。Palm 解码回归测试另行校验 `[1,1,224,384]`、840 Anchor、矩形输出映射和全局 NMS。
-
-## 15. `configs/datasets.yaml` 参数说明
-
-- 成员列表：`stages.*.datasets`、`negative_datasets`、`hard_datasets`、`gold_datasets`、`evaluation.val/test` 均支持多个条目；构建 snapshot 时合并所有成员，并保留每个成员的 ID、variant 和权重。重复 ROI、跨 split 或同一 capture source 混用多个 variant 仍会失败。
-- `dataset_id`：HLMF 发布的数据集逻辑 ID，不是目录绝对路径。
-- `proposal_variant`：选择 dataset 中已发布的哪一版 Palm/ROI 结果。每个列表成员独立选择，因此同一 dataset 可用多个成员在不同 source 上消费不同 variant。HLMF 允许一个 variant 只发布到 dataset 的部分 source；没有 source 白名单时 HLML 会跳过未发布该 variant 的 source，但目标 split 若一个匹配 source 都没有则失败。
-- `capture_source_ids`：dataset 类成员的可选非空、无重复 source ID 白名单。提供后不再宽泛消费该 variant 的其他 source；每个 ID 都必须存在于 manifest、匹配当前 Train/Val/Test split 且发布该成员的 `proposal_variant`。
-- `weight`：正数，写入该来源记录的 `sampling_weight`。它控制相对抽样权重，不复制样本。
-- `negative_dataset_id`：只能引用 HLMF `GoldSource/NegativeSamples/<id>/published/`；HLML 读取其独立 `published_relpath` 图片副本。
-- `hard_dataset_id`：引用 HLMF `GoldSource/HardSamples/<id>/published/` 的 CVAT 精修困难集；来源身份由 `source_crop_relpath` 与 registry 核对，实际输入为独立 `published_relpath` 图片，允许 positive/negative。
-- `gold_datasets`：multi-finetune 可选 `GoldSource/ReviewedDatasets` 中新录制且人工复核的 train Gold，格式与 `datasets` 相同，允许 positive/negative。
-- `selections`：只为既有 `Selections/<id>/published/` 保留兼容读取，不是新流程配置项。
-- `hard_fraction/replay_fraction`：默认 `0.55/0.45`，必须均大于 0 且总和为 1。
-- `evaluation.val/test`：只选择 EValSource 中已复核 fixed ROI；两者按 manifest 的 split 字段过滤。
-- `policies.performer_cross_split`：默认 `warn`，需要严格人员隔离可设为 `fail`。
-
-`image_integrity`、`image_sha256` 和 `test_may_feed_training_or_mining` 是公开策略声明，应分别保持稳定 ID/registry/decode、图片 SHA 禁用和 Test 禁止回流。
-
-## 16. `configs/training.yaml` 参数说明
-
-### 16.1 模型与环境
-
-- `environment`：锁定 Python、TensorFlow、CUDA 和 cuDNN 版本；服务器不匹配时先处理环境，不应为绕过检查而随意改版本。
-- `model.version/num_iterations/output_order`：现有 v2 网络和三输出契约。当前重构不做辅助 head 或结构实验。
-- `data.image_size/channels/input_layout/input_scale`：与 HLMF `256×256` 灰度 ROI 和 A1 NCHW 契约一致。
-
-### 16.2 通用训练参数
-
-- `training.epochs`、`batch_size`：训练轮数与批大小；显存不足时优先降低 batch size。
-- `optimizer.learning_rate`：geometry 默认较大，multitask/multi-finetune profile 会覆盖为更小学习率。
-- `initial_checkpoint`：阶段初始化权重；multitask 必须指向 geometry winner，multi-finetune 必须指向 multitask winner。
-- `resume_checkpoint`：仅用于同一阶段中断恢复，不能代替跨阶段初始化。
-- `gradient_clip_norm`、`mixed_precision`：数值稳定与性能选项；开启 mixed precision 前应验证目标环境和导出一致性。
-- `progress_bar`：默认 `tqdm`，显示 epoch 与 batch 进度；也可设为 `keras` 或 `none`。正式训练保持 `tqdm`。
-- `checkpoint.monitor/mode`、`early_stopping`、`learning_rate_schedule`：只使用 Val 指标；Test 禁止参与。
-- `max_wall_time_hours`、`periodic_checkpoint`：服务器时间预算和恢复点策略。
-
-### 16.3 采样、损失和增强
-
-- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 Iris-1.1 geometry 使用三个 `eos_2.0-rtmpose-hcf0813-gate` Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；当前 multitask 则按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`、其他类型为 0 抽样。正式训练前仍须以 snapshot audit 的实际单元计数为准；不得给实际缺失的 `POS_LOW_PALM` 配置正比例。`missing_cell_policy.pseudo=fail` 不会伪造或静默重分配不存在的 sample type。
-- `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
-- `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
-- `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。
-- `augmentation`：只作用于训练 ROI。旋转、缩放和平移过大可能破坏 canonical ROI 几何；调整后先做 smoke 和可视化抽查。
-- `profiles`：仅放相对基础配置的阶段覆盖。不要复制三份完整配置，避免阶段契约漂移。
-
-## 17. `configs/evaluation.yaml`、`configs/inference.yaml` 与 `configs/deploy.yaml`
-
-三个文件不使用跨语义 profile：`evaluation.yaml` 只做固定 ROI Val/Test，`inference.yaml` 只做原图文件夹级联推理，`deploy.yaml` 只做模型导出和 A1 审计。
-
-### 17.1 `evaluation.yaml`：Val/Test
-
-- `data.labels`：固定指向相应 snapshot 的 `val.jsonl` 或 `test.jsonl`。
-- `evaluation.mode`：Val/Test 必须是 `roi`。
-- `hand_flag_threshold`：Val 初始 presence 阈值。
-- `threshold_sweep`、`tune_thresholds`：Val 可开启；Test profile 必须关闭并使用 winner threshold。
-- `pck_thresholds`：以 ROI 尺寸归一化的 PCK 阈值列表。
-- unknown handedness：合法 positive 仍参与 presence 与 landmarks（pixel error、NME、PCK）统计，只从 handedness 指标中排除；报告的 `excluded_unknown_label_count` 给出排除数量。经人工保留且略超固定 ROI 边界的有限关键点不裁剪，按原坐标计算误差并在 data contract 中报告 warning。
-- `output.overwrite`：正式 Val/Test 建议为 `false`，locked Test 强制为 `false`。
-
-### 17.2 `inference.yaml`：Folder Inference
-
-- `input.images_dir/extensions/recursive`：任意文件夹推理的输入范围。
-- `palm.models_root/model_id/model_filename`：当前默认解析为 `palm_detector/eos-2.0/model_opt.onnx`；`--palm-model-id` 只改变模型目录，所选模型仍必须满足冻结的 EOS 2.0 输入、矩形输出和 Anchor 契约。
-- `palm.input_width/input_height/feature_levels`：固定为 `384/224`、`14×24` 与 `7×12` 两层；每层两组 Anchor 尺寸必须与 HLMF EOS 2.0 一致。`score_threshold=0.25`、`nms_iou_threshold=0.10`，所有层合并后只执行一次全局 NMS。
-- `hand_roi.*`：应与部署端和 HLMF 使用的 ROI contract 对齐。
-- `output.write_annotated_images/write_jsonl/draw_*`：控制检查产物，不影响模型数值。
-
-### 17.3 `deploy.yaml`：ONNX/A1 Export
-
-- `export.opset`、`input_name/output_names/dynamic_batch`：A1 部署接口，当前为 opset 11、固定 batch 和固定输出顺序。
-- `maximum_model_size_mb`、`maximum_depthwise_group`、`a1_allowed_operators`：硬件审计门槛。
-- `validate.random_samples` 与容差：Keras/融合 ONNX/ONNXRuntime 数值一致性检查。放宽容差前必须定位具体算子误差。
-- `metadata`：部署端预处理和输出解释契约，必须和训练配置一致。
-- `conversion_datasets`：保持启用；定义当前 snapshot 的 Train/Val/Test 路径、100/25/25 抽样数、分层字段和独立 `model_conversion` 输出目录。
-
-## 18. 数据泄漏与 Test 锁定原则
-
-Train、Val、Test 的 capture source 和 raw image 必须完全隔离；人员隔离至少保留警告。困难挖掘仅使用 Train。唯一 winner 只能根据固定 Val 冻结；Test 只执行一次该 winner，Test 输出不得被数据审计、采样、训练、mining、threshold 或 checkpoint 选择代码读取。
+## 八、团队信息
+* **团队名称：** PeakDragonSoar (巅峰龙翔)
+* **项目名称：** AetherSign (以太印记)
+* **团队成员：** 由 3 名来自 **上海交通大学 (SJTU)** 的 **2023级微电子科学与工程系** 本科生组成。
