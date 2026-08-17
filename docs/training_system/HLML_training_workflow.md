@@ -24,7 +24,7 @@ make environment-check
 
 HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 与新录制的 `GoldSource/ReviewedDatasets` 使用各自来源 ROI；GoldSource 负样本和困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
 
-HLMF 内部的 Palm/HCF/landmark teacher 版本不属于这条训练数据边界。最新版 HLMF 默认 Eos-2.1 + HCF0814 + RTMPose，并支持 MediaPipe Tasks 与 HaMeR 独立后端；发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 Eos 原始输入、Anchor 张量、HaMeR checkpoint 或连接长度门控阈值，也不根据 teacher 类型改变训练目标。当前 Iris-1.1 冻结 snapshot 和独立 `make infer` 仍使用 Eos-2.0 契约；HLMF 的最新 Eos-2.1 near/mid 能力边界在标注和发布前执行，HLML 不重复实现距离门控。
+HLMF 内部的 Palm/HCF/landmark teacher 版本不属于这条训练数据边界。最新版 HLMF 默认 Eos-2.1 + `v1-mobilenet_v3_large` HCF + RTMPose，并支持 MediaPipe Tasks 与 HaMeR 独立后端；发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 Eos 原始输入、Anchor 张量、HaMeR checkpoint 或 HCF/连接长度门控阈值，也不根据 teacher 类型改变训练目标。当前 Iris-1.1 冻结 snapshot 和独立 `make infer` 仍使用 Eos-2.0/HCF0813 契约；HLMF 的最新 Eos-2.1 near/mid 能力边界与 HCF 模型专属质量门控在标注和发布前执行，HLML 不重复实现这些门控。
 
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
@@ -148,7 +148,7 @@ make data-audit HLML_STAGE=multi_finetune
 6. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
 7. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
 
-HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`、`hamer_inference`、`hamer_geometry_rescue`。HaMeR direct 行使用 `hamer/hamer_openpose21_v1`，TFLite rescue 行仍使用 `mediapipe/mediapipe_tflite_rescue_v1`；HCF 字段可记录当前 0814 或历史 0813/0809。读取器不硬编码 teacher/HCF 版本，因此版本更新不会在 HLML 入库时丢失 provenance。
+HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`、`hamer_inference`、`hamer_geometry_rescue`。HaMeR direct 行使用 `hamer/hamer_openpose21_v1`，TFLite rescue 行仍使用 `mediapipe/mediapipe_tflite_rescue_v1`；当前 HCF teacher ID 为 `hand-classifier-v1-mobilenet_v3_large`，既有 snapshot 仍可保留 0814、0813 或 0809。读取器不硬编码 teacher/HCF 版本，因此版本更新不会在 HLML 入库时丢失 provenance。
 
 HLMF 当前有两种等价的辅助 crop-pixel 表示：常规 MediaPipe/RTMPose/HaMeR 行满足 `crop_px = crop_norm × 255`，`mediapipe_tflite_rescue_v1` 行满足连续 crop extent 约定 `crop_px = crop_norm × 256`。两者的实际训练目标都是同一 `landmarks_crop_norm`。HLML warehouse 审计要求整行严格匹配其中一种约定，不匹配任一种即失败；随后记录 `warehouse_crop_pixel_convention`，并把内部 snapshot 的辅助 `landmarks_crop_px` 统一规范化为 `crop_norm × 255`。这不会改写 HLMF 发布物，也不会改变归一化训练目标或 image-space 坐标。
 

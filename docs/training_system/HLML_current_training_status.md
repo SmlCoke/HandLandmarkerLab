@@ -1,6 +1,10 @@
-# HLML 当前状态（2026-08-17）
+# HLML 当前状态（2026-08-18）
 
 ## 代码与流程
+
+2026-08-18 已同步 HLMF `c7c2972` 的 `v1-mobilenet_v3_large` HCF 数据契约。当前 HCF teacher ID 为 `hand-classifier-v1-mobilenet_v3_large`；HaMeR direct teacher ID 随其仓库锁定提交更新为 `hamer-cvpr24-official-b29f1b3`。HCF 仍只通过每行 handedness/presence teacher provenance 进入 HLML，`hlmf_dataset_v1`、ROI、21 点、训练张量和五份公共 YAML 均未变化。
+
+现有 Iris-1.1 Eos-2.0/HCF0813 snapshot、checkpoint、Val/Test 白名单和 mining 计划继续保持只读，不因上游模型替换而重建。新增 warehouse 契约用例已验证当前 HCF 与 HaMeR teacher ID、`hamer_inference` 和 rescue provenance 无损进入新 snapshot；旧 0814/0813/0809 teacher ID 仍作为既有资产 provenance 原样读取。HLML 环境依赖未变化。
 
 2026-08-17 已同步 HLMF `a571511` 的 HaMeR 第三标注后端数据契约。HLML warehouse 原本即按 `dict(row)` 保留非内部字段且不硬编码 `label_origin/teacher_model_id`，因此不改变 `hlmf_dataset_v1`、训练张量或阶段配置；新增契约测试明确覆盖 `hamer/hamer_openpose21_v1` direct 行、`hamer_inference`、HCF0814 teacher ID、`hamer_geometry_rescue` 和 HaMeR TFLite rescue。Direct `crop_px=norm×255` 与 rescue `crop_px=norm×256` 均通过审计并规范化为 snapshot canonical `norm×255`。
 

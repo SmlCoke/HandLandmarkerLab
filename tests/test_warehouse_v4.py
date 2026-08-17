@@ -723,11 +723,11 @@ class WarehouseV4Tests(unittest.TestCase):
                     "source": "hamer_official_cvpr24",
                     "label_origin": "hamer",
                     "annotation_style": "hamer_openpose21_v1",
-                    "teacher_model_id": "hamer-cvpr24-official-603105f",
-                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
-                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
+                    "teacher_model_id": "hamer-cvpr24-official-b29f1b3",
+                    "handedness_teacher_model_id": "hand-classifier-v1-mobilenet_v3_large",
+                    "hand_presence_teacher_model_id": "hand-classifier-v1-mobilenet_v3_large",
                     "hamer_inference": {
-                        "model_id": "hamer-cvpr24-official-603105f",
+                        "model_id": "hamer-cvpr24-official-b29f1b3",
                         "device": "cuda",
                         "rescale": 0.75,
                         "flipped": True,
@@ -751,8 +751,8 @@ class WarehouseV4Tests(unittest.TestCase):
                     "label_origin": "mediapipe",
                     "annotation_style": "mediapipe_tflite_rescue_v1",
                     "teacher_model_id": "mediapipe-hand-landmark-full-tflite",
-                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
-                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
+                    "handedness_teacher_model_id": "hand-classifier-v1-mobilenet_v3_large",
+                    "hand_presence_teacher_model_id": "hand-classifier-v1-mobilenet_v3_large",
                     "hamer_geometry_rescue": {
                         "attempted": True,
                         "accepted": True,
@@ -793,7 +793,7 @@ class WarehouseV4Tests(unittest.TestCase):
             self.assertEqual("hamer", direct["label_origin"])
             self.assertEqual("hamer_openpose21_v1", direct["annotation_style"])
             self.assertEqual(
-                "hamer-cvpr24-official-603105f", direct["teacher_model_id"]
+                "hamer-cvpr24-official-b29f1b3", direct["teacher_model_id"]
             )
             self.assertEqual(0.75, direct["hamer_inference"]["rescale"])
             self.assertEqual(
@@ -802,7 +802,7 @@ class WarehouseV4Tests(unittest.TestCase):
             )
             self.assertTrue(rescued["hamer_geometry_rescue"]["accepted"])
             self.assertEqual(
-                "hand-classifier-handedness-handpresence-0814",
+                "hand-classifier-v1-mobilenet_v3_large",
                 rescued["hand_presence_teacher_model_id"],
             )
             self.assertEqual(

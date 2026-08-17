@@ -4,6 +4,8 @@
 
 `iris-1.1-geometry-eos2-hcf0813-r1` 的 geometry、multitask、两阶段固定 ROI Val、EOS 2.0 原图 infer 与 multitask export 均已完成；`neg-eos_2.0-hcf0813-hp0.5` 已作为 16,910 条真负样本发布。当前目标是在同一 snapshot 下分轮挖掘困难 ROI，经 HLMF CVAT 1.1 精修与通用 Gold 发布后，准备 multi-finetune。
 
+HLMF 当前 HCF 已更新为 `v1-mobilenet_v3_large`。这不改变上述冻结成员；只有后续显式选择新发布 dataset/source/variant 并创建新 snapshot 时，才接收 `hand-classifier-v1-mobilenet_v3_large` provenance。
+
 ## 执行顺序
 
 1. 已完成负样本发布与真实 multitask data audit：Train 91,135（positive 74,225、negative 16,910）、Val 6,937、Test 2,342，成员错误为 0。
@@ -26,3 +28,4 @@
 - 可选 recorded Gold 必须是新录制 train 数据，含人工确认 positive/negative，不能取自既有 PretrainSource/EValSource；其发布 ID 同样长期可复用。
 - 既有 EValSource/PretrainSource manifest、完整标注链路、质量门控和负样本发布合同必须继续通过回归测试。
 - HaMeR 行只改变 landmark teacher provenance，不改变 `256×256` 灰度 ROI、21 点、presence/handedness 或训练目标契约；禁止根据 teacher 类型静默改变采样权重。
+- 新 HCF 发布行必须无损保留 `hand-classifier-v1-mobilenet_v3_large` teacher ID；不得把新旧 HCF provenance 合并、回填或用于改写当前 Iris-1.1 snapshot/checkpoint。
