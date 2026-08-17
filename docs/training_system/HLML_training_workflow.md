@@ -24,7 +24,7 @@ make environment-check
 
 HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 与新录制的 `GoldSource/ReviewedDatasets` 使用各自来源 ROI；GoldSource 负样本和困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
 
-HLMF 内部的 Palm/HCF 版本不属于这条训练数据边界。当前 HLMF 默认 EOS 2.0（Palm 输入 `[1,1,224,384]`，矩形特征层与 Anchor）和 HCF `handedness-handpresence-0813`，但发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 EOS 原始输入、Anchor 张量或连接长度门控阈值；只有独立的 `make infer` 需要实现同一套 EOS 2.0 前处理与解码。EOS 2.0 的 near/mid 能力边界由 HLMF 在标注和发布前执行，HLML 不重复实现距离门控。
+HLMF 内部的 Palm/HCF/landmark teacher 版本不属于这条训练数据边界。最新版 HLMF 默认 Eos-2.1 + HCF0814 + RTMPose，并支持 MediaPipe Tasks 与 HaMeR 独立后端；发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 Eos 原始输入、Anchor 张量、HaMeR checkpoint 或连接长度门控阈值，也不根据 teacher 类型改变训练目标。当前 Iris-1.1 冻结 snapshot 和独立 `make infer` 仍使用 Eos-2.0 契约；HLMF 的最新 Eos-2.1 near/mid 能力边界在标注和发布前执行，HLML 不重复实现距离门控。
 
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
@@ -148,9 +148,9 @@ make data-audit HLML_STAGE=multi_finetune
 6. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
 7. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
 
-HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`。新发布行的两个 HCF 字段可记录 `hand-classifier-handedness-handpresence-0813`；历史 Gold 中的 0809 ID 仍按原值保留。读取器不硬编码某个 HCF 版本，因此版本更新不会在 HLML 入库时丢失 provenance。
+HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`、`hamer_inference`、`hamer_geometry_rescue`。HaMeR direct 行使用 `hamer/hamer_openpose21_v1`，TFLite rescue 行仍使用 `mediapipe/mediapipe_tflite_rescue_v1`；HCF 字段可记录当前 0814 或历史 0813/0809。读取器不硬编码 teacher/HCF 版本，因此版本更新不会在 HLML 入库时丢失 provenance。
 
-HLMF 当前有两种等价的辅助 crop-pixel 表示：常规 MediaPipe/RTMPose 行满足 `crop_px = crop_norm × 255`，`mediapipe_tflite_rescue_v1` 行满足连续 crop extent 约定 `crop_px = crop_norm × 256`。两者的实际训练目标都是同一 `landmarks_crop_norm`。HLML warehouse 审计要求整行严格匹配其中一种约定，不匹配任一种即失败；随后记录 `warehouse_crop_pixel_convention`，并把内部 snapshot 的辅助 `landmarks_crop_px` 统一规范化为 `crop_norm × 255`。这不会改写 HLMF 发布物，也不会改变归一化训练目标或 image-space 坐标。
+HLMF 当前有两种等价的辅助 crop-pixel 表示：常规 MediaPipe/RTMPose/HaMeR 行满足 `crop_px = crop_norm × 255`，`mediapipe_tflite_rescue_v1` 行满足连续 crop extent 约定 `crop_px = crop_norm × 256`。两者的实际训练目标都是同一 `landmarks_crop_norm`。HLML warehouse 审计要求整行严格匹配其中一种约定，不匹配任一种即失败；随后记录 `warehouse_crop_pixel_convention`，并把内部 snapshot 的辅助 `landmarks_crop_px` 统一规范化为 `crop_norm × 255`。这不会改写 HLMF 发布物，也不会改变归一化训练目标或 image-space 坐标。
 
 完整性检查使用稳定 ID、SQLite、文件路径、尺寸与解码，不对数据集图片反复计算 SHA-256。
 
@@ -469,10 +469,12 @@ make help
 双仓库合成验收：
 
 ```bash
-make acceptance-smoke
+make acceptance-smoke \
+  HLMF_REPO=/root/HandLandmarksFab \
+  HLMF_PYTHON=/root/miniconda3/envs/anfab/bin/python
 ```
 
-该命令运行 HLMF contract 测试、HLML 合成 warehouse 的三阶段/固定 ROI 测试，并解析全部公共配置；合成接口覆盖部分发布的 EOS 2.0 proposal variant、同一 dataset 按 source 白名单跨 variant 组集、HCF 0813 双头 teacher ID、TFLite rescue 的 `norm×256` 上游 crop-pixel 约定及 canonical 规范化、HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath` 与可选几何补救字段，不使用真实 Test 选择模型。Palm 解码回归测试另行校验 `[1,1,224,384]`、840 Anchor、矩形输出映射和全局 NMS。
+该命令使用 `HLMF_PYTHON` 在 HLMF 自己的 `anfab` 环境运行 contract 测试，再用当前 HLML 环境运行合成 warehouse 的三阶段/固定 ROI 测试并解析全部公共配置；两仓依赖不混装。合成接口覆盖部分发布的 EOS 2.0 proposal variant、同一 dataset 按 source 白名单跨 variant 组集、HCF 0813/0814 双头 teacher ID、HaMeR direct provenance 与 `hamer_inference`、HaMeR/RTMPose TFLite rescue 的 `norm×256` 上游 crop-pixel 约定及 canonical 规范化、HLMF 独立 published 图片、`source_crop_relpath`/`published_relpath` 与两类可选几何补救字段，不使用真实 Test 选择模型。Palm 解码回归测试另行校验 `[1,1,224,384]`、840 Anchor、矩形输出映射和全局 NMS。
 
 ## 15. `configs/datasets.yaml` 参数说明
 

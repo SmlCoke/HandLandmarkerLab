@@ -1,6 +1,10 @@
-# HLML 当前状态（2026-08-16）
+# HLML 当前状态（2026-08-17）
 
 ## 代码与流程
+
+2026-08-17 已同步 HLMF `a571511` 的 HaMeR 第三标注后端数据契约。HLML warehouse 原本即按 `dict(row)` 保留非内部字段且不硬编码 `label_origin/teacher_model_id`，因此不改变 `hlmf_dataset_v1`、训练张量或阶段配置；新增契约测试明确覆盖 `hamer/hamer_openpose21_v1` direct 行、`hamer_inference`、HCF0814 teacher ID、`hamer_geometry_rescue` 和 HaMeR TFLite rescue。Direct `crop_px=norm×255` 与 rescue `crop_px=norm×256` 均通过审计并规范化为 snapshot canonical `norm×255`。
+
+现有 Iris-1.1 Eos-2.0/HCF0813 snapshot、checkpoint、Val/Test 白名单和下一轮 mining 成员均未改写；HaMeR 发布变体只有在以后显式加入 `configs/datasets.yaml` 并使用新 snapshot ID 审计时才会进入训练。完整 HLML 单元测试现为 195 项通过（7 项环境相关测试跳过）；双仓 acceptance 使用独立 HLMF `anfab` Python 后，HLMF 79 项、HLML warehouse 16 项及公共 config check 全部通过。`make help` 的两处 shell 特殊字符也已改为跨平台普通文本。
 
 HLML 4.0 已对齐最新版 HLMF 3.0 manifest 接口和三阶段 v2 训练契约。PretrainSource/EValSource 原位读取来源 ROI；HLMF published negative 与 CVAT-reviewed hard dataset 读取独立图片副本；新录制的 reviewed Gold positive/negative 从 `GoldSource/ReviewedDatasets` 读取。旧 `Selections` 已发布资产仍可兼容读取，既有 PretrainSource/EValSource 合同未被迁移或改写。HLML 的 `HAND_TRAIN_ROOT` 仍只写索引和训练产物。
 

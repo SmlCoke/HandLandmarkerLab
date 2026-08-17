@@ -33,7 +33,7 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：一个或多个 HLMF 已发布的 Pretrain/Eval dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset。操作：在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant、可选 `capture_source_ids` 白名单和 `weight`。没有白名单时，同一 manifest 中没有发布所选 variant 的历史 source 会被跳过；有白名单时，每个 source 必须存在、属于目标 split 并发布所选 variant。near/mid/far 能力由 HLMF 在发布前限制。当前 Iris-1.1 已冻结三个 HCF0813 Train dataset、五条 Eos-2.0 Val source 与两条 Eos-2.0 Test source；Eos-1.0 只可单独做 legacy/stress 回放。输出：只确定成员关系；negative/hard 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
+输入：一个或多个 HLMF 已发布的 Pretrain/Eval dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset。操作：在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant、可选 `capture_source_ids` 白名单和 `weight`。没有白名单时，同一 manifest 中没有发布所选 variant 的历史 source 会被跳过；有白名单时，每个 source 必须存在、属于目标 split 并发布所选 variant。near/mid/far 能力由 HLMF 在发布前限制。RTMPose、MediaPipe 或 HaMeR 只通过每行 provenance 区分，HLML 不需要单独 backend 配置；HaMeR direct 的 `norm×255` 与 TFLite rescue 的 `norm×256` 均在审计后规范化。当前 Iris-1.1 已冻结三个 HCF0813 Train dataset、五条 Eos-2.0 Val source 与两条 Eos-2.0 Test source；Eos-1.0 只可单独做 legacy/stress 回放。输出：只确定成员关系；negative/hard 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
 
 ## 2. 配置解析（Config Check）
 
@@ -156,7 +156,9 @@ make infer HLML_STAGE=multi_finetune
 make environment-check
 make compile
 make test
-make acceptance-smoke
+make acceptance-smoke \
+  HLMF_REPO=/root/HandLandmarksFab \
+  HLMF_PYTHON=/root/miniconda3/envs/anfab/bin/python
 make help
 ```
 

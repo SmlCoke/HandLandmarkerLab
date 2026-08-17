@@ -537,7 +537,7 @@ def _head_points(row: MutableMapping[str, Any]) -> None:
     else:
         convention = "missing_regenerated_from_norm"
     # HLML's canonical model target is landmarks_crop_norm. HLMF's regular
-    # MediaPipe/RTMPose paths publish crop pixels on 0..255, while the current
+    # MediaPipe/RTMPose/HaMeR paths publish crop pixels on 0..255, while the current
     # TFLite geometry-rescue worker publishes the same normalized target on
     # the continuous 0..256 crop extent. Validate either upstream convention,
     # record it, and normalize this auxiliary canonical field to 0..255.

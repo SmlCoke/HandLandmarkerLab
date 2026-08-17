@@ -703,6 +703,113 @@ class WarehouseV4Tests(unittest.TestCase):
                 rescued["landmarks_crop_px"][0]["x"],
             )
 
+    def test_hamer_and_hamer_rescue_provenance_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            warehouse = SyntheticWarehouse(root / "dataset")
+            manifest_path = (
+                warehouse.root
+                / "PretrainSource"
+                / "train-set"
+                / "dataset_manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            labels_path = warehouse.root / manifest["capture_sources"][0][
+                "published_variants"
+            ][0]["labels_relpath"]
+            rows = read_jsonl(labels_path)
+            rows[0].update(
+                {
+                    "source": "hamer_official_cvpr24",
+                    "label_origin": "hamer",
+                    "annotation_style": "hamer_openpose21_v1",
+                    "teacher_model_id": "hamer-cvpr24-official-603105f",
+                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
+                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
+                    "hamer_inference": {
+                        "model_id": "hamer-cvpr24-official-603105f",
+                        "device": "cuda",
+                        "rescale": 0.75,
+                        "flipped": True,
+                        "bbox_size": 256.0,
+                        "clipped_coordinate_values": 0,
+                        "handedness_source": "hand_classifier",
+                    },
+                }
+            )
+            rows[0]["landmarks_crop_px"] = [
+                {
+                    "id": point["id"],
+                    "x": point["x"] * 255.0,
+                    "y": point["y"] * 255.0,
+                }
+                for point in rows[0]["landmarks_crop_norm"]
+            ]
+            rows[1].update(
+                {
+                    "source": "mediapipe_hand_landmarker_full_tflite_hamer_rescue",
+                    "label_origin": "mediapipe",
+                    "annotation_style": "mediapipe_tflite_rescue_v1",
+                    "teacher_model_id": "mediapipe-hand-landmark-full-tflite",
+                    "handedness_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
+                    "hand_presence_teacher_model_id": "hand-classifier-handedness-handpresence-0814",
+                    "hamer_geometry_rescue": {
+                        "attempted": True,
+                        "accepted": True,
+                        "trigger_errors": [
+                            "hamer_boundary_coordinate_values:2>=2"
+                        ],
+                        "result_errors": [],
+                        "model_id": "mediapipe-hand-landmark-full-tflite",
+                    },
+                }
+            )
+            rows[1]["landmarks_crop_px"] = [
+                {
+                    "id": point["id"],
+                    "x": point["x"] * 256.0,
+                    "y": point["y"] * 256.0,
+                }
+                for point in rows[1]["landmarks_crop_norm"]
+            ]
+            write_jsonl(labels_path, rows)
+
+            build_snapshot(
+                warehouse.config(),
+                warehouse.root,
+                root / "train",
+                "hamer",
+                "geometry",
+            )
+            snapshot_rows = read_jsonl(
+                root / "train" / "snapshots" / "hamer" / "geometry" / "train.jsonl"
+            )
+            direct = next(
+                row for row in snapshot_rows if row["roi_id"] == rows[0]["roi_id"]
+            )
+            rescued = next(
+                row for row in snapshot_rows if row["roi_id"] == rows[1]["roi_id"]
+            )
+            self.assertEqual("hamer", direct["label_origin"])
+            self.assertEqual("hamer_openpose21_v1", direct["annotation_style"])
+            self.assertEqual(
+                "hamer-cvpr24-official-603105f", direct["teacher_model_id"]
+            )
+            self.assertEqual(0.75, direct["hamer_inference"]["rescale"])
+            self.assertEqual(
+                "pixel_index_0_to_size_minus_1",
+                direct["warehouse_crop_pixel_convention"],
+            )
+            self.assertTrue(rescued["hamer_geometry_rescue"]["accepted"])
+            self.assertEqual(
+                "hand-classifier-handedness-handpresence-0814",
+                rescued["hand_presence_teacher_model_id"],
+            )
+            self.assertEqual(
+                "crop_extent_0_to_size",
+                rescued["warehouse_crop_pixel_convention"],
+            )
+
     def test_hlmf_crop_pixel_coordinates_must_match_a_supported_convention(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

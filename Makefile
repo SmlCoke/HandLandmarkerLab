@@ -8,6 +8,7 @@ HLML_EXPERIMENT_ID ?= v4-r1
 HLML_RELEASE_ID ?= v4-r1
 HLML_STAGE ?= geometry
 HLMF_REPO ?= ../../datasets/HandLandmarkerFab
+HLMF_PYTHON ?= $(PYTHON)
 DATASETS_CONFIG ?= configs/datasets.yaml
 TRAINING_CONFIG ?= configs/training.yaml
 EVALUATION_CONFIG ?= configs/evaluation.yaml
@@ -31,7 +32,7 @@ EXPORT_ARGS ?=
 
 help:
 	@echo HLML 4.0 - HLMF warehouse IDs, zero-copy snapshots, fixed-ROI evaluation
-	@echo   make data-audit HLML_STAGE=geometry^|multitask^|multi_finetune
+	@echo   make data-audit HLML_STAGE=geometry,multitask,multi_finetune
 	@echo   make geometry              Audit and train positive-only geometry
 	@echo   make multitask             Audit and train from geometry plus published true negatives
 	@echo   make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
@@ -39,14 +40,14 @@ help:
 	@echo   make val                   Evaluate fixed reviewed Val Hand ROIs only
 	@echo   make freeze-winner         Freeze the only Val-selected winner descriptor
 	@echo   make locked-test           Evaluate that winner once on fixed reviewed Test ROIs
-	@echo   make infer                 Folder inference; Palm is used only to generate Hand ROIs
+	@echo   make infer                 Folder inference where Palm only generates Hand ROIs
 	@echo   make export                Export v2 ONNX, A1 checks, and conversion NPY datasets
 	@echo   make environment-check     Check the server environment
 	@echo   make config-check          Parse all five single-purpose public configs
 	@echo   make acceptance-smoke      Run HLMF contracts plus synthetic three-stage/fixed-ROI acceptance
 	@echo   make test                  Run complete unit tests
 	@echo   make compile               Syntax-check Python sources
-	@echo Evaluation never runs Palm and does not report Palm misses or original-image cascade metrics.
+	@echo Evaluation never runs Palm, and it does not report Palm misses or original-image cascade metrics.
 
 paths:
 	@echo HAND_DATASET_ROOT=$(HAND_DATASET_ROOT)
@@ -95,7 +96,7 @@ config-check:
 	$(CLI) $(ROOT_ARGS) config-check
 
 acceptance-smoke:
-	$(MAKE) -C "$(HLMF_REPO)" compile test
+	$(MAKE) -C "$(HLMF_REPO)" PYTHON="$(HLMF_PYTHON)" compile test
 	$(PYTHON) -B -m unittest tests.test_warehouse_v4
 	$(CLI) $(ROOT_ARGS) config-check
 
