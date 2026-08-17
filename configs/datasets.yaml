@@ -7,16 +7,16 @@ stages:
   geometry:
     datasets:
       - dataset_id: FullEnhance0801
-        proposal_variant: eos_2.1-hamer-v1mv3l-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r2
         weight: 1.0
       - dataset_id: FullEnhance0803
-        proposal_variant: eos_2.1-hamer-v1mv3l-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r2
         weight: 1.0
       - dataset_id: FullEnhance0810
-        proposal_variant: eos_2.1-hamer-v1mv3l-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r2
         weight: 1.0
       - dataset_id: FullEnhance0817
-        proposal_variant: eos_2.1-hamer-v1mv3l-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r2
         weight: 1.0
 
   multitask:
