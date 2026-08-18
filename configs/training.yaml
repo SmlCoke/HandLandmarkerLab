@@ -4,7 +4,7 @@ stage: pretrain
 profile: "${HLML_STAGE:-geometry}"
 
 experiment:
-  name: "hlml_v4_${HLML_STAGE:-geometry}"
+  name: "iris_${HLML_MODEL_VERSION:-v3-pro}_${HLML_STAGE:-geometry}"
   seed: 20260801
 
 environment:
@@ -16,8 +16,8 @@ environment:
 
 data:
   data_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/train.jsonl"
-  curation_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/snapshot.json"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/train.jsonl"
+  curation_manifest: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/snapshot.json"
   require_curation_schema: hlml_warehouse_snapshot_v1
   require_schema_version: hlml_warehouse_train_v1
   require_training_stage: pretrain
@@ -34,7 +34,7 @@ data:
   cache: false
 
 model:
-  version: v2
+  version: "${HLML_MODEL_VERSION:-v3-pro}"
   checkpoint_stage: pretrain
   input_shape: [1, 256, 256]
   input_layout: NCHW
@@ -127,7 +127,7 @@ augmentation:
 
 validation:
   enabled: true
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/val.jsonl"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/val.jsonl"
   crop_path_key: crop_path
   path_policy: canonical_crop_path_only
   allowed_crop_roots: ["${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"]
@@ -135,7 +135,7 @@ validation:
   every_epochs: 1
 
 outputs:
-  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}"
+  run_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/${HLML_STAGE:-geometry}"
   overwrite: false
 
 runtime:
@@ -147,9 +147,9 @@ profiles:
   geometry: {}
 
   multitask:
-    experiment: {name: hlml_v4_multitask}
+    experiment: {name: "iris_${HLML_MODEL_VERSION:-v3-pro}_multitask"}
     training:
-      initial_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/geometry/checkpoints/best.weights.h5"
+      initial_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/geometry/checkpoints/best.weights.h5"
       max_wall_time_hours: null
       periodic_checkpoint: {enabled: false}
       optimizer: {learning_rate: 0.00005}
@@ -177,12 +177,12 @@ profiles:
 
   multi_finetune:
     stage: finetune
-    experiment: {name: hlml_v4_multi_finetune}
+    experiment: {name: "iris_${HLML_MODEL_VERSION:-v3-pro}_multi_finetune"}
     data: {require_training_stage: finetune}
     model: {checkpoint_stage: finetune}
     training:
       epochs: 40
-      initial_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/multitask/checkpoints/best.weights.h5"
+      initial_checkpoint: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/multitask/checkpoints/best.weights.h5"
       max_wall_time_hours: null
       gold_fraction: 0.55
       optimizer: {learning_rate: 0.00005}

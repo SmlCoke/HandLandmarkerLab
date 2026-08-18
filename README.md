@@ -1,8 +1,8 @@
 # HandLandmarkerLab（HLML 4.0）
 
-HLML 是 Hand Landmarker v2 的训练、固定 ROI 评估和 ONNX/A1 导出系统。4.0 直接读取 HLMF 3.0 在 `HAND_DATASET_ROOT` 发布的 manifest；`HAND_TRAIN_ROOT` 只保存零拷贝索引快照、报告、checkpoint 与导出物。
+HLML 是 Iris Hand Landmarker 的训练、固定 ROI 评估、文件夹级联推理和 ONNX/A1 导出系统。系统直接读取 HLMF 3.0 在 `HAND_DATASET_ROOT` 发布的 manifest；`HAND_TRAIN_ROOT` 只保存零拷贝索引快照、报告、checkpoint 与导出物。
 
-本次升级不兼容旧配置、旧数据契约或旧命令。模型结构、ROI 几何、训练损失、checkpoint 以及 ONNX/A1 接口保持 v2 契约，不引入辅助 head 或结构实验。
+Iris v3 提供 `v3-pro`、`v3-max`、`v3-lite` 三档结构，并保留 `v2` 不变。`v3-pro` 与 v2 同构；`v3-max` 使用四个 Conv/Depthwise+BN 训练分支以及可融合的 1x1/identity BN 分支，部署时折叠回与 v2 相同的单分支参数量；`v3-lite` 缩减通道。三档均保持固定输入、三输出语义、ROI 几何、loss 和 A1 接口。
 
 公共配置保持最少且单一职责：`datasets.yaml` 管数据成员，`training.yaml` 管三阶段训练，`evaluation.yaml` 管固定 ROI Val/Test，`inference.yaml` 管原图文件夹推理，`deploy.yaml` 管 ONNX/A1 模型与配套转换数据导出。
 
@@ -25,13 +25,31 @@ HLML 是 Hand Landmarker v2 的训练、固定 ROI 评估和 ONNX/A1 导出系�
 - [固定 ROI 评估](docs/training_system/tools/evaluation.md)
 - [部署契约](docs/training_system/tools/deployment_contract.md)
 
+## Iris v3 选择与训练前导出
+
+配置默认使用 `v3-pro`。三台克隆服务器分别设置：
+
+```bash
+export HLML_MODEL_VERSION=v3-pro   # 另两台使用 v3-max / v3-lite
+export HLML_SNAPSHOT_ID=iris-v3-data-r1
+export HLML_EXPERIMENT_ID=iris-v3-pro-r1
+make config-check
+make data-audit HLML_STAGE=geometry
+make export-preflight HLML_STAGE=geometry
+make geometry
+```
+
+`make export-preflight` 在没有正式 checkpoint 时生成未训练 ONNX、contract 和 `model_conversion/datasets.zip`，只用于 A1 图/算子兼容性检查，不代表精度模型。文件夹推理默认使用 `palm_detector/eos-2.1/model_opt.onnx` 和 `/root/autodl-tmp/DatesetFab/InferSource/0718/images`。
+
 ## 公共入口
 
 ```bash
 make help
 make config-check
+make export-preflight HLML_STAGE=geometry
 make data-audit HLML_STAGE=geometry
 make geometry
+make infer HLML_STAGE=geometry
 make multitask
 make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
 make multi-finetune

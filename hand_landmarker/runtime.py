@@ -35,9 +35,10 @@ class CascadeDetection:
 
 
 def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Validate and resolve the single current v2 runtime schema."""
+    """Validate and resolve the fixed-I/O Hand runtime schema."""
 
     from .config import resolve_path
+    from models.hand_landmarker.registry import DEFAULT_VERSION, available_versions
 
     value = copy.deepcopy(dict(config))
     obsolete_roots = sorted(set(value) & {"dataset", "paths", "pipeline"})
@@ -66,8 +67,13 @@ def normalize_runtime_config(config: Mapping[str, Any]) -> Mapping[str, Any]:
             raise ValueError("model.output_sizes must remain landmarks=42, hand_flag=1, handedness=1")
         if "checkpoint" in model_config:
             raise ValueError("model.checkpoint is obsolete; use hand.model_path")
-        if str(model_config.get("version", "v2")).lower() != "v2":
-            raise ValueError("Only model.version: v2 is supported")
+        version = str(model_config.get("version", DEFAULT_VERSION)).strip().lower()
+        if version not in available_versions():
+            raise ValueError(
+                "model.version must be one of {}; got {!r}".format(
+                    ", ".join(available_versions()), version
+                )
+            )
 
     hand = value.setdefault("hand", {})
     if hand.get("model_path"):
@@ -330,7 +336,7 @@ def create_hand_predictor(config: Mapping[str, Any]):
         configure_tensorflow_runtime(config)
         return KerasHandPredictor(
             weights_path=str(hand_config["model_path"]),
-            model_version=str(config.get("model", {}).get("version", "v2")),
+            model_version=str(config.get("model", {}).get("version", "v3-pro")),
             num_iterations=config.get("model", {}).get("num_iterations", 8),
         )
     if backend == "onnx":

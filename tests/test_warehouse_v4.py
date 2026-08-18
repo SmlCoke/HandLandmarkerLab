@@ -876,6 +876,14 @@ class WarehouseV4Tests(unittest.TestCase):
         _, report = _assert_membership([base, other_variant])
         self.assertIn("multiple proposal variants", report["errors"][0])
 
+        published_negative = dict(
+            other_variant,
+            roi_id="roi-negative",
+            negative_dataset_id="neg-set",
+        )
+        _, report = _assert_membership([base, published_negative])
+        self.assertEqual([], report["errors"])
+
     def test_mining_is_train_only_and_reports_sources(self):
         with tempfile.TemporaryDirectory() as temp:
             warehouse = SyntheticWarehouse(Path(temp) / "dataset")

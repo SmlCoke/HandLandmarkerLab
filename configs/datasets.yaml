@@ -54,9 +54,7 @@ stages:
         weight: 1.0
     # Optional newly recorded, CVAT-reviewed positive+negative Gold datasets.
     gold_datasets: []
-    hard_datasets:
-      - hard_dataset_id: "${HLML_HARD_DATASET_ID:-replace-me-hard-dataset}"
-        weight: 1.0
+    hard_datasets: []
     negative_datasets:
       - negative_dataset_id: "${HLML_NEGATIVE_DATASET_ID:-neg-eos_2.0-hcf0813-hp0.5}"
         weight: 1.0
@@ -118,7 +116,7 @@ evaluation:
       capture_source_ids:
         - white-mid-bright-open-test-s02-soar
         - white-near-bright-fist-test-s02-soar
-
+      weight: 1.0
 policies:
   performer_cross_split: warn
   image_integrity: stable_id_registry_size_dimensions_decode

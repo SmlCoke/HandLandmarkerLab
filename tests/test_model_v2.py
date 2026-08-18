@@ -10,9 +10,9 @@ HAS_TENSORFLOW = importlib.util.find_spec("tensorflow") is not None
 
 
 class V2StaticContractTests(unittest.TestCase):
-    def test_registry_exposes_only_v2(self):
-        self.assertEqual("v2", DEFAULT_VERSION)
-        self.assertEqual(("v2",), available_versions())
+    def test_registry_exposes_v2_and_v3_family(self):
+        self.assertEqual("v3-pro", DEFAULT_VERSION)
+        self.assertEqual(("v2", "v3-lite", "v3-max", "v3-pro"), available_versions())
 
     def test_v2_source_has_no_leaky_relu_and_defines_fusion(self):
         text = (ROOT / "models" / "hand_landmarker" / "v2.py").read_text(encoding="utf-8")

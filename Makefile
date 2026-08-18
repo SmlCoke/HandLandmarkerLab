@@ -3,10 +3,11 @@
 PYTHON ?= python
 HAND_DATASET_ROOT ?= /root/autodl-tmp/DatesetFab
 HAND_TRAIN_ROOT ?= /root/autodl-tmp/TrainFab/HLML-4.0
-HLML_SNAPSHOT_ID ?= v4-r1
-HLML_EXPERIMENT_ID ?= v4-r1
-HLML_RELEASE_ID ?= v4-r1
+HLML_SNAPSHOT_ID ?= iris-v3-data-r1
+HLML_EXPERIMENT_ID ?= iris-v3-pro-r1
+HLML_RELEASE_ID ?= iris-v3-pro-r1
 HLML_STAGE ?= geometry
+HLML_MODEL_VERSION ?= v3-pro
 HLMF_REPO ?= ../../datasets/HandLandmarkerFab
 HLMF_PYTHON ?= $(PYTHON)
 DATASETS_CONFIG ?= configs/datasets.yaml
@@ -15,7 +16,7 @@ EVALUATION_CONFIG ?= configs/evaluation.yaml
 INFERENCE_CONFIG ?= configs/inference.yaml
 DEPLOY_CONFIG ?= configs/deploy.yaml
 
-export HAND_DATASET_ROOT HAND_TRAIN_ROOT HLML_SNAPSHOT_ID HLML_EXPERIMENT_ID HLML_RELEASE_ID HLML_STAGE
+export HAND_DATASET_ROOT HAND_TRAIN_ROOT HLML_SNAPSHOT_ID HLML_EXPERIMENT_ID HLML_RELEASE_ID HLML_STAGE HLML_MODEL_VERSION
 
 CLI := $(PYTHON) -B scripts/hlml.py --datasets-config "$(DATASETS_CONFIG)" --training-config "$(TRAINING_CONFIG)" --evaluation-config "$(EVALUATION_CONFIG)" --inference-config "$(INFERENCE_CONFIG)" --deploy-config "$(DEPLOY_CONFIG)"
 ROOT_ARGS := --dataset-root "$(HAND_DATASET_ROOT)" --train-root "$(HAND_TRAIN_ROOT)" --snapshot-id "$(HLML_SNAPSHOT_ID)"
@@ -27,8 +28,9 @@ FREEZE_ARGS ?=
 TEST_ARGS ?=
 INFER_ARGS ?=
 EXPORT_ARGS ?=
+PREFLIGHT_ARGS ?=
 
-.PHONY: help paths data-audit geometry multitask mine-hard multi-finetune val freeze-winner locked-test infer export environment-check config-check acceptance-smoke test test-unit compile
+.PHONY: help paths data-audit geometry multitask mine-hard multi-finetune val freeze-winner locked-test infer export export-preflight environment-check config-check acceptance-smoke test test-unit compile
 
 help:
 	@echo HLML 4.0 - HLMF warehouse IDs, zero-copy snapshots, fixed-ROI evaluation
@@ -41,7 +43,8 @@ help:
 	@echo   make freeze-winner         Freeze the only Val-selected winner descriptor
 	@echo   make locked-test           Evaluate that winner once on fixed reviewed Test ROIs
 	@echo   make infer                 Folder inference where Palm only generates Hand ROIs
-	@echo   make export                Export v2 ONNX, A1 checks, and conversion NPY datasets
+	@echo   make export                Export selected Iris architecture and conversion datasets
+	@echo   make export-preflight      Before training, export untrained ONNX plus datasets.zip
 	@echo   make environment-check     Check the server environment
 	@echo   make config-check          Parse all five single-purpose public configs
 	@echo   make acceptance-smoke      Run HLMF contracts plus synthetic three-stage/fixed-ROI acceptance
@@ -54,6 +57,7 @@ paths:
 	@echo HAND_TRAIN_ROOT=$(HAND_TRAIN_ROOT)
 	@echo HLML_SNAPSHOT_ID=$(HLML_SNAPSHOT_ID)
 	@echo HLML_EXPERIMENT_ID=$(HLML_EXPERIMENT_ID)
+	@echo HLML_MODEL_VERSION=$(HLML_MODEL_VERSION)
 	@echo HLML_RELEASE_ID=$(HLML_RELEASE_ID)
 
 data-audit:
@@ -88,6 +92,9 @@ infer:
 
 export:
 	$(CLI) $(ROOT_ARGS) export $(EXPORT_ARGS)
+export-preflight:
+	$(CLI) $(ROOT_ARGS) export-preflight $(PREFLIGHT_ARGS)
+
 
 environment-check:
 	$(CLI) $(ROOT_ARGS) environment-check

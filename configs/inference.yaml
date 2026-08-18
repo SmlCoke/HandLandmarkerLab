@@ -2,7 +2,7 @@ schema_version: 1
 task: infer_folder
 
 input:
-  images_dir: "${HLML_INFER_INPUT:-/root/autodl-tmp/TrainFab/HLML-4.0/inference/input}"
+  images_dir: "${HLML_INFER_INPUT:-/root/autodl-tmp/DatesetFab/InferSource/0718/images}"
   recursive: true
   extensions: [.png, .jpg, .jpeg, .tif, .tiff, .bmp]
   rotate_clockwise: false
@@ -10,7 +10,7 @@ input:
 
 palm:
   models_root: palm_detector
-  model_id: "${HLML_PALM_MODEL_ID:-eos-2.0}"
+  model_id: "${HLML_PALM_MODEL_ID:-eos-2.1}"
   model_filename: model_opt.onnx
   input_width: 384
   input_height: 224
@@ -44,7 +44,7 @@ hand_roi:
   rotation_convention: board_wrist_to_middle_mcp
 
 model:
-  version: v2
+  version: "${HLML_MODEL_VERSION:-v3-pro}"
   checkpoint_stage: "${HLML_CHECKPOINT_STAGE:-pretrain}"
   input_shape: [1, 256, 256]
   input_layout: NCHW
@@ -57,7 +57,7 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
 
 inference:
   batch_size: 64
@@ -65,7 +65,7 @@ inference:
   fail_fast: false
 
 output:
-  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/inference/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/inference/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/${HLML_STAGE:-geometry}"
   write_annotated_images: true
   write_jsonl: true
   draw_palm_box: true

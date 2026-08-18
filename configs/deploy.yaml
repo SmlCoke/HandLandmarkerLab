@@ -4,7 +4,7 @@ task: export_onnx
 # This file is intentionally deployment-export-only: ONNX/A1 artifacts and
 # their conversion datasets. Evaluation and inference use separate configs.
 model:
-  version: v2
+  version: "${HLML_MODEL_VERSION:-v3-pro}"
   checkpoint_stage: "${HLML_CHECKPOINT_STAGE:-pretrain}"
   input_shape: [1, 256, 256]
   input_layout: NCHW
@@ -17,10 +17,10 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
 
 export:
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/export/${HLML_STAGE:-geometry}/hand_landmarker_v2.onnx"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/export/${HLML_STAGE:-geometry}/hand_landmarker_${HLML_MODEL_VERSION:-v3-pro}.onnx"
   opset: 11
   input_name: inputs
   output_names: [landmarks, hand_flag, handedness]
@@ -51,8 +51,8 @@ export:
   conversion_datasets:
     enabled: true
     data_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
-    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/export/${HLML_STAGE:-geometry}/model_conversion"
-    selection_salt: hand-landmarker-conversion-v2
+    output_dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/export/${HLML_STAGE:-geometry}/model_conversion"
+    selection_salt: "hand-landmarker-conversion-${HLML_MODEL_VERSION:-v3-pro}"
     input:
       shape: [1, 1, 256, 256]
       layout: NCHW
@@ -63,19 +63,19 @@ export:
         minimum_count: 20
         sources:
           train:
-            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/train.jsonl"
+            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/train.jsonl"
             count: 100
             stratify_by: [dataset_id, capture_source_id, sample_type]
       evaluate_datasets:
         minimum_count: 10
         sources:
           val:
-            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/val.jsonl"
+            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/val.jsonl"
             split: val
             count: 25
             stratify_by: [dataset_id, capture_source_id, handedness.label]
           test:
-            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/test.jsonl"
+            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/test.jsonl"
             split: test
             count: 25
             stratify_by: [dataset_id, capture_source_id, handedness.label]

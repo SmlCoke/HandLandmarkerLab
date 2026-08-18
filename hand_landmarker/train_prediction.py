@@ -118,7 +118,7 @@ def predict_training_labels(
         raise ValueError("Training prediction input is empty")
     actual_predictor = predictor or KerasHandPredictor(
         weights_path=str(checkpoint_path),
-        model_version=str(model_config.get("version", "v2")),
+        model_version=str(model_config.get("version", "v3-pro")),
         num_iterations=model_config.get("num_iterations", [2, 2, 3, 4, 4, 6, 6]),
     )
     predictions = predict_rows(rows, actual_predictor, batch_size=batch_size)
@@ -128,7 +128,7 @@ def predict_training_labels(
         row["source_labels_sha256"] = labels_sha256
         row["checkpoint_sha256"] = checkpoint_sha256
         row["checkpoint_stage"] = "geometry"
-        row["model_version"] = str(model_config.get("version", "v2"))
+        row["model_version"] = str(model_config.get("version", "v3-pro"))
     write_jsonl(output_path, predictions)
     report = {
         "status": "ok",

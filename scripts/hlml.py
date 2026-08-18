@@ -43,7 +43,7 @@ def _parser() -> argparse.ArgumentParser:
         "--train-root",
         default=os.environ.get("HAND_TRAIN_ROOT", "/root/autodl-tmp/TrainFab/HLML-4.0"),
     )
-    parser.add_argument("--snapshot-id", default=os.environ.get("HLML_SNAPSHOT_ID", "v4-r1"))
+    parser.add_argument("--snapshot-id", default=os.environ.get("HLML_SNAPSHOT_ID", "iris-v3-data-r1"))
     sub = parser.add_subparsers(dest="command", required=True)
 
     audit = sub.add_parser("data-audit", help="Build a zero-copy audited stage snapshot")
@@ -63,19 +63,24 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("eval-val", help="Evaluate the configured model on fixed reviewed Val ROIs")
     freeze = sub.add_parser("freeze-winner", help="Freeze the single Val-selected winner")
-    freeze.add_argument("--release-id", default=os.environ.get("HLML_RELEASE_ID", "v4-r1"))
+    freeze.add_argument("--release-id", default=os.environ.get("HLML_RELEASE_ID", "iris-v3-pro-r1"))
     freeze.add_argument("--metrics")
     freeze.add_argument("--checkpoint")
     freeze.add_argument("--stage", choices=["geometry", "multitask", "multi_finetune"], required=True)
 
     test = sub.add_parser("eval-test", help="Run the frozen winner once on locked Test")
-    test.add_argument("--release-id", default=os.environ.get("HLML_RELEASE_ID", "v4-r1"))
+    test.add_argument("--release-id", default=os.environ.get("HLML_RELEASE_ID", "iris-v3-pro-r1"))
     infer = sub.add_parser("infer", help="Run folder inference (Palm plus Hand)")
     infer.add_argument(
         "--palm-model-id",
         help="Temporarily override palm.model_id for this inference run",
     )
     sub.add_parser("export", help="Export and audit ONNX plus conversion datasets for A1")
+    preflight = sub.add_parser(
+        "export-preflight",
+        help="Export an untrained selected architecture plus A1 conversion datasets",
+    )
+    preflight.add_argument("--output-dir")
     sub.add_parser("environment-check", help="Check the training environment")
     sub.add_parser("config-check", help="Parse every public configuration profile")
     return parser
@@ -133,14 +138,14 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 args.checkpoint
                 or Path(args.train_root)
                 / "runs"
-                / os.environ.get("HLML_EXPERIMENT_ID", "v4-r1")
+                / os.environ.get("HLML_EXPERIMENT_ID", "iris-v3-pro-r1")
                 / "multitask"
                 / "checkpoints"
                 / "best.weights.h5"
             )
             predictor = KerasHandPredictor(
                 weights_path=str(checkpoint),
-                model_version=str(config["model"].get("version", "v2")),
+                model_version=str(config["model"].get("version", "v3-pro")),
                 num_iterations=config["model"].get("num_iterations", [2, 2, 3, 4, 4, 6, 6]),
             )
         return mine_hard_sources(
@@ -160,7 +165,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         metrics = Path(args.metrics) if args.metrics else (
             Path(args.train_root)
             / "runs"
-            / os.environ.get("HLML_EXPERIMENT_ID", "v4-r1")
+            / os.environ.get("HLML_EXPERIMENT_ID", "iris-v3-pro-r1")
             / "eval"
             / args.stage
             / "val"
@@ -169,7 +174,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         checkpoint = Path(args.checkpoint) if args.checkpoint else (
             Path(args.train_root)
             / "runs"
-            / os.environ.get("HLML_EXPERIMENT_ID", "v4-r1")
+            / os.environ.get("HLML_EXPERIMENT_ID", "iris-v3-pro-r1")
             / args.stage
             / "checkpoints"
             / "best.weights.h5"
@@ -192,6 +197,34 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
             config.setdefault("palm", {})["model_id"] = args.palm_model_id
             config.setdefault("palm", {}).pop("model_path", None)
         return infer_folder_from_config(config)
+    if args.command == "export-preflight":
+        config = _runtime_config(args.deploy_config)
+        model_version = str(config.get("model", {}).get("version", "v3-pro"))
+        output_root = (
+            Path(args.output_dir).resolve()
+            if args.output_dir
+            else Path(args.train_root).resolve()
+            / "preflight"
+            / model_version
+            / os.environ.get("HLML_STAGE", "geometry")
+        )
+        weights_path = output_root / "untrained-{}.weights.h5".format(model_version)
+        export_path = output_root / "hand_landmarker_{}_untrained.onnx".format(
+            model_version
+        )
+        config.setdefault("hand", {}).update(
+            {"backend": "keras", "model_path": str(weights_path)}
+        )
+        export_config = config.setdefault("export", {})
+        export_config["model_path"] = str(export_path)
+        export_config["preflight_untrained"] = True
+        export_config["overwrite"] = True
+        export_config.setdefault("conversion_datasets", {})["output_dir"] = str(
+            output_root / "model_conversion"
+        )
+        from scripts.build_export_preflight import build_preflight_bundle
+
+        return build_preflight_bundle(config)
     if args.command == "export":
         return export_from_config(_runtime_config(args.deploy_config))
     if args.command == "environment-check":

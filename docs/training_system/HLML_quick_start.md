@@ -10,11 +10,14 @@
 cd /path/to/HandLandmarkerLab
 conda env create -f environment.yml
 conda activate hand-landmarker-tf29
+readonly CUDA_LIBRARY_DIR=/usr/local/cuda-11.2/targets/x86_64-linux/lib
+export LD_LIBRARY_PATH="$CUDA_LIBRARY_DIR:/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export TORCH_CUDNN_V8_API_DISABLED=1
 python -m pip check
 make environment-check
 ```
 
-已有环境时只执行 `conda activate hand-landmarker-tf29`。
+已有环境时仍需激活 `hand-landmarker-tf29`，并在当前 shell 设置上述三项 CUDA 环境变量。
 
 ## 0. 设置运行身份
 
@@ -23,9 +26,10 @@ make environment-check
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
 export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
-export HLML_SNAPSHOT_ID=v4-r1
-export HLML_EXPERIMENT_ID=v4-r1
-export HLML_RELEASE_ID=v4-r1
+export HLML_MODEL_VERSION=v3-pro  # 另两台依次设为 v3-max / v3-lite
+export HLML_SNAPSHOT_ID=iris-v3-data-r1
+export HLML_EXPERIMENT_ID=iris-v3-pro-r1
+export HLML_RELEASE_ID=iris-v3-pro-r1
 cd /path/to/HandLandmarkerLab
 ```
 
@@ -33,7 +37,7 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：一个或多个 HLMF 已发布的 Pretrain/Eval dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset。操作：在 `configs/datasets.yaml` 的对应列表中逐项填写 ID、variant、可选 `capture_source_ids` 白名单和 `weight`。没有白名单时，同一 manifest 中没有发布所选 variant 的历史 source 会被跳过；有白名单时，每个 source 必须存在、属于目标 split 并发布所选 variant。near/mid/far 能力与当前 `v1-mobilenet_v3_large` HCF 质量门控由 HLMF 在发布前执行。RTMPose、MediaPipe 或 HaMeR 只通过每行 provenance 区分，HLML 不需要单独 backend/HCF 配置；HaMeR direct 的 `norm×255` 与 TFLite rescue 的 `norm×256` 均在审计后规范化。当前 Iris-1.1 已冻结三个 HCF0813 Train dataset、五条 Eos-2.0 Val source 与两条 Eos-2.0 Test source，不因上游 HCF 替换而重建；新发布行可携带 `hand-classifier-v1-mobilenet_v3_large`，应使用新 snapshot ID 显式纳入。Eos-1.0 只可单独做 legacy/stress 回放。输出：只确定成员关系；negative/hard 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
+输入：HLMF 已发布的 Pretrain/Eval dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset。当前 v3 正样本使用 `FullEnhance0801/0803/0810/0817` 的 Eos-2.1 + HaMeR r4 变体；Val/Test 使用配置中四个 Eval dataset 的冻结成员；multitask 负样本固定为完整已发布集 `neg-eos_2.0-hcf0813-hp0.5`。正样本和负样本分别执行 proposal variant 唯一性门禁，因此允许保留各自发布时的 Eos-2.1 与 Eos-2.0；split、raw image、ROI ID、Registry 和图片解码门禁不放宽。当前尚无已发布 hard dataset，`hard_datasets` 保持空列表。输出：只确定成员关系；negative/hard 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
 
 ## 2. 配置解析（Config Check）
 
@@ -43,19 +47,29 @@ cd /path/to/HandLandmarkerLab
 make config-check
 ```
 
+## 2.1 训练前 ONNX/A1 预检查
+
+输入：选定的 v3 结构与 geometry snapshot，不需要正式 checkpoint。输出：未训练的单分支 ONNX、contract、A1 审计报告和 `model_conversion/datasets.zip`，只判断图与算子可部署性，不代表精度。
+
+```bash
+export HLML_STAGE=geometry
+export HLML_MODEL_VERSION=v3-pro   # 分别替换为 v3-max、v3-lite
+make export-preflight
+```
+
 ## 3. Geometry 阶段
 
-输入：`FullEnhance0801`、`FullEnhance0803`、`FullEnhance0810` 的 `eos_2.0-rtmpose-hcf0813-gate` positive 和 geometry profile，固定 Val/Test 由 `configs/datasets.yaml` 的 source 白名单选择。处理：先生成零拷贝 snapshot；TFLite rescue 的 `norm×256` 上游辅助 crop-pixel 表示会在严格核对后规范化为 HLML canonical `norm×255`，归一化训练目标不变；再按 100% `POS_RUNTIME` 训练 v2 几何。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
+输入：四个 Eos-2.1 + HaMeR r4 Train positive dataset 和 geometry profile，固定 Val/Test 由 `configs/datasets.yaml` 选择。处理：先生成零拷贝 snapshot，再按 100% `POS_RUNTIME` 训练所选 v3 结构。2026-08-18 审计计数为 Train 82,902、Val 14,411、Test 5,343，membership errors 为 0。输出：`snapshots/<id>/geometry/` 和 `runs/<experiment>/geometry/checkpoints/best.weights.h5`。本阶段禁止负样本。
 
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
 export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
-export HLML_SNAPSHOT_ID=iris-1.1-geometry-eos2-hcf0813-r1
-export HLML_EXPERIMENT_ID=iris-1.1-geometry-eos2-hcf0813-r1
+export HLML_SNAPSHOT_ID=iris-v3-data-r1
+export HLML_EXPERIMENT_ID=iris-v3-pro-r1
 export HLML_STAGE=geometry
 make geometry
 make val HLML_STAGE=geometry
-export HLML_INFER_INPUT=/path/to/representative/images
+export HLML_INFER_INPUT=/root/autodl-tmp/DatesetFab/InferSource/0718/images
 make infer HLML_STAGE=geometry
 ```
 
@@ -63,16 +77,16 @@ make infer HLML_STAGE=geometry
 
 ## 4. Multitask 阶段
 
-输入：`iris-1.1-geometry-eos2-hcf0813-r1` 的 geometry winner、三个 HCF0813 Train positive dataset 和已发布负样本集 `neg-eos_2.0-hcf0813-hp0.5`。处理：按 90% `POS_RUNTIME`、10% `NEG_LOW_PALM_CANDIDATE` 训练 landmarks、presence、handedness 多任务；输出：同一 ID 下的 `snapshots/<id>/multitask/` 和 `runs/<experiment>/multitask/checkpoints/best.weights.h5`。
+输入：同一模型版本的 geometry winner、四个 Eos-2.1 + HaMeR r4 Train positive dataset 和完整已发布负样本集 `neg-eos_2.0-hcf0813-hp0.5`。两类数据按独立 proposal variant 域审计后合并；2026-08-18 审计计数为 Train 99,812（82,902 positive + 16,910 negative）、Val 14,411、Test 5,343，membership errors 为 0。处理：按 90% `POS_RUNTIME`、10% `NEG_LOW_PALM_CANDIDATE` 训练 landmarks、presence、handedness 多任务。
 
 ```bash
-export HLML_SNAPSHOT_ID=iris-1.1-geometry-eos2-hcf0813-r1
-export HLML_EXPERIMENT_ID=iris-1.1-geometry-eos2-hcf0813-r1
+export HLML_SNAPSHOT_ID=iris-v3-data-r1
+export HLML_EXPERIMENT_ID=iris-v3-pro-r1
 export HLML_NEGATIVE_DATASET_ID=neg-eos_2.0-hcf0813-hp0.5
 export HLML_STAGE=multitask
 make multitask
 make val HLML_STAGE=multitask
-export HLML_INFER_INPUT=/path/to/representative/images
+export HLML_INFER_INPUT=/root/autodl-tmp/DatesetFab/InferSource/0718/images
 make infer HLML_STAGE=multitask
 make export HLML_STAGE=multitask
 ```
@@ -97,7 +111,7 @@ make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
 ```bash
 make multi-finetune
 make val HLML_STAGE=multi_finetune
-export HLML_INFER_INPUT=/path/to/representative/images
+export HLML_INFER_INPUT=/root/autodl-tmp/DatesetFab/InferSource/0718/images
 make infer HLML_STAGE=multi_finetune
 make export HLML_STAGE=multi_finetune
 ```
@@ -130,7 +144,7 @@ make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID="$HLML_RELEASE_ID"
 
 ## 10. ONNX/A1 导出
 
-输入：multitask 或 multi-finetune v2 checkpoint、当前 stage snapshot 和 export profile。处理：导出 opset 11 ONNX、审计 A1 算子/数值，并生成 Train 100、Val 25、Test 25 个 NCHW `.npy`。输出：`runs/<experiment>/export/<stage>/` 下的 ONNX、contract/report 和 `model_conversion/datasets.zip`。
+输入：所选 `HLML_MODEL_VERSION` 的 multitask 或 multi-finetune checkpoint、当前 stage snapshot 和 export profile。处理：先将训练多分支精确融合为单分支，再导出 opset 11 ONNX、审计 A1 算子/数值，并生成 Train 100、Val 25、Test 25 个 NCHW `.npy`。输出：`runs/<experiment>/export/<stage>/` 下的 ONNX、contract/report 和 `model_conversion/datasets.zip`。
 
 ```bash
 make export HLML_STAGE=multi_finetune
@@ -138,13 +152,13 @@ make export HLML_STAGE=multi_finetune
 
 ## 11. 可选文件夹推理（Folder Inference）
 
-输入：任意原图文件夹、HLMF EOS 2.0 ONNX 和 Hand checkpoint。先将 HLMF 模型部署为 HLML 约定文件名；处理使用 `[1,1,224,384]`、840 个矩形 Anchor 和全局 NMS，再沿用原 Hand ROI 几何运行 Hand。这不是 Val/Test 协议。输出：`inference/<experiment>/multi_finetune/` 的 JSONL、summary 和可视化。
+输入：原图文件夹（默认 `/root/autodl-tmp/DatesetFab/InferSource/0718/images`）、HLMF Eos-2.1 ONNX 和 Hand checkpoint。先将 HLMF 模型部署为 HLML 约定文件名；处理使用 `[1,1,224,384]`、840 个矩形 Anchor 和全局 NMS，再沿用原 Hand ROI 几何运行 Hand。这不是 Val/Test 协议。
 
 ```bash
-mkdir -p palm_detector/eos-2.0
-cp /path/to/HandLandmarksFab/models/palm_detector/eos-2.0/model_384x224_opt.onnx \
-  palm_detector/eos-2.0/model_opt.onnx
-export HLML_INFER_INPUT=/path/to/images
+mkdir -p palm_detector/eos-2.1
+cp /root/HandLandmarksFab/models/palm_detector/eos-2.1/model_384x224_opt.onnx \
+  palm_detector/eos-2.1/model_opt.onnx
+export HLML_INFER_INPUT=/root/autodl-tmp/DatesetFab/InferSource/0718/images
 make infer HLML_STAGE=multi_finetune
 ```
 

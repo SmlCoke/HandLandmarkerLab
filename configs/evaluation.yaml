@@ -5,7 +5,7 @@ split: val
 
 data:
   data_root: "${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"
-  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/val.jsonl"
+  labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/val.jsonl"
   crop_path_key: crop_path
   path_policy: canonical_crop_path_only
   allowed_crop_roots: ["${HAND_DATASET_ROOT:-/root/autodl-tmp/DatesetFab}"]
@@ -14,7 +14,7 @@ data:
   channels: 1
 
 model:
-  version: v2
+  version: "${HLML_MODEL_VERSION:-v3-pro}"
   checkpoint_stage: "${HLML_CHECKPOINT_STAGE:-pretrain}"
   input_shape: [1, 256, 256]
   input_layout: NCHW
@@ -27,7 +27,7 @@ model:
 
 hand:
   backend: keras
-  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
+  model_path: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/${HLML_STAGE:-geometry}/checkpoints/best.weights.h5"
 
 evaluation:
   mode: roi
@@ -40,7 +40,7 @@ inference:
   batch_size: 128
 
 output:
-  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-v4-r1}/eval/${HLML_STAGE:-geometry}/val"
+  dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/runs/${HLML_EXPERIMENT_ID:-iris-v3-pro-r1}/eval/${HLML_STAGE:-geometry}/val"
   overwrite: false
 
 runtime:
@@ -53,10 +53,10 @@ profiles:
   test:
     split: test
     data:
-      labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-v4-r1}/${HLML_STAGE:-geometry}/test.jsonl"
+      labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/test.jsonl"
     evaluation:
       tune_thresholds: false
       threshold_sweep: []
     output:
-      dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/releases/${HLML_RELEASE_ID:-v4-r1}/test"
+      dir: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/releases/${HLML_RELEASE_ID:-iris-v3-pro-r1}/test"
       overwrite: false

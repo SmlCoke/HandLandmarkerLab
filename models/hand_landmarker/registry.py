@@ -11,8 +11,13 @@ from importlib import import_module
 from typing import Any, Tuple
 
 
-DEFAULT_VERSION = "v2"
-_MODEL_MODULES = {"v2": "models.hand_landmarker.v2"}
+DEFAULT_VERSION = "v3-pro"
+_MODEL_MODULES = {
+    "v2": "models.hand_landmarker.v2",
+    "v3-pro": "models.hand_landmarker.v3.pro",
+    "v3-max": "models.hand_landmarker.v3.max",
+    "v3-lite": "models.hand_landmarker.v3.lite",
+}
 
 
 def available_versions() -> Tuple[str, ...]:

@@ -632,7 +632,7 @@ def canonical_record(
 def _assert_membership(rows: Sequence[Mapping[str, Any]]) -> Tuple[List[str], Dict[str, Any]]:
     split_by_capture: Dict[str, set[str]] = defaultdict(set)
     split_by_raw: Dict[str, set[str]] = defaultdict(set)
-    variants_by_capture: Dict[str, set[str]] = defaultdict(set)
+    variants_by_capture: Dict[Tuple[str, str], set[str]] = defaultdict(set)
     performer_splits: Dict[str, set[str]] = defaultdict(set)
     roi_ids: Counter[str] = Counter()
     for row in rows:
@@ -643,7 +643,11 @@ def _assert_membership(rows: Sequence[Mapping[str, Any]]) -> Tuple[List[str], Di
         performer = _capture_fields(capture)["performer"]
         split_by_capture[capture].add(split)
         split_by_raw[raw_id].add(split)
-        variants_by_capture[capture].add(variant)
+        # Published negatives preserve the proposal variant that produced them.
+        # Their immutable negative dataset is audited separately from the
+        # selected PretrainSource positive proposal domain.
+        variant_domain = "negative" if row.get("negative_dataset_id") else "source"
+        variants_by_capture[(capture, variant_domain)].add(variant)
         performer_splits[performer].add(split)
         roi_ids[str(row.get("roi_id") or row.get("crop_id"))] += 1
     errors = []
@@ -651,7 +655,7 @@ def _assert_membership(rows: Sequence[Mapping[str, Any]]) -> Tuple[List[str], Di
         for identity, splits in mapping.items():
             if len(splits) > 1:
                 errors.append("{} {} crosses splits: {}".format(label, identity, sorted(splits)))
-    for capture, variants in variants_by_capture.items():
+    for (capture, _variant_domain), variants in variants_by_capture.items():
         if len(variants) > 1:
             errors.append(
                 "capture source {} selects multiple proposal variants: {}".format(

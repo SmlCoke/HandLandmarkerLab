@@ -21,7 +21,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
             {path.name for path in CONFIGS.glob("*.yaml")},
         )
 
-    def test_three_training_profiles_keep_v2_model(self) -> None:
+    def test_three_training_profiles_default_to_v3_pro(self) -> None:
         for stage, checkpoint_stage in (
             ("geometry", "pretrain"),
             ("multitask", "pretrain"),
@@ -32,7 +32,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
             ):
                 config = load_config(CONFIGS / "training.yaml")
                 self.assertEqual(stage, config["resolved_profile"])
-                self.assertEqual("v2", config["model"]["version"])
+                self.assertEqual("v3-pro", config["model"]["version"])
                 self.assertEqual(checkpoint_stage, config["model"]["checkpoint_stage"])
                 self.assertEqual(checkpoint_stage, config["stage"])
                 self.assertEqual([2, 2, 3, 4, 4, 6, 6], config["model"]["num_iterations"])
@@ -53,27 +53,27 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertEqual(0.55, stage["hard_fraction"])
         self.assertEqual(0.45, stage["replay_fraction"])
         self.assertGreater(stage["replay_fraction"], 0.0)
-        self.assertIn("hard_dataset_id", stage["hard_datasets"][0])
+        self.assertEqual([], stage["hard_datasets"])
         self.assertEqual([], stage["gold_datasets"])
         self.assertIn("negative_dataset_id", config["stages"]["multitask"]["negative_datasets"][0])
 
-    def test_dataset_config_freezes_iris_1_1_membership_and_variants(self) -> None:
+    def test_dataset_config_freezes_iris_v3_membership_and_variants(self) -> None:
         config = load_config(CONFIGS / "datasets.yaml")
         for stage in ("geometry", "multitask", "multi_finetune"):
             self.assertEqual(
-                {"FullEnhance0801", "FullEnhance0803", "FullEnhance0810"},
+                {"FullEnhance0801", "FullEnhance0803", "FullEnhance0810", "FullEnhance0817"},
                 {entry["dataset_id"] for entry in config["stages"][stage]["datasets"]},
             )
             self.assertEqual(
-                {"eos_2.0-rtmpose-hcf0813-gate"},
+                {"eos_2.1-hamer-v1mv3l-gate-r4"},
                 {entry["proposal_variant"] for entry in config["stages"][stage]["datasets"]},
             )
         self.assertEqual(
-            {"eos_2.0-rtmpose-hcf0813-gate", "eos_2.0-rtmpose-gate"},
+            {"eos_2.1-hamer-v1mv3l"},
             {entry["proposal_variant"] for entry in config["evaluation"]["val"]},
         )
         self.assertEqual(
-            ["eos_2.0-rtmpose-gate"],
+            ["eos_2.1-hamer-v1mv3l", "eos_2.1-hamer-v1mv3l"],
             [entry["proposal_variant"] for entry in config["evaluation"]["test"]],
         )
         self.assertTrue(
@@ -97,9 +97,9 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertFalse(test["evaluation"]["tune_thresholds"])
         self.assertFalse(test["output"]["overwrite"])
 
-    def test_export_retains_static_v2_a1_contract(self) -> None:
+    def test_export_retains_static_v3_a1_contract(self) -> None:
         config = load_config(CONFIGS / "deploy.yaml")
-        self.assertEqual("v2", config["model"]["version"])
+        self.assertEqual("v3-pro", config["model"]["version"])
         self.assertEqual([1, 256, 256], config["model"]["input_shape"])
         self.assertTrue(config["export"]["strict_a1_operators"])
         self.assertFalse(config["export"]["dynamic_batch"])
@@ -116,7 +116,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         config = load_config(CONFIGS / "inference.yaml")
         self.assertEqual("infer_folder", config["task"])
         self.assertIn("palm", config)
-        self.assertEqual("eos-2.0", config["palm"]["model_id"])
+        self.assertEqual("eos-2.1", config["palm"]["model_id"])
         self.assertEqual(384, config["palm"]["input_width"])
         self.assertEqual(224, config["palm"]["input_height"])
         self.assertEqual("palm_detector", config["palm"]["models_root"])
@@ -138,6 +138,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
             "locked-test:",
             "export:",
             "acceptance-smoke:",
+            "export-preflight:",
         ):
             self.assertIn(target, text)
         for obsolete in ("pretrain-curate:", "eval-test-geometry:", "finetune-train:"):

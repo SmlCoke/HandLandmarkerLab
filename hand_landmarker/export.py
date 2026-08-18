@@ -509,7 +509,7 @@ def export_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    model_version = str(model_config.get("version", "v2"))
+    model_version = str(model_config.get("version", "v3-pro"))
     training_model = build_model(
         model_version,
         num_iterations=model_config.get("num_iterations", 8),

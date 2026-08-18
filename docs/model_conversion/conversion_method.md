@@ -131,7 +131,14 @@ datasets/
 
 ## 3. 当前 HLML 4.0 的自动生成方式
 
-Multitask 或 multi-finetune 完成后，在同一 snapshot、experiment、stage 下执行：
+先用所选 v3 结构执行训练前图兼容检查；该命令不需要 checkpoint，产物不得作为精度模型：
+
+```bash
+export HLML_MODEL_VERSION=v3-pro  # 依次替换为 v3-max、v3-lite
+make export-preflight HLML_STAGE=geometry
+```
+
+Multitask 或 multi-finetune 完成后，在同一 model version、snapshot、experiment、stage 下导出正式 winner：
 
 ```bash
 make export HLML_STAGE=multitask
@@ -139,7 +146,7 @@ make export HLML_STAGE=multitask
 make export HLML_STAGE=multi_finetune
 ```
 
-`configs/deploy.yaml` 默认启用 `export.conversion_datasets`。流程先导出并验证 ONNX，再从当前 stage 的零拷贝 snapshot 只读抽样：
+`configs/deploy.yaml` 通过 `HLML_MODEL_VERSION` 选择 `v3-pro`、`v3-max`、`v3-lite` 或历史 `v2`，默认启用 `export.conversion_datasets`。正式流程先把训练多分支融合成部署单分支，再导出并验证 ONNX，最后从当前 stage 的零拷贝 snapshot 只读抽样：
 
 - `calibrate_datasets`：从 Train 分层稳定抽取 100 个样本；
 - `evaluate_datasets`：从 Val、Test 各抽取 25 个样本，共 50 个；
@@ -153,8 +160,8 @@ make export HLML_STAGE=multi_finetune
 
 ```text
 ${HAND_TRAIN_ROOT}/runs/<experiment_id>/export/<stage>/
-├── hand_landmarker_v2.onnx
-├── hand_landmarker_v2.contract.json
+├── hand_landmarker_<model_version>.onnx
+├── hand_landmarker_<model_version>.contract.json
 └── model_conversion/
     ├── datasets/
     │   ├── calibrate_datasets/

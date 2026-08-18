@@ -10,6 +10,9 @@ HLML 4.0 继续使用 Conda 环境 `hand-landmarker-tf29`，其依赖由仓库�
 cd /path/to/HandLandmarkerLab
 conda env create -f environment.yml
 conda activate hand-landmarker-tf29
+readonly CUDA_LIBRARY_DIR=/usr/local/cuda-11.2/targets/x86_64-linux/lib
+export LD_LIBRARY_PATH="$CUDA_LIBRARY_DIR:/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export TORCH_CUDNN_V8_API_DISABLED=1
 python -m pip check
 make environment-check
 ```
@@ -24,14 +27,15 @@ make environment-check
 
 HLML 直接读取 HLMF 3.0 已发布的 manifest，并从 `HAND_DATASET_ROOT` 加载 `256×256` Hand ROI。PretrainSource/EValSource 与新录制的 `GoldSource/ReviewedDatasets` 使用各自来源 ROI；GoldSource 负样本和困难样本使用 HLMF 在 published 目录内生成的独立图片副本。`HAND_TRAIN_ROOT` 只保存索引快照、训练报告、checkpoint、评估结果和导出物，不再复制任何数据集图片。
 
-HLMF 内部的 Palm/HCF/landmark teacher 版本不属于这条训练数据边界。最新版 HLMF 默认 Eos-2.1 + `v1-mobilenet_v3_large` HCF + RTMPose，并支持 MediaPipe Tasks 与 HaMeR 独立后端；发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。因此训练、固定 ROI 评估不接收 Eos 原始输入、Anchor 张量、HaMeR checkpoint 或 HCF/连接长度门控阈值，也不根据 teacher 类型改变训练目标。当前 Iris-1.1 冻结 snapshot 和独立 `make infer` 仍使用 Eos-2.0/HCF0813 契约；HLMF 的最新 Eos-2.1 near/mid 能力边界与 HCF 模型专属质量门控在标注和发布前执行，HLML 不重复实现这些门控。
+HLMF 内部的 Palm/HCF/landmark teacher 版本不属于训练数据边界。当前 v3 数据选择使用 Eos-2.1 + HaMeR + `v1-mobilenet_v3_large` 发布变体；`multitask` 明确复用独立审核发布的 `neg-eos_2.0-hcf0813-hp0.5`。发布给 HLML 的接口仍是 `hlmf_dataset_v1`、单通道 `256×256` ROI、manifest/JSONL/Registry 与教师溯源字段。正样本 proposal 域和已发布负样本域分别执行单 variant 门禁，因此二者可保留各自生成时的 Eos 版本；split、raw image、ROI ID、Registry 与图片解码仍统一严格审计。文件夹级联 `make infer` 默认使用 Eos-2.1。
 
 ```bash
 export HAND_DATASET_ROOT=/root/autodl-tmp/DatesetFab
 export HAND_TRAIN_ROOT=/root/autodl-tmp/TrainFab/HLML-4.0
-export HLML_SNAPSHOT_ID=v4-r1
-export HLML_EXPERIMENT_ID=v4-r1
-export HLML_RELEASE_ID=v4-r1
+export HLML_MODEL_VERSION=v3-pro
+export HLML_SNAPSHOT_ID=iris-v3-data-r1
+export HLML_EXPERIMENT_ID=iris-v3-pro-r1
+export HLML_RELEASE_ID=iris-v3-pro-r1
 cd /path/to/HandLandmarkerLab
 ```
 
@@ -61,6 +65,17 @@ HAND_TRAIN_ROOT/
 
 评估严格限制在 HLMF 已生成并经 CVAT 复核的固定 Hand ROI：Val/Test 不运行 Palm Detector、不从原图重建 ROI、不统计 Palm 漏检，也不报告原图级联准确率。`make infer` 是独立的文件夹级联推理工具，不属于 Val/Test 协议。
 
+## 1.1 Iris v3 模型系列与选择
+
+所有版本输入均为 NCHW `[1,1,256,256]`，输出顺序均为 `landmarks[42]`、`hand_flag[1]`、`handedness[1]`。配置文件通过 `HLML_MODEL_VERSION` 统一选择训练、固定 ROI 评估、推理和导出所用结构：
+
+- `v3-pro`：直接复用未修改的 v2 构建和 Conv/Depthwise+BN 融合实现；训练参数 1,951,756，部署参数 1,912,324。
+- `v3-max`：每个普通卷积使用 4 个 Conv+BN 分支并在适用处增加 identity BN；每个 3x3 depthwise 使用 4 个 3x3+BN、一个 1x1+BN 和 identity BN。训练参数 7,629,268，部署时数学融合为单分支 1,912,324，训练/部署参数比 3.99。
+- `v3-lite`：保持拓扑、非线性、下采样和 head 不变，将 stage 通道改为 `16,24,40,80,112,160,224`；训练参数 878,272，部署参数 852,832。
+- `v2`：历史结构入口继续保留且代码不改动。
+
+三台克隆服务器分别设置 `HLML_MODEL_VERSION=v3-pro|v3-max|v3-lite`，并使用不同 `HLML_EXPERIMENT_ID`；`HLML_SNAPSHOT_ID`、数据配置、stage 和训练超参数保持一致，才能进行结构对照。该选择不改变训练阶段和数据合同。
+
 ## 2. 阶段零：通过 ID 选择数据
 
 阶段名：Dataset Selection。
@@ -77,7 +92,7 @@ HAND_TRAIN_ROOT/
 - `stages.multi_finetune.gold_datasets` → `GoldSource/ReviewedDatasets/<dataset_id>/dataset_manifest.json`；只能是新录制、按 Eval 同款自动标注 + CVAT 人工复核后发布的 train Gold，允许 positive 与 negative。
 - `evaluation.val/test` → `EValSource/<dataset_id>/dataset_manifest.json` 中相应 split。
 
-当前 Iris-1.1 geometry 成员示例（正式配置已写入 `configs/datasets.yaml`）：
+以下 Iris-1.1/Eos-2.0 片段仅是历史选择示例，不是当前 v3 配置；当前成员必须以 `configs/datasets.yaml` 和当次 data audit 为准：
 
 ```yaml
 stages:
@@ -141,12 +156,13 @@ make data-audit HLML_STAGE=multi_finetune
 处理：
 
 1. 解析新来源名 `<background>-<distance>-<lighting>-<condition>-<split>-<session>-<performer>`。
-2. 检查 capture source 和 raw image 不跨 Train/Val/Test。
-3. 对每个 dataset 只读取包含所选 `proposal_variant` 的 capture source；同一 manifest 中仅发布其他历史 variant 的 source 会被跳过。配置 `capture_source_ids` 后则要求白名单逐项精确命中，不允许缺失 source、错误 split 或未发布目标 variant。目标 split 至少要有一个所选 variant，且同一 source 不得重复发布同名 variant。
-4. 要求 dataset、negative dataset 与 selection manifest 使用当前 HLMF `hlmf_dataset_v1` schema，并核对 `roi_id`、registry 记录、相对路径和 dataset/source/split 字段。
-5. negative dataset 与 selection 必须声明 `image_policy=copied_review_and_published_images`；negative 直接读取 `published_relpath`，selection 先用 `source_crop_relpath` 验证原 ROI 身份，再从 `published_relpath` 读取独立副本。源 ROI 图片被删除或源 variant 退役后，已发布 selection 仍可单独读取。
-6. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
-7. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
+2. 已审核发布的 negative dataset 保留其生成时的 proposal variant，并与 PretrainSource positive 分属两个 variant 唯一性域；同一域内部仍禁止同一 capture source 混用多个 variant。这一例外不放宽 split、raw image、ROI ID、Registry 或图片检查。
+3. 检查 capture source 和 raw image 不跨 Train/Val/Test。
+4. 对每个 dataset 只读取包含所选 `proposal_variant` 的 capture source；同一 manifest 中仅发布其他历史 variant 的 source 会被跳过。配置 `capture_source_ids` 后则要求白名单逐项精确命中，不允许缺失 source、错误 split 或未发布目标 variant。目标 split 至少要有一个所选 variant，且同一 source 不得重复发布同名 variant。
+5. 要求 dataset、negative dataset 与 selection manifest 使用当前 HLMF `hlmf_dataset_v1` schema，并核对 `roi_id`、registry 记录、相对路径和 dataset/source/split 字段。
+6. negative dataset 与 selection 必须声明 `image_policy=copied_review_and_published_images`；negative 直接读取 `published_relpath`，selection 先用 `source_crop_relpath` 验证原 ROI 身份，再从 `published_relpath` 读取独立副本。源 ROI 图片被删除或源 variant 退役后，已发布 selection 仍可单独读取。
+7. 限制实际训练/评估图片必须位于 `HAND_DATASET_ROOT` 内，并解码为单通道 `256×256` ROI。
+8. 人员跨 split 默认写 warning；`policies.performer_cross_split=fail` 可升级为硬错误。
 
 HLMF 行中的教师溯源字段会原样保留到 snapshot，包括 `source`、`label_origin`、`annotation_style`、`teacher_model_id`、`handedness_teacher_model_id`、`hand_presence_teacher_model_id`，以及可选的 `rtmpose_geometry_rescue`、`hamer_inference`、`hamer_geometry_rescue`。HaMeR direct 行使用 `hamer/hamer_openpose21_v1`，TFLite rescue 行仍使用 `mediapipe/mediapipe_tflite_rescue_v1`；当前 HCF teacher ID 为 `hand-classifier-v1-mobilenet_v3_large`，既有 snapshot 仍可保留 0814、0813 或 0809。读取器不硬编码 teacher/HCF 版本，因此版本更新不会在 HLML 入库时丢失 provenance。
 
@@ -182,7 +198,7 @@ make geometry
 - `configs/training.yaml` 的 geometry profile。
 - 自动审计得到的 `snapshots/<snapshot_id>/geometry/{train,val}.jsonl`。
 
-处理：命令先运行 geometry data audit，再调用现有 v2 训练器。Geometry 只学习关键点几何，配置任何 `negative_datasets` 都会被硬拒绝；本阶段不使用真负样本或 candidate negative。
+处理：命令先运行 geometry data audit，再由 registry 按 `HLML_MODEL_VERSION` 构建 v3-pro、v3-max 或 v3-lite（也可显式选择历史 v2）。Geometry 只学习关键点几何，配置任何 `negative_datasets` 都会被硬拒绝；本阶段不使用真负样本或 candidate negative。
 
 输出：
 
@@ -222,7 +238,7 @@ make multitask
 - `stages.multitask.negative_datasets` 选择的 HLMF 已发布真负样本。
 - multitask profile 和审计生成的 snapshot。
 
-处理：从 geometry winner 初始化，保留 v2 的 landmarks、presence 和 handedness 输出与现有损失；真负样本的 `negative_dataset_id` 权重进入 `sampling_weight`，用于 presence 多任务训练。未经过 HLMF 删除式复核的 candidate negative 不可使用。当前 Iris-1.1 multitask 使用 `neg-eos_2.0-hcf0813-hp0.5`；正式 snapshot 中有 74,225 条 `pseudo/POS_RUNTIME`、16,855 条 `pseudo/NEG_LOW_PALM_CANDIDATE` 和 55 条 `pseudo/NEG_RUNTIME_CANDIDATE`。本轮采样按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`，其余两类为 0；这与实际不存在 `POS_LOW_PALM` 的冻结数据一致，同时沿用不抽取 runtime candidate 的既定策略。
+处理：从同一模型版本的 geometry winner 初始化，保持 landmarks、presence、handedness 三输出与既有损失。当前 v3 配置明确使用完整已发布负样本集 `neg-eos_2.0-hcf0813-hp0.5`；其 16,910 条 Eos-2.0 负样本与 82,902 条 Eos-2.1/HaMeR r4 正样本属于两个独立 proposal 审计域，但共同保持 Train split、ROI/Registry 和图片发布合同。2026-08-18 实测 multitask snapshot 为 Train 99,812、Val 14,411、Test 5,343，membership errors 为 0。采样比例仍由 `training.yaml` 的 multitask profile 控制，正式训练前以该 snapshot 的实际 sample-type 计数为准。
 
 输出：
 
@@ -350,7 +366,7 @@ HAND_TRAIN_ROOT/runs/<experiment_id>/eval/<stage>/val/metrics.json
 命令：
 
 ```bash
-make freeze-winner HLML_STAGE=multi_finetune HLML_RELEASE_ID=v4-r1
+make freeze-winner HLML_STAGE=multi_finetune HLML_RELEASE_ID=iris-v3-pro-r1
 ```
 
 输入默认是：
@@ -381,7 +397,7 @@ HAND_TRAIN_ROOT/releases/<release_id>/winner.json
 命令：
 
 ```bash
-make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID=v4-r1
+make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID=iris-v3-pro-r1
 ```
 
 输入：`releases/<release_id>/winner.json`、其中锁定的 checkpoint、`snapshots/<snapshot_id>/<stage>/test.jsonl` 和 deploy test profile。
@@ -406,9 +422,9 @@ export HLML_INFER_INPUT=/path/to/images
 make infer HLML_STAGE=multi_finetune
 ```
 
-输入：`configs/inference.yaml` 指定的任意支持格式原图文件夹、`palm_detector/eos-2.0/model_opt.onnx` 和 Hand checkpoint。EOS 2.0 文件来自 HLMF 的 `models/palm_detector/eos-2.0/model_384x224_opt.onnx`，部署到 HLML 时按本仓目录约定改名为 `model_opt.onnx`；ONNX 文件由执行环境单独部署，不提交 Git。
+输入：`configs/inference.yaml` 指定的原图文件夹（默认 `/root/autodl-tmp/DatesetFab/InferSource/0718/images`）、`palm_detector/eos-2.1/model_opt.onnx` 和所选 `HLML_MODEL_VERSION` 的 Hand checkpoint。Eos-2.1 文件来自 HLMF 的 `models/palm_detector/eos-2.1/model_384x224_opt.onnx`，部署到 HLML 时改名为 `model_opt.onnx`；ONNX 文件由执行环境单独部署，不提交 Git。
 
-处理：EOS 2.0 将灰度原图以 `INTER_AREA` 缩放为 `384×224`，形成 float32 NCHW `[1,1,224,384]`；按 `14×24`、`7×12` 两个矩形特征层及各自两组 Anchor 解码共 840 个 Anchor，合并后执行一次全局 NMS（score `0.25`、IoU `0.10`、最多 2 手），再沿用 scale `1.8/1.8`、shift `0/-0.1` 构造 `256×256` canonical Hand ROI 并运行 v2 Hand Landmarker。EOS 1.0 的方形 `input_size`、旧 Anchor 和 `cross_head_suppress_iou` 已不再支持。这是部署前人工检查工具，不能把结果当 Val/Test fixed-ROI 指标。
+处理：Eos-2.1 将灰度原图缩放为 `384×224`，形成 float32 NCHW `[1,1,224,384]`；按 `14×24`、`7×12` 两层和各自两组 Anchor 解码共 840 个 Anchor，合并后执行一次全局 NMS（score `0.25`、IoU `0.10`、最多 2 手），再以 scale `1.8/1.8`、shift `0/-0.1` 构造 `256×256` Hand ROI 并运行选定 Iris 模型。这是部署级 smoke，不能替代固定 ROI Val/Test。
 
 输出：
 
@@ -417,6 +433,22 @@ HAND_TRAIN_ROOT/inference/<experiment_id>/<stage>/
 ```
 
 其中包含 JSONL、summary 和按配置生成的标注图；默认拒绝覆盖。
+
+## 12.1 阶段十点五：训练前 ONNX/A1 预检查
+
+正式训练前，对三档结构分别执行：
+
+```bash
+export HLML_MODEL_VERSION=v3-pro  # 依次替换为 v3-max、v3-lite
+export HLML_STAGE=geometry
+make export-preflight
+```
+
+输入：所选架构、geometry snapshot 的 Train/Val/Test JSONL 和 `configs/deploy.yaml`。不需要训练 checkpoint；命令以固定 seed 生成非零探针权重，使零初始化 head 和 zero-gamma BN 不会掩盖算子、量化动态范围或融合问题。
+
+处理：融合所有训练专用分支，导出 opset 11 静态 ONNX；检查训练图/部署图数值一致性、A1 算子白名单、depthwise group、模型大小、Keras/ONNX Runtime 一致性，并从 Train 抽 100、Val/Test 各抽 25 个 ROI 生成转换数据。
+
+输出：`HAND_TRAIN_ROOT/preflight/<model_version>/<stage>/` 下的 `*_untrained.onnx`、`*.contract.json`、探针 `*.weights.h5` 和 `model_conversion/datasets.zip`。这些文件只用于官方工具链兼容性验证，`preflight.untrained=true`，不得作为精度模型。
 
 ## 13. 阶段十一：ONNX/A1 导出
 
@@ -428,7 +460,7 @@ HAND_TRAIN_ROOT/inference/<experiment_id>/<stage>/
 make export HLML_STAGE=multi_finetune
 ```
 
-输入：所选 stage 的 v2 checkpoint、同一 stage 的 Train/Val/Test snapshot，以及负责部署交付导出的 `configs/deploy.yaml`。
+输入：所选 stage、所选 `HLML_MODEL_VERSION` 的正式 checkpoint、同一 stage 的 Train/Val/Test snapshot，以及 `configs/deploy.yaml`。
 
 处理：导出静态 NCHW `[1,1,256,256]`、opset 11 ONNX，保持输出顺序 `[landmarks, hand_flag, handedness]`，审计 A1 允许算子、模型大小、depthwise group 和 Keras/ONNXRuntime 数值一致性。ONNX 验证通过后，只读当前 stage snapshot：从 Train 分层稳定抽取 100 个 calibration ROI，从 Val/Test 各抽取 25 个 evaluation ROI，保存为 `np.save` 生成的 `float32 (1,1,256,256)` NCHW 数组，像素为灰度 `uint8/255`。
 
@@ -436,8 +468,8 @@ make export HLML_STAGE=multi_finetune
 
 ```text
 HAND_TRAIN_ROOT/runs/<experiment_id>/export/<stage>/
-  hand_landmarker_v2.onnx
-  hand_landmarker_v2.contract.json
+  hand_landmarker_<model_version>.onnx
+  hand_landmarker_<model_version>.contract.json
   model_conversion/
     datasets/calibrate_datasets/*.npy
     datasets/evaluate_datasets/*.npy
@@ -498,7 +530,8 @@ make acceptance-smoke \
 ### 16.1 模型与环境
 
 - `environment`：锁定 Python、TensorFlow、CUDA 和 cuDNN 版本；服务器不匹配时先处理环境，不应为绕过检查而随意改版本。
-- `model.version/num_iterations/output_order`：现有 v2 网络和三输出契约。当前重构不做辅助 head 或结构实验。
+- `model.version`：由 `HLML_MODEL_VERSION` 选择 `v3-pro`、`v3-max`、`v3-lite` 或历史 `v2`；训练、评估、推理、导出必须一致。
+- `model.num_iterations/output_order`：保持七阶段迭代数和三输出契约；不同 v3 档位不增加辅助 head。
 - `data.image_size/channels/input_layout/input_scale`：与 HLMF `256×256` 灰度 ROI 和 A1 NCHW 契约一致。
 
 ### 16.2 通用训练参数
@@ -514,7 +547,7 @@ make acceptance-smoke \
 
 ### 16.3 采样、损失和增强
 
-- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 Iris-1.1 geometry 使用三个 `eos_2.0-rtmpose-hcf0813-gate` Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；当前 multitask 则按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`、其他类型为 0 抽样。正式训练前仍须以 snapshot audit 的实际单元计数为准；不得给实际缺失的 `POS_LOW_PALM` 配置正比例。`missing_cell_policy.pseudo=fail` 不会伪造或静默重分配不存在的 sample type。
+- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 v3 geometry 使用四个 Eos-2.1 + HaMeR r4 Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；当前 multitask 完整加入 `neg-eos_2.0-hcf0813-hp0.5`，按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`、其他类型为 0 抽样。正式训练前仍须以 snapshot audit 的实际单元计数为准；不得给实际缺失的 `POS_LOW_PALM` 配置正比例。`missing_cell_policy.pseudo=fail` 不会伪造或静默重分配不存在的 sample type。
 - `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
 - `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
 - `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。
@@ -538,7 +571,7 @@ make acceptance-smoke \
 ### 17.2 `inference.yaml`：Folder Inference
 
 - `input.images_dir/extensions/recursive`：任意文件夹推理的输入范围。
-- `palm.models_root/model_id/model_filename`：当前默认解析为 `palm_detector/eos-2.0/model_opt.onnx`；`--palm-model-id` 只改变模型目录，所选模型仍必须满足冻结的 EOS 2.0 输入、矩形输出和 Anchor 契约。
+- `palm.models_root/model_id/model_filename`：默认解析为 `palm_detector/eos-2.1/model_opt.onnx`；`--palm-model-id` 只改变模型目录，所选模型必须满足同一 `384×224` 矩形输入、输出和 Anchor 契约。
 - `palm.input_width/input_height/feature_levels`：固定为 `384/224`、`14×24` 与 `7×12` 两层；每层两组 Anchor 尺寸必须与 HLMF EOS 2.0 一致。`score_threshold=0.25`、`nms_iou_threshold=0.10`，所有层合并后只执行一次全局 NMS。
 - `hand_roi.*`：应与部署端和 HLMF 使用的 ROI contract 对齐。
 - `output.write_annotated_images/write_jsonl/draw_*`：控制检查产物，不影响模型数值。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export an untrained v2 ONNX and real conversion inputs for toolchain tests."""
+"""Export an untrained selected Iris ONNX and real A1 conversion inputs."""
 
 from __future__ import annotations
 
@@ -26,18 +26,20 @@ def prepare_quantization_probe_weights(model, seed):
     """
 
     import numpy as np
+    from tensorflow.keras.layers import BatchNormalization
 
     random = np.random.RandomState(int(seed) + 101)
     activated_batch_norms = []
-    for layer in model.layers:
-        batch_norm = getattr(layer, "train_bn", None)
-        if batch_norm is None:
+    seen = set()
+    for batch_norm in model.submodules:
+        if not isinstance(batch_norm, BatchNormalization) or id(batch_norm) in seen:
             continue
+        seen.add(id(batch_norm))
         gamma, beta, moving_mean, moving_variance = batch_norm.get_weights()
         if np.all(gamma == 0.0):
             gamma = random.uniform(0.04, 0.06, gamma.shape).astype("float32")
             batch_norm.set_weights([gamma, beta, moving_mean, moving_variance])
-            activated_batch_norms.append(layer.name)
+            activated_batch_norms.append(batch_norm.name)
 
     activated_heads = []
     for name in ("convld_21_2d", "conv_handflag", "conv_handedness"):
@@ -92,7 +94,7 @@ def build_preflight_bundle(config):
     tf.keras.utils.set_random_seed(seed)
     model_config = config.get("model", {})
     training_model = build_model(
-        str(model_config.get("version", "v2")),
+        str(model_config.get("version", "v3-pro")),
         num_iterations=model_config.get("num_iterations"),
     )
     _assert_model_interface(training_model)

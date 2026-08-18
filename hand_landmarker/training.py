@@ -1180,7 +1180,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         tf.keras.mixed_precision.set_global_policy("float32")
 
     backbone = build_model(
-        str(model_config.get("version", "v2")),
+        str(model_config.get("version", "v3-pro")),
         num_iterations=model_config.get("num_iterations", 8),
     )
     interface_report = assert_model_interface(backbone)
@@ -1299,7 +1299,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "experiment": _jsonable(experiment),
         "stage": stage,
         "seed": seed,
-        "model_version": str(model_config.get("version", "v2")),
+        "model_version": str(model_config.get("version", "v3-pro")),
         "model_interface": interface_report,
         "losses": _jsonable(loss_config),
         "starting_state": _jsonable(starting_state),
@@ -1412,7 +1412,7 @@ def train_from_config(config: Mapping[str, Any]) -> Dict[str, Any]:
         "status": "complete",
         "stage": stage,
         "experiment": str(experiment.get("name", "hand_landmarker")),
-        "model_version": str(model_config.get("version", "v2")),
+        "model_version": str(model_config.get("version", "v3-pro")),
         "initial_epoch": initial_epoch,
         "completed_epochs": history_payload["epochs"],
         "artifacts": artifacts,
