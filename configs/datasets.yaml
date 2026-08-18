@@ -22,13 +22,16 @@ stages:
   multitask:
     datasets:
       - dataset_id: FullEnhance0801
-        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
         weight: 1.0
       - dataset_id: FullEnhance0803
-        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
         weight: 1.0
       - dataset_id: FullEnhance0810
-        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
+        weight: 1.0
+      - dataset_id: FullEnhance0817
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
         weight: 1.0
     negative_datasets:
       - negative_dataset_id: "${HLML_NEGATIVE_DATASET_ID:-neg-eos_2.0-hcf0813-hp0.5}"
@@ -38,13 +41,16 @@ stages:
     # Mandatory pretrain replay pool.
     datasets:
       - dataset_id: FullEnhance0801
-        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
         weight: 1.0
       - dataset_id: FullEnhance0803
-        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
         weight: 1.0
       - dataset_id: FullEnhance0810
-        proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
+        weight: 1.0
+      - dataset_id: FullEnhance0817
+        proposal_variant: eos_2.1-hamer-v1mv3l-gate-r4
         weight: 1.0
     # Optional newly recorded, CVAT-reviewed positive+negative Gold datasets.
     gold_datasets: []
@@ -60,25 +66,58 @@ stages:
 evaluation:
   val:
     - dataset_id: FullEnhanceVal0801
-      proposal_variant: eos_2.0-rtmpose-hcf0813-gate
+      proposal_variant: eos_2.1-hamer-v1mv3l
       capture_source_ids:
         - complex-mid-bright-random-val-s01-peak
-        - complex-mid-bright-random-val-s01-soar
+        - complex-mid-bright-random-val-s01-soar       
+        - complex-mid-dark-random-val-s01-peak      
         - complex-near-bright-random-val-s01-peak
-      weight: 1.0
-    - dataset_id: FullEnhanceVal0801
-      proposal_variant: eos_2.0-rtmpose-gate
-      capture_source_ids:
-        - complex-mid-dark-random-val-s01-peak
         - white-mid-bright-random-val-s01-soar
+      weight: 1.0
+    - dataset_id: FullEnhanceVal0803
+      proposal_variant: eos_2.1-hamer-v1mv3l
+      capture_source_ids:
+        - white-mid-bright-go-val-s02-soar
+        - white-mid-bright-ok-val-s02-soar
+        - white-mid-bright-one-val-s02-soar
+        - white-near-bright-flat-val-s02-soar
+        - white-near-bright-go-val-s02-soar
+      weight: 1.0
+    - dataset_id: FullEnhanceVal0808
+      proposal_variant: eos_2.1-hamer-v1mv3l
+      capture_source_ids:
+        - white-mid-dark-random-val-s03-soar
+        - white-near-dark-random-val-s03-soar
+      weight: 1.0
+    - dataset_id: RainEnhanceVal0817
+      proposal_variant: eos_2.1-hamer-v1mv3l
+      capture_source_ids:
+        - white-mid-bright-rainleft-val-s06-dragon
+        - white-mid-bright-rainleft-val-s06-peak
+        - white-mid-bright-rainleft-val-s06-soar
+        - white-mid-bright-rainright-val-s06-dragon
+        - white-mid-bright-rainright-val-s06-peak
+        - white-mid-bright-rainright-val-s06-soar
+        - white-mid-bright-thickleft-val-s06-dragon
+        - white-mid-bright-thickleft-val-s06-peak
+        - white-mid-bright-thickleft-val-s06-soar
+        - white-mid-bright-thickright-val-s06-dragon
+        - white-mid-bright-thickright-val-s06-peak
+        - white-mid-bright-thickright-val-s06-soar
       weight: 1.0
   test:
     - dataset_id: FullEnhanceVal0801
-      proposal_variant: eos_2.0-rtmpose-gate
+      proposal_variant: eos_2.1-hamer-v1mv3l
       capture_source_ids:
         - complex-mid-bright-random-test-s01-peak
+        - complex-mid-dark-random-test-s01-peak
         - complex-near-bright-random-test-s01-peak
       weight: 1.0
+    - dataset_id: FullEnhanceVal0803
+      proposal_variant: eos_2.1-hamer-v1mv3l
+      capture_source_ids:
+        - white-mid-bright-open-test-s02-soar
+        - white-near-bright-fist-test-s02-soar
 
 policies:
   performer_cross_split: warn
