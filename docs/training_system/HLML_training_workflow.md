@@ -464,6 +464,8 @@ make export HLML_STAGE=multi_finetune
 
 处理：导出静态 NCHW `[1,1,256,256]`、opset 11 ONNX，保持输出顺序 `[landmarks, hand_flag, handedness]`，审计 A1 允许算子、模型大小、depthwise group 和 Keras/ONNXRuntime 数值一致性。ONNX 验证通过后，只读当前 stage snapshot：从 Train 分层稳定抽取 100 个 calibration ROI，从 Val/Test 各抽取 25 个 evaluation ROI，保存为 `np.save` 生成的 `float32 (1,1,256,256)` NCHW 数组，像素为灰度 `uint8/255`。
 
+Finetune 导出（`HLML_STAGE=multi_finetune`）额外要求 calibration 的 `sources.train` 以 `config_path` 引用 `configs/training.yaml`（profile 由 `HLML_STAGE` 选择）；导出 contract 会记录并校验 finetune 训练配置、curation manifest 与 multitask 初始 checkpoint 的 SHA256，作为 finetune 导出溯源。Pretrain 导出（geometry/multitask）解析同一训练配置的 pretrain profile，输入数据不变，也没有溯源要求。
+
 输出默认位于：
 
 ```text
@@ -582,7 +584,7 @@ make acceptance-smoke \
 - `maximum_model_size_mb`、`maximum_depthwise_group`、`a1_allowed_operators`：硬件审计门槛。
 - `validate.random_samples` 与容差：Keras/融合 ONNX/ONNXRuntime 数值一致性检查。放宽容差前必须定位具体算子误差。
 - `metadata`：部署端预处理和输出解释契约，必须和训练配置一致。
-- `conversion_datasets`：保持启用；定义当前 snapshot 的 Train/Val/Test 路径、100/25/25 抽样数、分层字段和独立 `model_conversion` 输出目录。
+- `conversion_datasets`：保持启用；定义当前 snapshot 的 Train/Val/Test 输入、100/25/25 抽样数、分层字段和独立 `model_conversion` 输出目录。Calibration 的 `sources.train` 使用 `config_path: "configs/training.yaml"` 引用训练配置（finetune 导出依赖它认证训练溯源，见阶段十一），Val/Test 两个 evaluation source 仍直接给出 `labels` 路径。
 
 ## 18. 数据泄漏与 Test 锁定原则
 

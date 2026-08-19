@@ -150,7 +150,7 @@ make locked-test HLML_STAGE=multi_finetune HLML_RELEASE_ID="$HLML_RELEASE_ID"
 
 ## 10. ONNX/A1 导出
 
-输入：所选 `HLML_MODEL_VERSION` 的 multitask 或 multi-finetune checkpoint、当前 stage snapshot 和 export profile。处理：先将训练多分支精确融合为单分支，再导出 opset 11 ONNX、审计 A1 算子/数值，并生成 Train 100、Val 25、Test 25 个 NCHW `.npy`。输出：`runs/<experiment>/export/<stage>/` 下的 ONNX、contract/report 和 `model_conversion/datasets.zip`。
+输入：所选 `HLML_MODEL_VERSION` 的 multitask 或 multi-finetune checkpoint、当前 stage snapshot 和 export profile。处理：先将训练多分支精确融合为单分支，再导出 opset 11 ONNX、审计 A1 算子/数值，并生成 Train 100、Val 25、Test 25 个 NCHW `.npy`。Finetune 导出会校验 calibration train source 引用的 `configs/training.yaml`，并把 finetune 训练配置、curation manifest、multitask 初始 checkpoint 的 SHA256 写入 contract。输出：`runs/<experiment>/export/<stage>/` 下的 ONNX、contract/report 和 `model_conversion/datasets.zip`。
 
 ```bash
 make export HLML_STAGE=multi_finetune
