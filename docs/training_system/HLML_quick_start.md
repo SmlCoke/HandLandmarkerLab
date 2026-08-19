@@ -106,7 +106,7 @@ make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
 
 ## 6. Multi-finetune 阶段
 
-输入：multitask winner、`hard-hands-0816-r01`、可选新录制并按 Eval 链路人工复核的 recorded Gold positive/negative、真负样本和 mandatory pretrain replay。Recorded Gold 位于 `GoldSource/ReviewedDatasets`，不能复用既有 PretrainSource/EValSource。默认 hard/gold 55%、replay 45%，replay 不可为 0；gold 侧采样给 hard `NEG_RUNTIME_CANDIDATE` 和普通 `NEG_LOW_PALM_CANDIDATE` 各 5%，总负样本比例仍为 10%。2026-08-19 不落盘预检为 Train 100,274、Val 14,411、Test 5,343，membership errors 为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
+输入：multitask winner、`hard-hands-0816-r01`、可选新录制并按 Eval 链路人工复核的 recorded Gold positive/negative、真负样本和 mandatory pretrain replay。Recorded Gold 位于 `GoldSource/ReviewedDatasets`，不能复用既有 PretrainSource/EValSource。默认 hard/gold 55%、replay 45%，replay 不可为 0；gold 侧采样给 hard `NEG_RUNTIME_CANDIDATE` 和普通 `NEG_LOW_PALM_CANDIDATE` 各 5%，总负样本比例仍为 10%。默认每 epoch 抽取 3000 条；当前 snapshot 的 Gold `POS_RUNTIME` 配额为 1436/epoch，平均每条约 3.79 次，通过 rare-cell 门禁。2026-08-19 预检为 Train 100,274、Val 14,411、Test 5,343，membership errors 为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
 
 ```bash
 export HLML_MODEL_VERSION=v3-pro

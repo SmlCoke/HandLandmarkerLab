@@ -26,6 +26,7 @@ Iris v3 已实现并接入公共 registry、训练、固定 ROI 评估、文件�
 - performer 跨 split 仍按既有 `warn` 策略报告，不影响 membership 结论。
 - `hard-hands-0816-r01` 已由 HLMF 发布并通过只读审核：manifest 记录 462 条训练记录，其中 379 条 positive、83 条 CVAT `no_hand` negative，另有 38 条 ignored；462 张独立 published 图片、registry 身份、21 点/handedness 结构均一致。ID 中的 `r01` 作为该通用数据集的发布修订号使用，manifest 不含训练 snapshot/run 绑定。
 - 配置后的 multi-finetune 全量不落盘预检为 Train 100,274、Val 14,411、Test 5,343，membership errors 为 0。Train 包含 17,372 条 hard/gold 侧（462 条 hard + 16,910 条真负样本）和 82,902 条 replay；462 条 hard 行全部派生为 `human_gold`，类型为 379 条 `POS_RUNTIME` 与 83 条 `NEG_RUNTIME_CANDIDATE`。
+- 首次正式启动尝试已成功生成 `snapshots/iris-v3-pro-r1/multi_finetune/{train,val,test}.jsonl` 与 `snapshot.json`，随后在训练输出目录创建前被 rare-cell 重复抽样门禁中止；没有写入 multi-finetune checkpoint。原因是旧 `epoch_size=12000` 会让仅 379 条的 Gold positive 单元平均重复约 15 次，且没有未封顶 Gold positive 单元承接被裁剪的配额。现已将 `epoch_size` 调整为 3000；基于真实 100,274 条 Train snapshot 的精确采样预检得到 Gold 配额 `POS_RUNTIME=1436`、`NEG_RUNTIME_CANDIDATE=103`、`NEG_LOW_PALM_CANDIDATE=102`，Gold positive 平均期望重复 3.789 次、最大期望重复 3.789 次，均通过 4/8 门禁。
 
 ## GPU 与部署预检查
 
@@ -49,11 +50,11 @@ export TORCH_CUDNN_V8_API_DISABLED=1
 
 ## 自动验收状态
 
-- 82 个 Python 文件语法检查通过；HLML 完整单元测试 198 项通过。
+- 82 个 Python 文件语法检查通过；HLML 完整单元测试通过。
 - HLMF 上游 79 项测试、HLML warehouse 合同 16 项测试和 acceptance config check 全部通过。
 - `v3-pro`、`v3-max`、`v3-lite` 三种 `HLML_MODEL_VERSION` 的公共 config check 均为 `status=ok`。
-- 指向独立审计 snapshot 的 environment check 为 `ok=true`，TensorFlow 创建 RTX 3090 GPU device；默认正式 snapshot 未创建，符合本轮不写入 TrainFab 的边界。
+- environment check 为 `ok=true`，TensorFlow 可创建 RTX 3090 GPU device；multi-finetune 正式 snapshot 已由用户的首次启动尝试创建且审计完整。
 
 ## 本轮执行边界
 
-本轮没有启动 multi-finetune 正式训练，也没有创建或覆盖 snapshot/checkpoint。`DatesetFab`、`TrainFab` 和已有 Pretrain/Eval 发布资产保持只读；审核与全量成员预检均在内存完成。环境依赖未增加，`requirements.txt` 与 `environment.yml` 无需更新。
+本轮没有正式运行 multi-finetune 的任何训练 step，也没有创建或覆盖 checkpoint。修复只调整训练采样规模及其测试/文档；已发布 PretrainSource、EValSource、negative/hard 数据、完整标注链路和既有质量门禁均未修改。环境依赖未增加，`requirements.txt` 与 `environment.yml` 无需更新。

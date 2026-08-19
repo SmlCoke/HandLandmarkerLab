@@ -311,7 +311,7 @@ make multi-finetune
 - `negative_datasets` 中的已发布真负样本。
 - `datasets` 中的 mandatory pretrain replay pool。
 
-处理：困难数据集、人工复核 Gold 和真负样本组成 hard/gold 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。整个 CVAT-reviewed hard release 均派生为 `human_gold`，包括人工确认但未移动关键点的行和 `*_human_corrected` 行。默认 hard/gold 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 hard/gold/negative dataset 的 `weight` 继续参与侧内采样。gold 侧保持总负样本比例 10%，其中 `NEG_RUNTIME_CANDIDATE=0.05` 消费 CVAT 确认的 hard negative，`NEG_LOW_PALM_CANDIDATE=0.05` 消费已发布普通真负样本，避免人工 hard negative 被零比例静默排除。
+处理：困难数据集、人工复核 Gold 和真负样本组成 hard/gold 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。整个 CVAT-reviewed hard release 均派生为 `human_gold`，包括人工确认但未移动关键点的行和 `*_human_corrected` 行。默认 hard/gold 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 hard/gold/negative dataset 的 `weight` 继续参与侧内采样。gold 侧保持总负样本比例 10%，其中 `NEG_RUNTIME_CANDIDATE=0.05` 消费 CVAT 确认的 hard negative，`NEG_LOW_PALM_CANDIDATE=0.05` 消费已发布普通真负样本，避免人工 hard negative 被零比例静默排除。默认 `sampling.epoch_size=3000`；在当前 379 条 Gold `POS_RUNTIME` 的规模下，其精确 epoch 配额为 1436，平均每条期望抽取约 3.79 次，低于 rare-cell 门禁的 4 次上限，并保留少量余量。若更换 hard/Gold 成员，必须重新以实际 snapshot 运行采样门禁，不能通过放宽门禁来容纳过大的 epoch。
 
 输出：
 

@@ -188,7 +188,7 @@ profiles:
       optimizer: {learning_rate: 0.00005}
       periodic_checkpoint: {enabled: false}
     sampling:
-      epoch_size: 12000
+      epoch_size: 3000
       quota_scope:
         supervision_tier: per_batch_half_up
         sample_type: per_epoch_largest_remainder

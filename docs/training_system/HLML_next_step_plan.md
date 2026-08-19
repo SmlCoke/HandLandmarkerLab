@@ -14,7 +14,7 @@
 4. 以完全相同的数据/训练配置分别执行 geometry；每台完成固定 ROI Val 和 Eos-2.1 代表性原图 infer，再依据预先约定的 geometry 指标比较。
 5. 每档仅用自己的 geometry winner 初始化 multitask。先执行全量 data audit，确认 Train 99,812（positive 82,902 + negative 16,910）、Val 14,411、Test 5,343，再启动正式 multitask。
 6. 每档 multitask 完成固定 ROI Val、Eos-2.1 原图 infer 和正式 export；选择结构时同时比较精度、稳定性、推理成本和 15 MiB 部署约束。
-7. 使用已发布并完成 CVAT 复核的 `hard-hands-0816-r01`；`datasets.yaml` 默认引用该 ID，并允许用 `HLML_HARD_DATASET_ID` 显式覆盖。正式启动 `make multi-finetune` 前复核环境变量与 multitask winner 路径。
+7. 使用已发布并完成 CVAT 复核的 `hard-hands-0816-r01`；`datasets.yaml` 默认引用该 ID，并允许用 `HLML_HARD_DATASET_ID` 显式覆盖。multi-finetune 采用已通过真实 snapshot 采样预检的 `epoch_size=3000`，正式启动前复核环境变量、multitask winner 路径和 rare-cell epoch plan。
 8. 冻结唯一 winner 后运行 locked Test；Test 不参与模型选择、阈值选择、困难挖掘或重训。
 
 ## 对照与验收条件

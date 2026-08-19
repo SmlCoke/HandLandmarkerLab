@@ -46,6 +46,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertIn("/geometry/checkpoints/best.weights.h5", multitask["training"]["initial_checkpoint"].replace("\\", "/"))
         self.assertIn("/multitask/checkpoints/best.weights.h5", finetune["training"]["initial_checkpoint"].replace("\\", "/"))
         self.assertEqual(0.55, finetune["training"]["gold_fraction"])
+        self.assertEqual(3000, finetune["sampling"]["epoch_size"])
         gold_fractions = finetune["sampling"]["sample_type_fractions_by_tier"]["gold"]
         self.assertEqual(0.05, gold_fractions["NEG_RUNTIME_CANDIDATE"])
         self.assertEqual(0.05, gold_fractions["NEG_LOW_PALM_CANDIDATE"])
