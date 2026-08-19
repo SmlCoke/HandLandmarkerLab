@@ -63,7 +63,7 @@ export:
         minimum_count: 20
         sources:
           train:
-            labels: "${HAND_TRAIN_ROOT:-/root/autodl-tmp/TrainFab/HLML-4.0}/snapshots/${HLML_SNAPSHOT_ID:-iris-v3-data-r1}/${HLML_STAGE:-geometry}/train.jsonl"
+            config_path: "configs/training.yaml"
             count: 100
             stratify_by: [dataset_id, capture_source_id, sample_type]
       evaluate_datasets:
