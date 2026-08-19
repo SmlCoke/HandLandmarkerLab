@@ -195,7 +195,7 @@ profiles:
       batch_distribution: deterministic_balanced_deficit
       tail_batch_policy: allow_smaller_final_batch
       sample_type_fractions_by_tier:
-        gold: {POS_RUNTIME: 0.70, POS_LOW_PALM: 0.20, NEG_RUNTIME_CANDIDATE: 0.0, NEG_LOW_PALM_CANDIDATE: 0.10}
+        gold: {POS_RUNTIME: 0.70, POS_LOW_PALM: 0.20, NEG_RUNTIME_CANDIDATE: 0.05, NEG_LOW_PALM_CANDIDATE: 0.05}
         pseudo: {POS_RUNTIME: 0.80, POS_LOW_PALM: 0.20, NEG_RUNTIME_CANDIDATE: 0.0, NEG_LOW_PALM_CANDIDATE: 0.0}
       missing_cell_policy: {gold: redistribute_within_tier, pseudo: redistribute_within_tier}
       rare_cell_policy:

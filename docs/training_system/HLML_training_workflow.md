@@ -88,7 +88,7 @@ HAND_TRAIN_ROOT/
 
 - `stages.*.datasets` → `PretrainSource/<dataset_id>/dataset_manifest.json`。
 - `stages.multitask.negative_datasets` → `GoldSource/NegativeSamples/<id>/published/manifest.json`；训练图片取每行 `published_relpath`。
-- `stages.multi_finetune.hard_datasets` → `GoldSource/HardSamples/<id>/published/manifest.json`；用 `source_crop_relpath` 核对 registry，用 `published_relpath` 读取 CVAT 精修后的独立发布副本。
+- `stages.multi_finetune.hard_datasets` → `GoldSource/HardSamples/<id>/published/manifest.json`；用 `source_crop_relpath` 核对 registry，用 `published_relpath` 读取 CVAT 精修后的独立发布副本。每个 hard dataset 是独立 proposal variant 域，因此可复用于使用更新 Palm variant 的后续训练流程，但其自身仍只能包含一个 variant。
 - `stages.multi_finetune.gold_datasets` → `GoldSource/ReviewedDatasets/<dataset_id>/dataset_manifest.json`；只能是新录制、按 Eval 同款自动标注 + CVAT 人工复核后发布的 train Gold，允许 positive 与 negative。
 - `evaluation.val/test` → `EValSource/<dataset_id>/dataset_manifest.json` 中相应 split。
 
@@ -311,7 +311,7 @@ make multi-finetune
 - `negative_datasets` 中的已发布真负样本。
 - `datasets` 中的 mandatory pretrain replay pool。
 
-处理：困难数据集、人工复核 Gold 和真负样本组成 hard/gold 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。默认 hard/gold 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 hard/gold/negative dataset 的 `weight` 继续参与侧内采样。
+处理：困难数据集、人工复核 Gold 和真负样本组成 hard/gold 侧；未被这些成员占用的 PretrainSource positive 组成 replay 侧。整个 CVAT-reviewed hard release 均派生为 `human_gold`，包括人工确认但未移动关键点的行和 `*_human_corrected` 行。默认 hard/gold 55%、replay 45%。两者必须都大于零且总和为 1；因此不能关闭 replay。每个 hard/gold/negative dataset 的 `weight` 继续参与侧内采样。gold 侧保持总负样本比例 10%，其中 `NEG_RUNTIME_CANDIDATE=0.05` 消费 CVAT 确认的 hard negative，`NEG_LOW_PALM_CANDIDATE=0.05` 消费已发布普通真负样本，避免人工 hard negative 被零比例静默排除。
 
 输出：
 
@@ -547,7 +547,7 @@ make acceptance-smoke \
 
 ### 16.3 采样、损失和增强
 
-- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 v3 geometry 使用四个 Eos-2.1 + HaMeR r4 Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；当前 multitask 完整加入 `neg-eos_2.0-hcf0813-hp0.5`，按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`、其他类型为 0 抽样。正式训练前仍须以 snapshot audit 的实际单元计数为准；不得给实际缺失的 `POS_LOW_PALM` 配置正比例。`missing_cell_policy.pseudo=fail` 不会伪造或静默重分配不存在的 sample type。
+- `sampling.sample_type_fractions`：控制 positive/negative 类型抽样；geometry 的 negative 必须为 0，multitask profile 才启用真负样本。当前 v3 geometry 使用四个 Eos-2.1 + HaMeR r4 Train dataset，并按 `POS_RUNTIME=1.0`、其他类型为 0 抽样；当前 multitask 完整加入 `neg-eos_2.0-hcf0813-hp0.5`，按 `POS_RUNTIME=0.90`、`NEG_LOW_PALM_CANDIDATE=0.10`、其他类型为 0 抽样。multi-finetune 的 gold tier 使用 `POS_RUNTIME=0.70`、`POS_LOW_PALM=0.20`、`NEG_RUNTIME_CANDIDATE=0.05`、`NEG_LOW_PALM_CANDIDATE=0.05`，同时消费 hard negative 与普通真负样本。正式训练前仍须以 snapshot audit 的实际单元计数为准；不存在的 cell 只能按各 profile 明示的 missing-cell policy 处理，不能伪造 sample type。
 - `sampling.epoch_size`、`replacement`：每 epoch 抽样量及是否有放回；过大可能反复抽到少数来源。
 - `honor_record_sampling_weight`：必须保持开启，才能使用 datasets.yaml 中的权重。
 - `losses.*.coefficient`：landmarks、presence、handedness 的相对损失系数。修改后应在固定 Val 上比较，不能用 Test 调参。

@@ -46,6 +46,10 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertIn("/geometry/checkpoints/best.weights.h5", multitask["training"]["initial_checkpoint"].replace("\\", "/"))
         self.assertIn("/multitask/checkpoints/best.weights.h5", finetune["training"]["initial_checkpoint"].replace("\\", "/"))
         self.assertEqual(0.55, finetune["training"]["gold_fraction"])
+        gold_fractions = finetune["sampling"]["sample_type_fractions_by_tier"]["gold"]
+        self.assertEqual(0.05, gold_fractions["NEG_RUNTIME_CANDIDATE"])
+        self.assertEqual(0.05, gold_fractions["NEG_LOW_PALM_CANDIDATE"])
+        self.assertAlmostEqual(1.0, sum(gold_fractions.values()))
 
     def test_dataset_config_has_mandatory_replay_and_id_membership(self) -> None:
         config = load_config(CONFIGS / "datasets.yaml")
@@ -53,7 +57,7 @@ class Hlml4PublicSurfaceTests(unittest.TestCase):
         self.assertEqual(0.55, stage["hard_fraction"])
         self.assertEqual(0.45, stage["replay_fraction"])
         self.assertGreater(stage["replay_fraction"], 0.0)
-        self.assertEqual([], stage["hard_datasets"])
+        self.assertEqual("hard-hands-0816-r01", stage["hard_datasets"][0]["hard_dataset_id"])
         self.assertEqual([], stage["gold_datasets"])
         self.assertIn("negative_dataset_id", config["stages"]["multitask"]["negative_datasets"][0])
 

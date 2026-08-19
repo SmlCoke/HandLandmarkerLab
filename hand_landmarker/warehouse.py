@@ -608,7 +608,9 @@ def canonical_record(
                 "supervision_tier": tier,
                 "annotation_provenance": (
                     "human_gold"
-                    if origin in {"human", "mediapipe_human_corrected"}
+                    if tier == "gold"
+                    or origin == "human"
+                    or origin.endswith("_human_corrected")
                     else "mediapipe_pseudo"
                 ),
                 "sample_type": (
@@ -643,10 +645,16 @@ def _assert_membership(rows: Sequence[Mapping[str, Any]]) -> Tuple[List[str], Di
         performer = _capture_fields(capture)["performer"]
         split_by_capture[capture].add(split)
         split_by_raw[raw_id].add(split)
-        # Published negatives preserve the proposal variant that produced them.
-        # Their immutable negative dataset is audited separately from the
-        # selected PretrainSource positive proposal domain.
-        variant_domain = "negative" if row.get("negative_dataset_id") else "source"
+        # Published negative and hard datasets preserve the proposal variant
+        # that produced them. Their immutable, independently copied releases
+        # are audited separately from the selected PretrainSource replay domain
+        # so reusable Gold assets do not become tied to a later Palm variant.
+        if row.get("negative_dataset_id"):
+            variant_domain = "negative:{}".format(row["negative_dataset_id"])
+        elif row.get("hard_dataset_id"):
+            variant_domain = "hard:{}".format(row["hard_dataset_id"])
+        else:
+            variant_domain = "source"
         variants_by_capture[(capture, variant_domain)].add(variant)
         performer_splits[performer].add(split)
         roi_ids[str(row.get("roi_id") or row.get("crop_id"))] += 1

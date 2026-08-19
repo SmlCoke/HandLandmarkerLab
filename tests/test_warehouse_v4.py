@@ -420,6 +420,11 @@ class WarehouseV4Tests(unittest.TestCase):
                 {"POS_RUNTIME", "NEG_RUNTIME_CANDIDATE"},
                 {row["sample_type"] for row in gold_rows},
             )
+            hard_rows = [row for row in rows if row.get("mix_role") == "hard"]
+            self.assertTrue(hard_rows)
+            self.assertTrue(
+                all(row["annotation_provenance"] == "human_gold" for row in hard_rows)
+            )
 
     def test_mining_rounds_limit_and_dedupe_within_snapshot(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -882,6 +887,14 @@ class WarehouseV4Tests(unittest.TestCase):
             negative_dataset_id="neg-set",
         )
         _, report = _assert_membership([base, published_negative])
+        self.assertEqual([], report["errors"])
+
+        published_hard = dict(
+            other_variant,
+            roi_id="roi-hard",
+            hard_dataset_id="hard-set",
+        )
+        _, report = _assert_membership([base, published_hard])
         self.assertEqual([], report["errors"])
 
     def test_mining_is_train_only_and_reports_sources(self):

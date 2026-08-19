@@ -413,9 +413,12 @@ def validate_canonical_record(
             errors.append("supervision_tier must be pseudo or gold")
         provenance = str(row.get("annotation_provenance", ""))
         if str(row.get("schema_version")) == "hlml_warehouse_train_v1":
+            origin = str(row.get("label_origin"))
             expected_provenance = (
                 "human_gold"
-                if str(row.get("label_origin")) in {"human", "mediapipe_human_corrected"}
+                if tier == "gold"
+                or origin == "human"
+                or origin.endswith("_human_corrected")
                 else "mediapipe_pseudo"
             )
         else:

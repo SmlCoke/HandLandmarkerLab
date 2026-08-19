@@ -37,7 +37,7 @@ cd /path/to/HandLandmarkerLab
 
 ## 1. 数据成员选择（Dataset Selection）
 
-输入：HLMF 已发布的 Pretrain/Eval dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset。当前 v3 正样本使用 `FullEnhance0801/0803/0810/0817` 的 Eos-2.1 + HaMeR r4 变体；Val/Test 使用配置中四个 Eval dataset 的冻结成员；multitask 负样本固定为完整已发布集 `neg-eos_2.0-hcf0813-hp0.5`。正样本和负样本分别执行 proposal variant 唯一性门禁，因此允许保留各自发布时的 Eos-2.1 与 Eos-2.0；split、raw image、ROI ID、Registry 和图片解码门禁不放宽。当前尚无已发布 hard dataset，`hard_datasets` 保持空列表。输出：只确定成员关系；negative/hard 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
+输入：HLMF 已发布的 Pretrain/Eval dataset、negative dataset、CVAT-reviewed hard dataset 和可选 recorded Gold dataset。当前 v3 正样本使用 `FullEnhance0801/0803/0810/0817` 的 Eos-2.1 + HaMeR r4 变体；Val/Test 使用配置中四个 Eval dataset 的冻结成员；multitask 负样本固定为完整已发布集 `neg-eos_2.0-hcf0813-hp0.5`；multi-finetune hard 默认成员为 `hard-hands-0816-r01`。Pretrain、negative 和每个 hard 发布集分别执行 proposal variant 唯一性门禁，因此通用旧 Palm hard release 可与当前 Eos-2.1 replay 合用；split、raw image、ROI ID、Registry 和图片解码门禁不放宽。输出：只确定成员关系；negative/hard 从 HLMF 的 `published_relpath` 读取，HLML 不复制图片。
 
 ## 2. 配置解析（Config Check）
 
@@ -106,9 +106,15 @@ make mine-hard MINING_ARGS='--round-id r01 --max-rois 1000'
 
 ## 6. Multi-finetune 阶段
 
-输入：multitask winner、带独立 published 图片的 CVAT-reviewed hard dataset、可选新录制并按 Eval 链路人工复核的 recorded Gold positive/negative、真负样本和 mandatory pretrain replay。Recorded Gold 位于 `GoldSource/ReviewedDatasets`，不能复用既有 PretrainSource/EValSource。默认 hard/gold 55%、replay 45%，replay 不可为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
+输入：multitask winner、`hard-hands-0816-r01`、可选新录制并按 Eval 链路人工复核的 recorded Gold positive/negative、真负样本和 mandatory pretrain replay。Recorded Gold 位于 `GoldSource/ReviewedDatasets`，不能复用既有 PretrainSource/EValSource。默认 hard/gold 55%、replay 45%，replay 不可为 0；gold 侧采样给 hard `NEG_RUNTIME_CANDIDATE` 和普通 `NEG_LOW_PALM_CANDIDATE` 各 5%，总负样本比例仍为 10%。2026-08-19 不落盘预检为 Train 100,274、Val 14,411、Test 5,343，membership errors 为 0。输出：`snapshots/<id>/multi_finetune/` 和 `runs/<experiment>/multi_finetune/checkpoints/best.weights.h5`。
 
 ```bash
+export HLML_MODEL_VERSION=v3-pro
+export HLML_SNAPSHOT_ID=iris-v3-pro-r1
+export HLML_EXPERIMENT_ID=iris-v3-pro-r1
+export HLML_NEGATIVE_DATASET_ID=neg-eos_2.0-hcf0813-hp0.5
+export HLML_HARD_DATASET_ID=hard-hands-0816-r01
+export HLML_STAGE=multi_finetune
 make multi-finetune
 make val HLML_STAGE=multi_finetune
 export HLML_INFER_INPUT=/root/autodl-tmp/DatesetFab/InferSource/0718/images
