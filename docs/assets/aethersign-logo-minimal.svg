@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">AetherSign minimal logo</title>
+  <desc id="desc">An abstract hand formed by a palm, five landmark nodes, and an orbital ring.</desc>
+  <defs>
+    <linearGradient id="brand" x1="86" y1="92" x2="420" y2="430" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22d3ee"/>
+      <stop offset="0.52" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#c084fc"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="256" cy="256" r="207" fill="none" stroke="url(#brand)" stroke-opacity=".34" stroke-width="8"/>
+  <path d="M84 270A174 174 0 0 1 365 119" fill="none" stroke="url(#brand)" stroke-width="12" stroke-linecap="round" stroke-dasharray="3 22"/>
+  <path d="M413 330A174 174 0 0 1 156 405" fill="none" stroke="url(#brand)" stroke-width="12" stroke-linecap="round" stroke-dasharray="3 22"/>
+
+  <g fill="url(#brand)">
+    <circle cx="165" cy="176" r="16"/>
+    <circle cx="210" cy="132" r="16"/>
+    <circle cx="260" cy="114" r="16"/>
+    <circle cx="311" cy="130" r="16"/>
+    <circle cx="355" cy="171" r="16"/>
+    <path d="M162 286L109 238C97 227 96 208 107 196C118 184 137 183 149 194L193 235Z"/>
+    <rect x="213" y="392" width="25" height="76" rx="12.5"/>
+    <rect x="286" y="392" width="25" height="76" rx="12.5"/>
+  </g>
+
+  <path d="M171 263C179 232 211 214 242 225L334 258C364 269 380 302 370 332L346 405C337 432 312 450 284 450H226C196 450 169 431 159 403L132 329C121 299 138 269 171 263Z" fill="#0b1533" stroke="url(#brand)" stroke-width="16" stroke-linejoin="round"/>
+</svg>
+

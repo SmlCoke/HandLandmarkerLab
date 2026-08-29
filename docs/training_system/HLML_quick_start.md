@@ -2,6 +2,9 @@
 
 本页给出三阶段训练、固定 ROI 评估和导出的最短完整路径。详细输入契约与 YAML 参数见 `HLML_training_workflow.md`。
 
+> [!IMPORTANT]
+> 全国总决赛最终归档版本为 `HLML-4.0-final`。开始复现前执行 `git fetch origin --tags && git checkout HLML-4.0-final`，同时恢复 HLMF `HLMF-3.0-final` 对应的正式数据仓和独立保存的 HLML 训练产物；Git tag 本身不包含这些大体积资产。
+
 ## 环境依赖（首次部署）
 
 输入：仓库根目录的 `environment.yml` 和 `requirements.txt`。处理：创建原有 Python 3.8、TensorFlow 2.9 环境。输出：Conda 环境 `hand-landmarker-tf29` 及环境检查结果。

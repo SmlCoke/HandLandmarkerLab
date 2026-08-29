@@ -1,60 +1,71 @@
-# HLML 当前状态（2026-08-19）
+# HLML 当前状态（2026-08-29 最终归档）
 
-## Iris v3 代码状态
+## I. 归档结论
 
-Iris v3 已实现并接入公共 registry、训练、固定 ROI 评估、文件夹推理和 ONNX/A1 导出入口，固定输入仍为 NCHW `[1,1,256,256]`，输出顺序与语义仍为 `landmarks[42]`、`hand_flag[1]`、`handedness[1]`。ROI 几何、loss、训练阶段和 HLMF `hlmf_dataset_v1` 合同没有改变，历史 `v2` 入口及实现保持不变。
+AetherSign 已于 2026-08-25 完成全国总决赛答辩并获得全国一等奖。HandLandmarkerLab 针对本届比赛的训练、评估与部署导出使命已经完成，不再保留进行中的训练计划。最终可复现的 Git 代码状态由 annotated tag `HLML-4.0-final` 固定。
 
-| 版本 | 训练参数 | 融合后部署参数 | 训练/部署参数比 | 定位 |
-| --- | ---: | ---: | ---: | --- |
-| `v3-pro` | 1,951,756 | 1,912,324 | 1.02 | 与未修改的 v2 同构 |
-| `v3-max` | 7,629,268 | 1,912,324 | 3.99 | 明显扩大训练期多分支容量，部署仍与 v2 同量级 |
-| `v3-lite` | 878,272 | 852,832 | 1.03 | 缩减通道的轻量档 |
-| `v2` | 1,951,756 | 1,912,324 | 1.02 | 历史入口，只做回归兼容 |
+### 1.1 Git 归档范围
 
-`v3-max` 的普通卷积训练期采用四个 Conv+BN 分支；Depthwise block 采用四个 3×3 Depthwise+BN 分支，并在形状允许时增加可融合的 1×1 与 identity BN 分支。所有分支在部署前精确折叠为单 Conv/Depthwise，未向 A1 图中引入分支或 BN。
+tag 包含 HLML 4.0 代码、五份公共 YAML、单元测试、入口/专项文档和 README 视觉资产。以下资产不进入 Git，复现时必须从比赛归档单独恢复：
 
-## 当前数据成员与矛盾处理
+- HLMF 的正式 `HAND_DATASET_ROOT`、Registry 和已发布 Pretrain/Eval/negative/hard/Gold 数据；
+- HLML 的 `HAND_TRAIN_ROOT`、snapshot、checkpoint、评估预测、ONNX 和转换数据包；
+- A1 工具链生成的 m1model 及板端应用资源。
 
-当前 geometry/multitask 正样本来自四个 Eos-2.1 + HaMeR r4 发布集：`FullEnhance0801`、`FullEnhance0803`、`FullEnhance0810`、`FullEnhance0817`。固定 Val/Test 来自 `FullEnhanceVal0801`、`FullEnhanceVal0803`、`FullEnhanceVal0808`、`RainEnhanceVal0817` 的配置白名单。
+### 1.2 上下游版本
 
-后续 multitask 明确使用完整已发布负样本集 `neg-eos_2.0-hcf0813-hp0.5`。为解决 Eos-2.1 replay、Eos-2.0 负样本和可复用旧 Palm hard release 之间的 proposal variant 冲突，warehouse 对 PretrainSource、每个已发布负样本集和每个已发布 hard dataset 分别执行 variant 唯一性门禁；同一发布域内出现多个 proposal variant 仍失败。split、raw image、ROI ID、Registry、路径和图片解码门禁没有放宽。
+上游数据制作代码以 HLMF annotated tag `HLMF-3.0-final` 为准；本仓库以 `HLML-4.0-final` 为准。两个 tag 固定的是代码和配置，不替代外部数据、模型和服务器环境备份。
 
-服务器真实全量只读审计结果：
+## II. 全国总决赛正式模型
 
-- geometry：Train 82,902、Val 14,411、Test 5,343，membership errors 为 0。
-- multitask：Train 99,812，其中 positive 82,902、negative 16,910；Val 14,411、Test 5,343，membership errors 为 0。
-- performer 跨 split 仍按既有 `warn` 策略报告，不影响 membership 结论。
-- `hard-hands-0816-r01` 已由 HLMF 发布并通过只读审核：manifest 记录 462 条训练记录，其中 379 条 positive、83 条 CVAT `no_hand` negative，另有 38 条 ignored；462 张独立 published 图片、registry 身份、21 点/handedness 结构均一致。ID 中的 `r01` 作为该通用数据集的发布修订号使用，manifest 不含训练 snapshot/run 绑定。
-- 配置后的 multi-finetune 全量不落盘预检为 Train 100,274、Val 14,411、Test 5,343，membership errors 为 0。Train 包含 17,372 条 hard/gold 侧（462 条 hard + 16,910 条真负样本）和 82,902 条 replay；462 条 hard 行全部派生为 `human_gold`，类型为 379 条 `POS_RUNTIME` 与 83 条 `NEG_RUNTIME_CANDIDATE`。
-- 首次正式启动尝试已成功生成 `snapshots/iris-v3-pro-r1/multi_finetune/{train,val,test}.jsonl` 与 `snapshot.json`，随后在训练输出目录创建前被 rare-cell 重复抽样门禁中止；没有写入 multi-finetune checkpoint。原因是旧 `epoch_size=12000` 会让仅 379 条的 Gold positive 单元平均重复约 15 次，且没有未封顶 Gold positive 单元承接被裁剪的配额。现已将 `epoch_size` 调整为 3000；基于真实 100,274 条 Train snapshot 的精确采样预检得到 Gold 配额 `POS_RUNTIME=1436`、`NEG_RUNTIME_CANDIDATE=103`、`NEG_LOW_PALM_CANDIDATE=102`，Gold positive 平均期望重复 3.789 次、最大期望重复 3.789 次，均通过 4/8 门禁。
+正式提交并上板使用的是 Iris-2.0-Lite（multitask）与 Iris-2.0-Max（multi-finetune）；Pro 完成同协议训练和评估，但未作为正式提交模型。
 
-## GPU 与部署预检查
+| 产品版本 | HLML 结构/阶段 | Mean pixel error | P95 pixel error | Handedness Acc | 部署参数 | A1 延迟 |
+| :-- | :-- | --: | --: | --: | --: | --: |
+| **Iris-2.0-Lite** | `v3-lite` multitask | 10.43 px | 24.98 px | 89.55% | 852,832 | ≈20 ms |
+| **Iris-2.0-Max** | `v3-max` multi-finetune | **9.71 px** | **23.26 px** | **98.26%** | 1,912,324 | ≈22 ms |
+| Iris-2.0-Pro | `v3-pro` | 10.14 px | 23.77 px | 81.59% | 1,912,324 | ≈22 ms |
 
-服务器为 RTX 3090 24 GB，`hand-landmarker-tf29` 环境只有在以下变量生效后才能稳定枚举并使用 GPU：
+以上为 AetherSign 自建 402 张 Hand ROI benchmark 的最终记录。与分赛区版本 Iris-1.0 的 21.97 px mean / 55.01 px P95 相比，三档 Iris-2.0 均显著改善。完整 Eos/Iris benchmark 和板端 Fullcascade 结果见仓库根目录 `project-12.md`。
 
-```bash
-readonly CUDA_LIBRARY_DIR=/usr/local/cuda-11.2/targets/x86_64-linux/lib
-export LD_LIBRARY_PATH="$CUDA_LIBRARY_DIR:/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export TORCH_CUDNN_V8_API_DISABLED=1
-```
+### 2.1 已知能力边界
 
-三档模型均已完成未训练权重的 `export-preflight`，该结果只说明图、融合、ONNX 和 A1 算子兼容，不代表模型精度：
+- Iris ROI 关键点与 handedness 达到本届比赛最终使用状态，但 hand presence 分类头未学到可靠的无手区分，实际倾向输出高 presence；不能把该输出描述为已解决的拒识能力。
+- 固定 ROI benchmark 只评价 Iris，不包含 Eos Palm 漏检或原图级联召回。
+- A1 上 `palm_hand` / `fullcascade` 的 P95 端到端延迟约 78 ms，受单核 Cortex-A7、串行 NPU 推理和完整 Eos → Iris → Muse 链路限制。
+- Eos-2.1 与最终数据/演示能力覆盖 near、mid；far 不属于比赛最终支持域。
 
-| 版本 | ONNX 大小 | 随机输入融合最大绝对误差 | ONNX 最大绝对误差 | A1 算子 |
-| --- | ---: | ---: | ---: | --- |
-| `v3-pro` | 7.309 MiB | 5.96e-08 | 5.96e-08 | Add/Conv/MaxPool/Relu/Reshape/Sigmoid |
-| `v3-max` | 7.313 MiB | 4.17e-07 | 6.56e-07 | 同左 |
-| `v3-lite` | 3.289 MiB | 2.98e-08 | 5.96e-08 | 同左 |
+## III. 最终系统状态
 
-三档均低于 15 MiB，并各自生成 Train 100、Val/Test 共 50 条的 `datasets.zip`。Eos-2.1 文件夹级联也已在默认 `InferSource/0718/images` 中各取一张图片完成 GPU smoke，三档均为 `status=ok`、失败 0；由于 Hand 权重未训练，这些 prediction 不作精度结论。
+### 3.1 Iris v3 结构
 
-## 自动验收状态
+| 结构 | 训练参数 | 融合后部署参数 | 训练/部署参数比 | 定位 |
+| :-- | --: | --: | --: | :-- |
+| `v3-pro` | 1,951,756 | 1,912,324 | 1.02 | 与未修改 v2 同构 |
+| `v3-max` | 7,629,268 | 1,912,324 | 3.99 | 训练期多分支，部署期与 v2 同量级 |
+| `v3-lite` | 878,272 | 852,832 | 1.03 | 最终轻量档 |
 
-- 82 个 Python 文件语法检查通过；HLML 完整单元测试通过。
-- HLMF 上游 79 项测试、HLML warehouse 合同 16 项测试和 acceptance config check 全部通过。
-- `v3-pro`、`v3-max`、`v3-lite` 三种 `HLML_MODEL_VERSION` 的公共 config check 均为 `status=ok`。
-- environment check 为 `ok=true`，TensorFlow 可创建 RTX 3090 GPU device；multi-finetune 正式 snapshot 已由用户的首次启动尝试创建且审计完整。
+`v3-max` 的 Conv/Depthwise 多分支在导出前精确融合，正式 ONNX 不保留 BatchNormalization 或训练分支。三档均保持 NCHW `[1,1,256,256]` 输入和 `landmarks[42]`、`hand_flag[1]`、`handedness[1]` 输出契约。
 
-## 本轮执行边界
+### 3.2 数据成员与审计快照
 
-本轮没有正式运行 multi-finetune 的任何训练 step，也没有创建或覆盖 checkpoint。修复只调整训练采样规模及其测试/文档；已发布 PretrainSource、EValSource、negative/hard 数据、完整标注链路和既有质量门禁均未修改。环境依赖未增加，`requirements.txt` 与 `environment.yml` 无需更新。
+- geometry：Train 82,902；Val 14,411；Test 5,343；membership errors 为 0。
+- multitask：Train 99,812，其中 positive 82,902、negative 16,910；Val/Test 同上。
+- multi-finetune：Train 100,274，其中 hard/gold 17,372、replay 82,902；Val/Test 同上。
+- 已发布负样本：`neg-eos_2.0-hcf0813-hp0.5`。
+- 已发布困难样本：`hard-hands-0816-r01`，462 条训练记录（379 positive、83 CVAT `no_hand` negative），另有 38 ignored。
+- multi-finetune 最终 `epoch_size=3000`；真实 snapshot 精确采样计划中 Gold `POS_RUNTIME=1436`，平均/最大期望重复 3.789，低于 4/8 rare-cell 门禁。
+
+PretrainSource、EValSource、negative/hard 发布集、完整标注链路、Registry、split/Test 隔离及既有质量门控在最终归档中均保持不变。
+
+## IV. 最终验证状态
+
+- Python 语法检查通过。
+- HLML 完整单元测试 198 项通过。
+- 五份公共配置解析通过。
+- 三档模型的训练期/部署期融合、ONNX 数值一致性、15 MiB 大小和 A1 算子约束已有自动回归覆盖。
+- 本次归档只修改 README、入口文档和独立 Logo，没有增加环境依赖；`requirements.txt` 与 `environment.yml` 不变。
+
+## V. 后续状态
+
+仓库进入只读归档优先状态。未来如确需复现，应从 `HLML-4.0-final` 创建独立分支并恢复匹配的 HLMF tag、数据仓和训练产物；如恢复产品开发，应使用新版本号和新 tag，不移动或覆盖本届比赛最终 tag。

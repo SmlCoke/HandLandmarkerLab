@@ -1,5 +1,8 @@
 # HLML 4.0 训练工作流
 
+> [!IMPORTANT]
+> 本工作流对应全国总决赛最终归档版本 `HLML-4.0-final`。复现前先执行 `git fetch origin --tags && git checkout HLML-4.0-final`，并恢复匹配的 HLMF `HLMF-3.0-final`、`HAND_DATASET_ROOT` 与 `HAND_TRAIN_ROOT`；Git tag 不包含正式数据、checkpoint、ONNX/m1model 或服务器运行目录。
+
 ## 0. 环境依赖
 
 HLML 4.0 继续使用 Conda 环境 `hand-landmarker-tf29`，其依赖由仓库根目录的 `environment.yml` 和 `requirements.txt` 共同定义。目标服务器环境为 Ubuntu 20.04、Python 3.8、TensorFlow/Keras 2.9.0、CUDA 11.2 和 cuDNN 8；CUDA/cuDNN 使用 AutoDL 系统提供的动态库，不在 Conda 环境中重复安装。训练器默认启用 `tqdm` 的 epoch/batch 进度条，因此更新本仓库后需确保环境已安装 requirements 中固定版本的 `tqdm`。
