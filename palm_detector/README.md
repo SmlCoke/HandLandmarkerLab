@@ -18,5 +18,3 @@ HLMF 源模型文件为 `models/palm_detector/eos-2.1/model_384x224_opt.onnx`；
 ```bash
 make infer HLML_STAGE=<stage>
 ```
-
-旧 `preminilary/palm` 不再是模型资产或推理入口；`preminilary/device` 仅保留 A1 调度参考代码。
