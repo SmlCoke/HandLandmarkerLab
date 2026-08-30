@@ -194,6 +194,8 @@ Val/Test 只读取 HLMF 已生成并经 CVAT 复核的固定 Hand ROI，不运�
 
 ## 🚀 VI. 常用操作
 
+在运行如下命令前，需要下载相应运行资产（主要是 Palm Detector 模型 Eos），构建完整的 HLML 4.0 运行环境。下载方法见：[下载指南](./docs/release/README.md)。
+
 ### 6.1 复现归档版本
 
 ```bash
